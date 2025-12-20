@@ -1,0 +1,192 @@
+import { Link } from "react-router-dom";
+import {
+  MessageCircle,
+  Building2,
+  Users,
+  Newspaper,
+  Shield,
+  Clock,
+  Award,
+  ArrowRight,
+} from "lucide-react";
+import { Card, LinkButton } from "../components/ui";
+
+export default function HomePage() {
+  const services = [
+    {
+      icon: MessageCircle,
+      title: "AI法律咨询",
+      description: "智能AI助手，24小时在线解答您的法律问题",
+      link: "/chat",
+    },
+    {
+      icon: Users,
+      title: "法律论坛",
+      description: "与专业人士交流，分享法律经验与见解",
+      link: "/forum",
+    },
+    {
+      icon: Newspaper,
+      title: "法律资讯",
+      description: "最新法律政策解读与案例分析",
+      link: "/news",
+    },
+    {
+      icon: Building2,
+      title: "律所查询",
+      description: "查找您身边的专业律师事务所",
+      link: "/lawfirm",
+    },
+  ];
+
+  const features = [
+    {
+      icon: Shield,
+      title: "专业可靠",
+      description: "基于权威法律法规，提供准确专业的法律建议",
+    },
+    {
+      icon: Clock,
+      title: "全天候服务",
+      description: "7×24小时在线，随时为您解答法律疑问",
+    },
+    {
+      icon: Award,
+      title: "值得信赖",
+      description: "已服务超过10万用户，获得广泛好评",
+    },
+  ];
+
+  return (
+    <div className="w-full space-y-0">
+      {/* Hero Section */}
+      <section className="relative min-h-[90vh] flex items-center justify-center overflow-hidden">
+        <div className="max-w-4xl mx-auto text-center px-4 animate-fade-in">
+          <h1 className="text-5xl md:text-6xl lg:text-7xl font-bold text-slate-900 dark:text-white leading-[1.1] tracking-tight">
+            专业法律服务
+            <span className="block mt-6 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 bg-clip-text text-transparent animate-gradient">
+              触手可及
+            </span>
+          </h1>
+
+          <p className="mt-10 text-xl md:text-2xl text-slate-600 dark:text-white/50 leading-relaxed max-w-2xl mx-auto font-light">
+            AI智能与专业律师团队，为您提供全方位法律咨询
+          </p>
+
+          <div className="mt-14 flex flex-wrap gap-5 justify-center">
+            <LinkButton
+              to="/chat"
+              className="group rounded-full px-10 py-4 text-base font-medium hover:shadow-xl hover:shadow-amber-500/20 hover:scale-105 transition-all duration-300"
+            >
+              开始咨询
+              <ArrowRight className="h-5 w-5 group-hover:translate-x-1 transition-transform" />
+            </LinkButton>
+            <LinkButton
+              to="/lawfirm"
+              variant="outline"
+              className="rounded-full px-10 py-4 text-base font-medium hover:bg-slate-50 dark:hover:bg-white/5 transition-all duration-300"
+            >
+              查找律师
+            </LinkButton>
+          </div>
+        </div>
+
+        {/* Enhanced decorative gradient orbs */}
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[800px] bg-gradient-to-br from-amber-500/15 via-orange-500/10 to-transparent rounded-full blur-3xl -z-10 animate-pulse-slow dark:from-amber-500/10 dark:via-orange-500/6" />
+        <div className="absolute top-1/4 right-1/4 w-[400px] h-[400px] bg-gradient-to-br from-orange-500/10 to-transparent rounded-full blur-3xl -z-10 animate-float dark:from-orange-500/6" />
+        <div className="absolute bottom-1/4 left-1/4 w-[400px] h-[400px] bg-gradient-to-br from-amber-500/10 to-transparent rounded-full blur-3xl -z-10 animate-float-delayed dark:from-amber-500/6" />
+      </section>
+
+      {/* Spacer */}
+      <div className="h-24 md:h-32" />
+
+      {/* Services Section */}
+      <section>
+        <div className="text-center mb-20">
+          <p className="text-amber-700 text-xs font-medium tracking-widest uppercase mb-5 dark:text-amber-400/80">
+            我们的服务
+          </p>
+          <h2 className="text-2xl md:text-3xl font-medium text-slate-900 dark:text-white">
+            全方位法律服务平台
+          </h2>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-10 lg:gap-12">
+          {services.map(({ icon: Icon, title, description, link }) => (
+            <Link
+              key={title}
+              to={link}
+              className="block group"
+            >
+              <Card variant="surface" hover padding="none" className="p-10 lg:p-12">
+                <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-amber-500/15 to-orange-500/5 flex items-center justify-center mb-8">
+                  <Icon className="h-6 w-6 text-amber-400/90" />
+                </div>
+                <h3 className="text-lg font-medium text-slate-900 mb-4 group-hover:text-amber-600 transition-colors dark:text-white dark:group-hover:text-amber-400">
+                  {title}
+                </h3>
+                <p className="text-slate-600 leading-relaxed text-sm dark:text-white/40">
+                  {description}
+                </p>
+              </Card>
+            </Link>
+          ))}
+        </div>
+      </section>
+
+      {/* Spacer */}
+      <div className="h-32 md:h-40" />
+
+      {/* Features Section */}
+      <section className="border-t border-slate-200/70 pt-20 md:pt-28 dark:border-white/5">
+        <div className="text-center mb-20">
+          <p className="text-amber-700 text-xs font-medium tracking-widest uppercase mb-5 dark:text-amber-400/80">
+            为什么选择我们
+          </p>
+          <h2 className="text-2xl md:text-3xl font-medium text-slate-900 dark:text-white">
+            值得信赖的法律服务伙伴
+          </h2>
+        </div>
+
+        <div className="grid md:grid-cols-3 gap-14 lg:gap-20">
+          {features.map(({ icon: Icon, title, description }) => (
+            <div key={title} className="text-center">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500/10 to-orange-500/5 flex items-center justify-center mx-auto mb-8">
+                <Icon className="h-7 w-7 text-amber-400/80" />
+              </div>
+              <h3 className="text-base font-medium text-slate-900 mb-4 dark:text-white">{title}</h3>
+              <p className="text-slate-600 leading-relaxed text-sm dark:text-white/40">{description}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Spacer */}
+      <div className="h-32 md:h-40" />
+
+      {/* CTA Section */}
+      <section className="pb-16 md:pb-24">
+        <div className="relative overflow-hidden rounded-3xl bg-white border border-slate-200/70 p-16 md:p-24 dark:bg-gradient-to-br dark:from-white/[0.02] dark:to-transparent dark:border-white/[0.04]">
+          <div className="relative z-10 max-w-xl mx-auto text-center">
+            <h2 className="text-2xl md:text-3xl font-medium text-slate-900 mb-6 dark:text-white">
+              准备好开始了吗？
+            </h2>
+            <p className="text-slate-600 text-base mb-10 leading-relaxed dark:text-white/40">
+              无论您面临何种法律问题，我们都随时准备为您提供帮助
+            </p>
+            <LinkButton
+              to="/chat"
+              className="rounded-full px-10 py-4 text-base hover:shadow-lg hover:shadow-amber-500/15 transition-all"
+            >
+              立即咨询
+              <ArrowRight className="h-4 w-4" />
+            </LinkButton>
+          </div>
+
+          {/* Decorative element */}
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-gradient-to-br from-amber-500/7 to-transparent rounded-full blur-3xl dark:from-amber-500/5" />
+        </div>
+      </section>
+    </div>
+  );
+}

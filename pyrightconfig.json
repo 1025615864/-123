@@ -1,0 +1,12 @@
+{
+  "include": ["backend/app"],
+  "pythonVersion": "3.10",
+  "executionEnvironments": [
+    {
+      "root": "./",
+      "extraPaths": ["./backend"]
+    }
+  ],
+  "reportImplicitRelativeImport": "none",
+  "reportCallInDefaultInitializer": "none"
+}

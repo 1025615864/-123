@@ -1,0 +1,20 @@
+{
+  "name": "百姓法律助手",
+  "short_name": "法律助手",
+  "description": "专业法律服务，触手可及",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f0a1a",
+  "theme_color": "#f59e0b",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/vite.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["legal", "productivity", "utilities"],
+  "lang": "zh-CN"
+}

@@ -1,0 +1,14 @@
+{
+  "include": ["app"],
+  "exclude": ["scripts"],
+  "pythonVersion": "3.10",
+  "executionEnvironments": [
+    {
+      "root": "./",
+      "extraPaths": ["./"]
+    }
+  ],
+    "reportCallInDefaultInitializer": "none",
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none"
+}
