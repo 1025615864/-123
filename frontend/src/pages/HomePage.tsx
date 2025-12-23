@@ -252,7 +252,7 @@ function HomeNewsRecommendSection() {
   });
 
   const hotNewsQuery = useQuery({
-    queryKey: queryKeys.newsHot(hotDays, hotLimit),
+    queryKey: queryKeys.newsHot(hotDays, hotLimit, null),
     queryFn: async () => {
       try {
         const res = await api.get(`/news/hot?days=${hotDays}&limit=${hotLimit}`);

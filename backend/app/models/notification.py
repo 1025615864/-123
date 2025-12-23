@@ -45,3 +45,4 @@ class NotificationType:
     POST_COMMENT = "post_comment"  # 帖子被评论
     SYSTEM = "system"  # 系统通知
     CONSULTATION = "consultation"  # 咨询相关
+    NEWS = "news"  # 新闻订阅

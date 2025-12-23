@@ -4,7 +4,7 @@ import json
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc
+from sqlalchemy import select, func, desc, and_
 from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 
@@ -658,6 +658,77 @@ async def get_category_stats(
         "news_categories": news_cat_data,
         "knowledge_categories": knowledge_cat_data,
         "firm_cities": city_data,
+    }
+
+
+@router.get("/dashboard/news-stats", summary="新闻统计")
+async def get_dashboard_news_stats(
+    _current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    days: int = Query(7, ge=1, le=90),
+    limit: int = Query(5, ge=1, le=20),
+):
+    from datetime import timedelta
+
+    today = datetime.now().date()
+
+    total = await db.scalar(select(func.count()).select_from(News)) or 0
+    published = await db.scalar(
+        select(func.count()).select_from(News).where(News.is_published == True)
+    ) or 0
+    drafts = await db.scalar(
+        select(func.count()).select_from(News).where(News.is_published == False)
+    ) or 0
+
+    trends: list[dict[str, object]] = []
+    for i in range(int(days) - 1, -1, -1):
+        day = today - timedelta(days=i)
+        published_day = await db.scalar(
+            select(func.count()).select_from(News).where(
+                and_(
+                    News.is_published == True,
+                    func.date(func.coalesce(News.published_at, News.created_at)) == day,
+                )
+            )
+        ) or 0
+        trends.append({"date": day.isoformat(), "published": int(published_day)})
+
+    cat_rows = await db.execute(
+        select(News.category, func.count(News.id).label("count"))
+        .where(News.is_published == True, News.category.isnot(None))
+        .group_by(News.category)
+        .order_by(func.count(News.id).desc())
+        .limit(10)
+    )
+    categories: list[dict[str, object]] = [
+        {"name": str(r[0] or ""), "value": int(r[1] or 0)} for r in cat_rows.all()
+    ]
+
+    hot_rows = await db.execute(
+        select(News.id, News.title, News.category, News.view_count)
+        .where(News.is_published == True)
+        .order_by(desc(func.coalesce(News.view_count, 0)), desc(News.published_at), desc(News.created_at))
+        .limit(limit)
+    )
+    hot_items = cast(list[tuple[int, str | None, str | None, int | None]], hot_rows.all())
+    hot: list[dict[str, object]] = [
+        {
+            "id": int(r_id),
+            "title": str(r_title or ""),
+            "category": str(r_cat or ""),
+            "views": int(r_views or 0),
+        }
+        for r_id, r_title, r_cat, r_views in hot_items
+    ]
+
+    return {
+        "total": int(total),
+        "published": int(published),
+        "drafts": int(drafts),
+        "days": int(days),
+        "trends": trends,
+        "categories": categories,
+        "hot": hot,
     }
 
 

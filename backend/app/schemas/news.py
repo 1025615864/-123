@@ -119,3 +119,17 @@ class NewsFavoriteResponse(BaseModel):
     favorited: bool
     favorite_count: int
     message: str
+
+
+class NewsSubscriptionCreate(BaseModel):
+    sub_type: str = Field(..., description="订阅类型：category/keyword")
+    value: str = Field(..., min_length=1, max_length=100, description="订阅值")
+
+
+class NewsSubscriptionResponse(BaseModel):
+    id: int
+    sub_type: str
+    value: str
+    created_at: datetime
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)

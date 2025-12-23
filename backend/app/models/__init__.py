@@ -2,7 +2,7 @@
 from .user import User
 from .consultation import Consultation, ChatMessage
 from .forum import Post, Comment, PostLike, CommentLike, PostFavorite, PostReaction
-from .news import News, NewsFavorite, NewsViewHistory
+from .news import News, NewsFavorite, NewsViewHistory, NewsSubscription
 from .lawfirm import LawFirm, Lawyer, LawyerConsultation, LawyerReview
 from .knowledge import LegalKnowledge, ConsultationTemplate
 from .notification import Notification
@@ -20,6 +20,7 @@ __all__ = [
     "News",
     "NewsFavorite",
     "NewsViewHistory",
+    "NewsSubscription",
     "LawFirm",
     "Lawyer",
     "LawyerConsultation",

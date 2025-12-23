@@ -257,7 +257,8 @@ async def get_notification_types(
             "post_favorite": "收藏",
             "post_comment": "评论",
             "system": "系统通知",
-            "consultation": "咨询相关"
+            "consultation": "咨询相关",
+            "news": "新闻订阅"
         }
     }
 

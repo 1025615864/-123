@@ -263,6 +263,72 @@ test('新闻列表：最近浏览（登录用户访问详情后可在列表中�
   }
 })
 
+test('新闻订阅：订阅分类 -> 发布新闻 -> 通知中心可见', async ({ page, request }) => {
+  const now = Date.now()
+  const adminToken = await loginAdmin(request)
+  const user = await registerAndLoginUser(request, now)
+
+  const token = `E2E_NEWS_SUB_NOTIFY_${now}`
+  const category = `订阅分类-${token}`
+  let newsId: number | null = null
+
+  try {
+    await page.goto('/login')
+    await page.getByPlaceholder('请输入用户名').fill(user.username)
+    await page.getByPlaceholder('请输入密码').fill(user.password)
+    await page.getByRole('button', { name: '登录' }).click()
+    await page.waitForURL('**/', { timeout: 12_000 })
+
+    await page.goto('/news/subscriptions')
+    await expect(page.getByTestId('news-subscriptions')).toBeVisible({ timeout: 12_000 })
+
+    await page.getByTestId('news-subscription-value').fill(category)
+    await page.getByTestId('news-subscription-add').click()
+    await expect(page.getByText(category).first()).toBeVisible({ timeout: 12_000 })
+
+    newsId = await createNews(request, adminToken, {
+      title: `订阅通知新闻-${token}`,
+      category,
+      summary: `摘要-${token}`,
+      cover_image: null,
+      source: 'E2E',
+      author: 'E2E',
+      content: `内容-${token}`,
+      is_top: false,
+      is_published: true,
+    })
+
+    await page.goto('/notifications')
+    await expect(page.getByText(`你订阅的新闻已发布：订阅通知新闻-${token}`).first()).toBeVisible({ timeout: 12_000 })
+
+    await page.getByRole('link', { name: '查看新闻' }).first().click()
+    await expect(page.getByRole('heading', { level: 1, name: `订阅通知新闻-${token}` })).toBeVisible({ timeout: 12_000 })
+  } finally {
+    if (newsId) {
+      await deleteNews(request, adminToken, newsId)
+    }
+
+    try {
+      const listRes = await request.get(`${apiBase}/news/subscriptions`, {
+        headers: { Authorization: `Bearer ${user.token}` },
+      })
+      if (listRes.ok()) {
+        const subs = await listRes.json()
+        const match = Array.isArray(subs)
+          ? subs.find((s: any) => String(s?.sub_type) === 'category' && String(s?.value) === category)
+          : null
+
+        if (match?.id) {
+          await request.delete(`${apiBase}/news/subscriptions/${match.id}`, {
+            headers: { Authorization: `Bearer ${user.token}` },
+          })
+        }
+      }
+    } catch {
+    }
+  }
+})
+
 test('新闻详情：相关推荐可见（同分类新闻优先）', async ({ page, request }) => {
   const now = Date.now()
   const adminToken = await loginAdmin(request)

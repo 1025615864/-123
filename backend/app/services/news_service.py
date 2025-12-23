@@ -4,7 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, update, and_, or_, case
 from sqlalchemy.exc import IntegrityError
 
-from ..models.news import News, NewsFavorite, NewsViewHistory
+from ..models.news import News, NewsFavorite, NewsViewHistory, NewsSubscription
+from ..models.notification import Notification, NotificationType
 from ..schemas.news import NewsCreate, NewsUpdate
 
 
@@ -214,24 +215,203 @@ class NewsService:
         return [{"category": row[0], "count": row[1]} for row in rows]
 
     @staticmethod
-    async def get_hot_news(db: AsyncSession, days: int = 7, limit: int = 10) -> list[News]:
+    async def get_hot_news(
+        db: AsyncSession,
+        days: int = 7,
+        limit: int = 10,
+        category: str | None = None,
+    ) -> list[News]:
         since = datetime.now() - timedelta(days=days)
-        query = (
-            select(News)
-            .where(
+
+        query = select(News).where(
+            and_(
+                News.is_published == True,
+                or_(
+                    and_(News.published_at.is_not(None), News.published_at >= since),
+                    and_(News.published_at.is_(None), News.created_at >= since),
+                ),
+            )
+        )
+
+        if category:
+            query = query.where(News.category == category)
+
+        candidate_limit = min(500, max(int(limit) * 50, 200))
+        query = query.order_by(desc(News.view_count), desc(News.published_at), desc(News.created_at)).limit(candidate_limit)
+
+        result = await db.execute(query)
+        candidates = list(result.scalars().all())
+        if not candidates:
+            return []
+
+        ids = [int(n.id) for n in candidates]
+        fav_result = await db.execute(
+            select(NewsFavorite.news_id, func.count(NewsFavorite.id))
+            .where(NewsFavorite.news_id.in_(ids))
+            .group_by(NewsFavorite.news_id)
+        )
+        fav_map = {int(row[0]): int(row[1] or 0) for row in fav_result.all()}
+
+        now = datetime.now()
+
+        def age_hours(news: News) -> float:
+            ts = getattr(news, "published_at", None) or getattr(news, "created_at", None)
+            if ts is None:
+                return 0.0
+            try:
+                delta = now - ts
+            except TypeError:
+                delta = now.replace(tzinfo=getattr(ts, "tzinfo", None)) - ts
+            return max(0.0, float(delta.total_seconds()) / 3600.0)
+
+        def hot_score(news: News) -> float:
+            fav = fav_map.get(int(news.id), 0)
+            base = float(int(getattr(news, "view_count", 0) or 0) + fav * 5)
+            hours = age_hours(news)
+            return base / pow(hours + 2.0, 1.3)
+
+        candidates.sort(
+            key=lambda n: (
+                hot_score(n),
+                int(getattr(n, "view_count", 0) or 0),
+                -age_hours(n),
+            ),
+            reverse=True,
+        )
+        return candidates[: int(limit)]
+
+    @staticmethod
+    async def list_subscriptions(db: AsyncSession, user_id: int) -> list[NewsSubscription]:
+        result = await db.execute(
+            select(NewsSubscription)
+            .where(NewsSubscription.user_id == user_id)
+            .order_by(desc(NewsSubscription.created_at))
+        )
+        return list(result.scalars().all())
+
+    @staticmethod
+    async def create_subscription(
+        db: AsyncSession,
+        user_id: int,
+        sub_type: str,
+        value: str,
+    ) -> NewsSubscription:
+        sub = NewsSubscription(user_id=int(user_id), sub_type=str(sub_type), value=str(value))
+        db.add(sub)
+        try:
+            await db.commit()
+            await db.refresh(sub)
+            return sub
+        except IntegrityError:
+            await db.rollback()
+
+        result = await db.execute(
+            select(NewsSubscription).where(
                 and_(
-                    News.is_published == True,
-                    or_(
-                        and_(News.published_at.is_not(None), News.published_at >= since),
-                        and_(News.published_at.is_(None), News.created_at >= since),
-                    ),
+                    NewsSubscription.user_id == user_id,
+                    NewsSubscription.sub_type == sub_type,
+                    NewsSubscription.value == value,
                 )
             )
-            .order_by(desc(News.view_count), desc(News.published_at), desc(News.created_at))
-            .limit(limit)
         )
-        result = await db.execute(query)
-        return list(result.scalars().all())
+        existing = result.scalar_one()
+        return existing
+
+    @staticmethod
+    async def delete_subscription(db: AsyncSession, user_id: int, sub_id: int) -> bool:
+        result = await db.execute(
+            select(NewsSubscription).where(
+                and_(NewsSubscription.id == sub_id, NewsSubscription.user_id == user_id)
+            )
+        )
+        sub = result.scalar_one_or_none()
+        if sub is None:
+            return False
+        await db.delete(sub)
+        await db.commit()
+        return True
+
+    @staticmethod
+    async def notify_subscribers_on_publish(db: AsyncSession, news: News) -> int:
+        if not getattr(news, "is_published", False):
+            return 0
+
+        link = f"/news/{int(news.id)}"
+
+        user_ids: set[int] = set()
+
+        # category subscribers
+        cat_result = await db.execute(
+            select(NewsSubscription.user_id).where(
+                and_(
+                    NewsSubscription.sub_type == "category",
+                    NewsSubscription.value == str(news.category),
+                )
+            )
+        )
+        user_ids.update([int(row[0]) for row in cat_result.fetchall()])
+
+        # keyword subscribers (match in title/summary/content)
+        keyword_result = await db.execute(
+            select(NewsSubscription.user_id, NewsSubscription.value).where(
+                NewsSubscription.sub_type == "keyword"
+            )
+        )
+
+        haystack = " ".join(
+            [
+                str(getattr(news, "title", "") or ""),
+                str(getattr(news, "summary", "") or ""),
+                str(getattr(news, "content", "") or ""),
+            ]
+        ).lower()
+
+        for row in keyword_result.fetchall():
+            uid = int(row[0])
+            keyword = str(row[1] or "").strip().lower()
+            if not keyword:
+                continue
+            if keyword in haystack:
+                user_ids.add(uid)
+
+        if not user_ids:
+            return 0
+
+        existing_result = await db.execute(
+            select(Notification.user_id).where(
+                and_(
+                    Notification.type == NotificationType.NEWS,
+                    Notification.link == link,
+                    Notification.user_id.in_(list(user_ids)),
+                )
+            )
+        )
+        already_notified = {int(row[0]) for row in existing_result.fetchall()}
+
+        to_create = [uid for uid in user_ids if uid not in already_notified]
+        if not to_create:
+            return 0
+
+        title = f"你订阅的新闻已发布：{str(news.title)}"
+        content_lines: list[str] = [f"分类：{str(news.category)}"]
+        content = "\n".join(content_lines) if content_lines else None
+
+        notifications: list[Notification] = []
+        for uid in to_create:
+            notifications.append(
+                Notification(
+                    user_id=int(uid),
+                    type=NotificationType.NEWS,
+                    title=title,
+                    content=content,
+                    link=link,
+                    is_read=False,
+                )
+            )
+
+        db.add_all(notifications)
+        await db.commit()
+        return len(notifications)
 
     @staticmethod
     async def toggle_favorite(db: AsyncSession, news_id: int, user_id: int) -> tuple[bool, int]:

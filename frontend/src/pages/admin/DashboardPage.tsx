@@ -17,6 +17,25 @@ interface Stats {
   comments?: number
 }
 
+function SimpleMiniBarChart({ data, maxValue }: { data: { label: string; value: number }[]; maxValue: number }) {
+  return (
+    <div className="flex items-end justify-between gap-2 h-36">
+      {data.map((item, idx) => (
+        <div key={idx} className="flex-1 flex flex-col items-center gap-2">
+          <div className="w-full flex flex-col" style={{ height: '110px' }}>
+            <div
+              className="w-full bg-gradient-to-t from-amber-500 to-orange-400 rounded-t transition-all"
+              style={{ height: `${(item.value / Math.max(1, maxValue)) * 100}%` }}
+              title={`${item.value}`}
+            />
+          </div>
+          <span className="text-xs text-slate-500 dark:text-white/50">{item.label}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 interface WeeklyData {
   day: string
   posts: number
@@ -38,6 +57,33 @@ interface ActivityItem {
 interface HotContentItem {
   title: string
   views: number
+}
+
+interface NewsTrendItem {
+  date: string
+  published: number
+}
+
+interface NewsCategoryItem {
+  name: string
+  value: number
+}
+
+interface NewsHotItem {
+  id: number
+  title: string
+  category: string
+  views: number
+}
+
+interface NewsDashboardStats {
+  total: number
+  published: number
+  drafts: number
+  days: number
+  trends: NewsTrendItem[]
+  categories: NewsCategoryItem[]
+  hot: NewsHotItem[]
 }
 
 // 简单柱状图组件
@@ -205,11 +251,23 @@ export default function DashboardPage() {
     placeholderData: (prev) => prev,
   })
 
+  const newsStatsQuery = useQuery({
+    queryKey: queryKeys.adminDashboardNewsStats(7, 6),
+    queryFn: async () => {
+      const res = await api.get('/system/dashboard/news-stats', { params: { days: 7, limit: 6 } })
+      return res.data as NewsDashboardStats
+    },
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  })
+
   const stats = statsQuery.data ?? { users: 0, news: 0, posts: 0, lawfirms: 0 }
   const weeklyData = trendsQuery.data ?? []
   const categoryData = categoryQuery.data ?? []
   const recentActivities = activityQuery.data ?? []
   const hotContent = hotQuery.data ?? []
+  const newsStats = newsStatsQuery.data ?? { total: 0, published: 0, drafts: 0, days: 7, trends: [], categories: [], hot: [] }
 
   const statsLoading = statsQuery.isLoading
   const statsError = statsQuery.isError ? getApiErrorMessage(statsQuery.error, '统计数据加载失败') : null
@@ -226,12 +284,35 @@ export default function DashboardPage() {
   const hotLoading = hotQuery.isLoading
   const hotError = hotQuery.isError ? getApiErrorMessage(hotQuery.error, '热门内容加载失败') : null
 
+  const newsStatsLoading = newsStatsQuery.isLoading
+  const newsStatsError = newsStatsQuery.isError ? getApiErrorMessage(newsStatsQuery.error, '新闻统计加载失败') : null
+
   // 统一错误 toast（不影响原有错误区域展示）
   useEffect(() => {
-    const err = statsQuery.error || trendsQuery.error || categoryQuery.error || activityQuery.error || hotQuery.error
+    const err = statsQuery.error || trendsQuery.error || categoryQuery.error || activityQuery.error || hotQuery.error || newsStatsQuery.error
     if (!err) return
     toast.error(getApiErrorMessage(err))
-  }, [activityQuery.error, categoryQuery.error, hotQuery.error, statsQuery.error, toast, trendsQuery.error])
+  }, [activityQuery.error, categoryQuery.error, hotQuery.error, newsStatsQuery.error, statsQuery.error, toast, trendsQuery.error])
+
+  const newsTrendData = useMemo(() => {
+    const trends = Array.isArray(newsStats?.trends) ? newsStats.trends : []
+    return trends.map((t) => {
+      const d = new Date(t.date)
+      return {
+        label: weekdayLabels[d.getDay()] || t.date,
+        value: Number(t.published || 0),
+      }
+    })
+  }, [newsStats, weekdayLabels])
+
+  const newsCategoryData = useMemo(() => {
+    const cats = Array.isArray(newsStats?.categories) ? newsStats.categories : []
+    return cats.slice(0, 7).map((c, idx) => ({
+      category: String(c.name || ''),
+      count: Number(c.value || 0),
+      color: palette[idx % palette.length],
+    })) as CategoryData[]
+  }, [newsStats, palette])
 
   const statCards = [
     { icon: Users, label: '注册用户', value: stats.users, color: 'from-blue-500 to-cyan-500', change: '+12%' },
@@ -335,6 +416,120 @@ export default function DashboardPage() {
           )}
         </Card>
       </div>
+
+      <div className="grid lg:grid-cols-2 gap-6">
+        <Card variant="surface" padding="lg">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-lg font-semibold text-slate-900 flex items-center gap-2 dark:text-white">
+              <Newspaper className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+              新闻发布趋势
+            </h3>
+            <Button variant="outline" onClick={() => newsStatsQuery.refetch()} disabled={newsStatsQuery.isFetching}>
+              刷新
+            </Button>
+          </div>
+
+          <div className="grid grid-cols-3 gap-3 mb-6">
+            <div className="rounded-xl bg-slate-900/5 px-4 py-3 dark:bg-white/5">
+              <div className="text-xs text-slate-600 dark:text-white/45">总数</div>
+              <div className="text-xl font-semibold text-slate-900 mt-1 dark:text-white">{Number(newsStats.total || 0).toLocaleString()}</div>
+            </div>
+            <div className="rounded-xl bg-slate-900/5 px-4 py-3 dark:bg-white/5">
+              <div className="text-xs text-slate-600 dark:text-white/45">已发布</div>
+              <div className="text-xl font-semibold text-slate-900 mt-1 dark:text-white">{Number(newsStats.published || 0).toLocaleString()}</div>
+            </div>
+            <div className="rounded-xl bg-slate-900/5 px-4 py-3 dark:bg-white/5">
+              <div className="text-xs text-slate-600 dark:text-white/45">草稿</div>
+              <div className="text-xl font-semibold text-slate-900 mt-1 dark:text-white">{Number(newsStats.drafts || 0).toLocaleString()}</div>
+            </div>
+          </div>
+
+          {newsStatsLoading ? (
+            <Loading text="加载中..." tone={actualTheme} />
+          ) : newsStatsError ? (
+            <div className="flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
+              <div>{newsStatsError}</div>
+              <Button variant="outline" onClick={() => newsStatsQuery.refetch()}>重试</Button>
+            </div>
+          ) : newsTrendData.length === 0 ? (
+            <EmptyState
+              icon={Newspaper}
+              title="暂无趋势数据"
+              description="稍后再试或检查数据来源"
+              tone={actualTheme}
+            />
+          ) : (
+            <SimpleMiniBarChart data={newsTrendData} maxValue={Math.max(1, ...newsTrendData.map((d) => d.value))} />
+          )}
+        </Card>
+
+        <Card variant="surface" padding="lg">
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-lg font-semibold text-slate-900 flex items-center gap-2 dark:text-white">
+              <PieChart className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+              新闻分类分布
+            </h3>
+          </div>
+
+          {newsStatsLoading ? (
+            <Loading text="加载中..." tone={actualTheme} />
+          ) : newsStatsError ? (
+            <div className="flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
+              <div>{newsStatsError}</div>
+              <Button variant="outline" onClick={() => newsStatsQuery.refetch()}>重试</Button>
+            </div>
+          ) : newsCategoryData.length === 0 ? (
+            <EmptyState
+              icon={PieChart}
+              title="暂无分类数据"
+              description="稍后再试或检查数据来源"
+              tone={actualTheme}
+            />
+          ) : (
+            <SimplePieChart data={newsCategoryData} />
+          )}
+        </Card>
+      </div>
+
+      <Card variant="surface" padding="lg">
+        <div className="flex items-center justify-between mb-6">
+          <h3 className="text-lg font-semibold text-slate-900 flex items-center gap-2 dark:text-white">
+            <Eye className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+            热门新闻
+          </h3>
+          <Button variant="outline" onClick={() => newsStatsQuery.refetch()} disabled={newsStatsQuery.isFetching}>
+            刷新
+          </Button>
+        </div>
+
+        {newsStatsLoading ? (
+          <Loading text="加载中..." tone={actualTheme} />
+        ) : newsStatsError ? (
+          <div className="flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
+            <div>{newsStatsError}</div>
+            <Button variant="outline" onClick={() => newsStatsQuery.refetch()}>重试</Button>
+          </div>
+        ) : newsStats.hot.length === 0 ? (
+          <EmptyState
+            icon={Eye}
+            title="暂无热门新闻"
+            description="暂时没有统计到热门新闻"
+            tone={actualTheme}
+          />
+        ) : (
+          <div className="space-y-4">
+            {newsStats.hot.map((item) => (
+              <div key={item.id} className="flex items-center justify-between py-2 border-b border-slate-200/70 last:border-0 dark:border-white/5">
+                <span className="text-slate-700 text-sm truncate flex-1 dark:text-white/70">{item.title}</span>
+                <span className="text-slate-500 text-xs flex items-center gap-1 ml-4 dark:text-white/40">
+                  <Eye className="h-3 w-3" />
+                  {Number(item.views || 0).toLocaleString()}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
 
       {/* 快捷操作 */}
       <div className="grid lg:grid-cols-2 gap-6">

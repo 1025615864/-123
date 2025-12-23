@@ -8,7 +8,8 @@ from ..models.user import User
 from ..schemas.news import (
     NewsCreate, NewsUpdate, NewsResponse, NewsListResponse,
     NewsListItem, NewsCategoryCount, NewsFavoriteResponse,
-    NewsAdminListResponse, NewsAdminListItem
+    NewsAdminListResponse, NewsAdminListItem,
+    NewsSubscriptionCreate, NewsSubscriptionResponse
 )
 from ..services.news_service import news_service
 from ..utils.deps import require_admin, get_current_user, get_current_user_optional
@@ -46,14 +47,52 @@ async def get_news_list(
     return NewsListResponse(items=items, total=total, page=page, page_size=page_size)
 
 
+@router.get("/subscriptions", response_model=list[NewsSubscriptionResponse], summary="获取我的新闻订阅")
+async def get_my_news_subscriptions(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    subs = await news_service.list_subscriptions(db, current_user.id)
+    return [NewsSubscriptionResponse.model_validate(s) for s in subs]
+
+
+@router.post("/subscriptions", response_model=NewsSubscriptionResponse, summary="创建新闻订阅")
+async def create_news_subscription(
+    data: NewsSubscriptionCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    sub_type = (data.sub_type or "").strip().lower()
+    value = (data.value or "").strip()
+    if sub_type not in {"category", "keyword"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无效的订阅类型")
+    if not value:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="订阅值不能为空")
+    sub = await news_service.create_subscription(db, current_user.id, sub_type, value)
+    return NewsSubscriptionResponse.model_validate(sub)
+
+
+@router.delete("/subscriptions/{sub_id}", summary="删除新闻订阅")
+async def delete_news_subscription(
+    sub_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    ok = await news_service.delete_subscription(db, current_user.id, sub_id)
+    if not ok:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="订阅不存在")
+    return {"message": "删除成功"}
+
+
 @router.get("/hot", response_model=list[NewsListItem], summary="获取热门新闻")
 async def get_hot_news(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User | None, Depends(get_current_user_optional)],
     days: Annotated[int, Query(ge=1, le=365)] = 7,
     limit: Annotated[int, Query(ge=1, le=50)] = 10,
+    category: str | None = None,
 ):
-    news_list = await news_service.get_hot_news(db, days=days, limit=limit)
+    news_list = await news_service.get_hot_news(db, days=days, limit=limit, category=category)
 
     user_id = current_user.id if current_user else None
     items: list[NewsListItem] = []
@@ -226,6 +265,8 @@ async def create_news(
     """创建新闻（需要管理员权限）"""
     _ = current_user
     news = await news_service.create(db, news_data)
+    if news.is_published:
+        await news_service.notify_subscribers_on_publish(db, news)
     return NewsResponse.model_validate(news)
 
 
@@ -241,8 +282,11 @@ async def update_news(
     news = await news_service.get_by_id(db, news_id)
     if not news:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="新闻不存在")
-    
+
+    was_published = bool(news.is_published)
     updated_news = await news_service.update(db, news, news_data)
+    if (not was_published) and bool(updated_news.is_published):
+        await news_service.notify_subscribers_on_publish(db, updated_news)
     return NewsResponse.model_validate(updated_news)
 
 

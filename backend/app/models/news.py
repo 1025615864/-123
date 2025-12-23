@@ -58,3 +58,17 @@ class NewsViewHistory(Base):
     viewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     news: Mapped[News] = relationship("News")
+
+
+class NewsSubscription(Base):
+    __tablename__: str = "news_subscriptions"
+    __table_args__: tuple[object, ...] = (
+        UniqueConstraint("user_id", "sub_type", "value", name="uq_news_subscriptions_user_type_value"),
+        Index("ix_news_subscriptions_user", "user_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    sub_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    value: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

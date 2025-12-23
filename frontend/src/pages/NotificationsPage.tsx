@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Bell, Check, Trash2, RefreshCw } from 'lucide-react'
+import { Bell, Check, Trash2, RefreshCw, MessageSquare, Heart, Bookmark, AlertCircle, Newspaper } from 'lucide-react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import PageHeader from '../components/PageHeader'
 import { Button, Card, EmptyState, Loading, Pagination } from '../components/ui'
@@ -34,6 +34,22 @@ export default function NotificationsPage() {
   const items = notificationsQuery.data?.items ?? []
   const total = notificationsQuery.data?.total ?? 0
   const unreadCount = notificationsQuery.data?.unread_count ?? 0
+
+  const getIcon = (type: string) => {
+    switch (type) {
+      case 'comment_reply':
+      case 'post_comment':
+        return <MessageSquare className="h-4 w-4 text-blue-400" />
+      case 'post_like':
+        return <Heart className="h-4 w-4 text-red-400" />
+      case 'post_favorite':
+        return <Bookmark className="h-4 w-4 text-amber-400" />
+      case 'news':
+        return <Newspaper className="h-4 w-4 text-amber-400" />
+      default:
+        return <AlertCircle className="h-4 w-4 text-slate-400 dark:text-white/40" />
+    }
+  }
 
   const markAsReadMutation = useMutation({
     mutationFn: async (id: number) => {
@@ -196,6 +212,7 @@ export default function NotificationsPage() {
                 key={n.id}
                 className={`p-5 flex items-start gap-4 ${n.is_read ? '' : 'bg-amber-50/70 dark:bg-amber-500/5'}`}
               >
+                <div className="mt-0.5">{getIcon(n.type)}</div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
@@ -248,7 +265,7 @@ export default function NotificationsPage() {
                         if (!n.is_read) handleMarkAsRead(n.id)
                       }}
                     >
-                      查看链接
+                      {n.type === 'news' ? '查看新闻' : '查看链接'}
                     </Link>
                   ) : (
                     <a
@@ -260,7 +277,7 @@ export default function NotificationsPage() {
                         if (!n.is_read) handleMarkAsRead(n.id)
                       }}
                     >
-                      查看链接
+                      {n.type === 'news' ? '查看新闻' : '查看链接'}
                     </a>
                   ))}
                 </div>
