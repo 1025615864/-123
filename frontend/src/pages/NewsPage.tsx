@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { Calendar, Eye, Tag, Search, Newspaper } from 'lucide-react'
+import { Calendar, Eye, Tag, Search, Newspaper, TrendingUp } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { Card, Input, Chip, Badge, EmptyState, Pagination, NewsCardSkeleton, FadeInImage } from '../components/ui'
 import PageHeader from '../components/PageHeader'
@@ -51,6 +51,9 @@ export default function NewsPage() {
   const [keyword, setKeyword] = useState('')
   const [mode, setMode] = useState<'all' | 'favorites' | 'history'>('all')
 
+  const [hotDays, setHotDays] = useState<7 | 30>(7)
+  const hotLimit = 6
+
   const [debouncedKeyword, setDebouncedKeyword] = useState('')
 
   useEffect(() => {
@@ -73,6 +76,21 @@ export default function NewsPage() {
       }
     },
     staleTime: 30 * 60 * 1000,
+  })
+
+  const hotNewsQuery = useQuery({
+    queryKey: queryKeys.newsHot(hotDays, hotLimit),
+    queryFn: async () => {
+      try {
+        const res = await api.get(`/news/hot?days=${hotDays}&limit=${hotLimit}`)
+        return (Array.isArray(res.data) ? res.data : []) as NewsListItem[]
+      } catch {
+        return [] as NewsListItem[]
+      }
+    },
+    staleTime: 60 * 1000,
+    retry: 1,
+    refetchOnWindowFocus: false,
   })
 
   const newsQuery = useQuery({
@@ -196,6 +214,60 @@ export default function NewsPage() {
           })}
         </div>
       </Card>
+
+      <section data-testid="news-hot">
+        <Card variant="surface" padding="md">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="flex items-center gap-2">
+              <TrendingUp className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-white">热门新闻</h2>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Chip size="sm" active={hotDays === 7} onClick={() => setHotDays(7)}>
+                近7天
+              </Chip>
+              <Chip size="sm" active={hotDays === 30} onClick={() => setHotDays(30)}>
+                近30天
+              </Chip>
+            </div>
+          </div>
+
+          <div className="mt-4">
+            {hotNewsQuery.isLoading ? (
+              <div className="text-sm text-slate-600 dark:text-white/45">加载中...</div>
+            ) : (hotNewsQuery.data ?? []).length === 0 ? (
+              <div className="text-sm text-slate-600 dark:text-white/45">暂无热门新闻</div>
+            ) : (
+              <div className="divide-y divide-slate-200/70 dark:divide-white/10">
+                {(hotNewsQuery.data ?? []).map((item, idx) => (
+                  <Link
+                    key={item.id}
+                    to={`/news/${item.id}`}
+                    onMouseEnter={() => prefetchNewsDetail(item.id)}
+                    onFocus={() => prefetchNewsDetail(item.id)}
+                    className="flex items-center gap-3 py-3 hover:bg-slate-50/60 px-2 -mx-2 rounded-xl transition-colors dark:hover:bg-white/5"
+                  >
+                    <div className="w-6 text-sm font-semibold text-amber-600 dark:text-amber-400">{idx + 1}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-slate-900 truncate dark:text-white">{item.title}</div>
+                      <div className="mt-1 flex items-center gap-2 text-xs text-slate-500 dark:text-white/55">
+                        <Badge variant="primary" size="sm" icon={Tag}>
+                          {item.category}
+                        </Badge>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-white/55">
+                      <Eye className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                      {item.view_count}
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
+        </Card>
+      </section>
 
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
         {news.length === 0 ? (

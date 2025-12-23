@@ -1,5 +1,5 @@
 """新闻服务层"""
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, update, and_, or_, case
 from sqlalchemy.exc import IntegrityError
@@ -212,6 +212,26 @@ class NewsService:
         )
         rows = result.all()
         return [{"category": row[0], "count": row[1]} for row in rows]
+
+    @staticmethod
+    async def get_hot_news(db: AsyncSession, days: int = 7, limit: int = 10) -> list[News]:
+        since = datetime.now() - timedelta(days=days)
+        query = (
+            select(News)
+            .where(
+                and_(
+                    News.is_published == True,
+                    or_(
+                        and_(News.published_at.is_not(None), News.published_at >= since),
+                        and_(News.published_at.is_(None), News.created_at >= since),
+                    ),
+                )
+            )
+            .order_by(desc(News.view_count), desc(News.published_at), desc(News.created_at))
+            .limit(limit)
+        )
+        result = await db.execute(query)
+        return list(result.scalars().all())
 
     @staticmethod
     async def toggle_favorite(db: AsyncSession, news_id: int, user_id: int) -> tuple[bool, int]:

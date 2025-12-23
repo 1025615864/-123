@@ -22,6 +22,7 @@ export const queryKeys = {
     ['news-history', { page, pageSize, category, keyword }] as const,
   newsTop: (limit: number) => ['news-top', { limit }] as const,
   newsRecent: (limit: number) => ['news-recent', { limit }] as const,
+  newsHot: (days: number, limit: number) => ['news-hot', { days, limit }] as const,
   newsDetail: (newsId: string | undefined) => ['news', newsId] as const,
   newsRelated: (newsId: string | undefined, limit: number) => ['news-related', { newsId, limit }] as const,
 

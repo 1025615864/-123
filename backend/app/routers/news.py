@@ -46,6 +46,30 @@ async def get_news_list(
     return NewsListResponse(items=items, total=total, page=page, page_size=page_size)
 
 
+@router.get("/hot", response_model=list[NewsListItem], summary="获取热门新闻")
+async def get_hot_news(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User | None, Depends(get_current_user_optional)],
+    days: Annotated[int, Query(ge=1, le=365)] = 7,
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
+):
+    news_list = await news_service.get_hot_news(db, days=days, limit=limit)
+
+    user_id = current_user.id if current_user else None
+    items: list[NewsListItem] = []
+    for news in news_list:
+        fav_count = await news_service.get_favorite_count(db, news.id)
+        is_fav = False
+        if user_id is not None:
+            is_fav = await news_service.is_favorited(db, news.id, user_id)
+        item = NewsListItem.model_validate(news)
+        item.favorite_count = fav_count
+        item.is_favorited = is_fav
+        items.append(item)
+
+    return items
+
+
 @router.get("/history", response_model=NewsListResponse, summary="获取最近浏览新闻")
 async def get_my_news_history(
     current_user: Annotated[User, Depends(get_current_user)],

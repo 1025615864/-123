@@ -131,6 +131,53 @@ test('新闻列表：关键词搜索可命中 title/summary/source/author/conten
   }
 })
 
+test('新闻列表：热门新闻区块可见（按阅读量排序）', async ({ page, request }) => {
+  const now = Date.now()
+  const adminToken = await loginAdmin(request)
+
+  const token = `E2E_NEWS_HOT_${now}`
+  const hotId = await createNews(request, adminToken, {
+    title: `热门新闻A-${token}`,
+    category: '法律动态',
+    summary: `摘要A-${token}`,
+    cover_image: null,
+    source: 'E2E',
+    author: 'E2E',
+    content: `内容A-${token}`,
+    is_top: false,
+    is_published: true,
+  })
+
+  const normalId = await createNews(request, adminToken, {
+    title: `热门新闻B-${token}`,
+    category: '法律动态',
+    summary: `摘要B-${token}`,
+    cover_image: null,
+    source: 'E2E',
+    author: 'E2E',
+    content: `内容B-${token}`,
+    is_top: false,
+    is_published: true,
+  })
+
+  try {
+    for (let i = 0; i < 30; i++) {
+      const res = await request.get(`${apiBase}/news/${hotId}`)
+      expect(res.ok()).toBeTruthy()
+    }
+    const res2 = await request.get(`${apiBase}/news/${normalId}`)
+    expect(res2.ok()).toBeTruthy()
+
+    await page.goto('/news')
+    const hot = page.getByTestId('news-hot')
+    await expect(hot).toBeVisible({ timeout: 12_000 })
+    await expect(hot.getByText(`热门新闻A-${token}`).first()).toBeVisible({ timeout: 12_000 })
+  } finally {
+    await deleteNews(request, adminToken, hotId)
+    await deleteNews(request, adminToken, normalId)
+  }
+})
+
 test('新闻列表：最近浏览（登录用户访问详情后可在列表中看到）', async ({ page, request }) => {
   const now = Date.now()
   const adminToken = await loginAdmin(request)
