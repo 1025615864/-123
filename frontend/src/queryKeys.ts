@@ -18,6 +18,8 @@ export const queryKeys = {
     ['news', { page, pageSize, category, keyword }] as const,
   newsFavoritesList: (page: number, pageSize: number, category: string | null, keyword: string) =>
     ['news-favorites', { page, pageSize, category, keyword }] as const,
+  newsHistoryList: (page: number, pageSize: number, category: string | null, keyword: string) =>
+    ['news-history', { page, pageSize, category, keyword }] as const,
   newsTop: (limit: number) => ['news-top', { limit }] as const,
   newsRecent: (limit: number) => ['news-recent', { limit }] as const,
   newsDetail: (newsId: string | undefined) => ['news', newsId] as const,

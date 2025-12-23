@@ -49,7 +49,7 @@ export default function NewsPage() {
   const pageSize = 18
   const [category, setCategory] = useState<string | null>(null)
   const [keyword, setKeyword] = useState('')
-  const [favoritesOnly, setFavoritesOnly] = useState(false)
+  const [mode, setMode] = useState<'all' | 'favorites' | 'history'>('all')
 
   const [debouncedKeyword, setDebouncedKeyword] = useState('')
 
@@ -60,7 +60,7 @@ export default function NewsPage() {
 
   useEffect(() => {
     setPage(1)
-  }, [category, keyword, favoritesOnly])
+  }, [category, keyword, mode])
 
   const categoriesQuery = useQuery({
     queryKey: queryKeys.newsCategories(),
@@ -76,9 +76,12 @@ export default function NewsPage() {
   })
 
   const newsQuery = useQuery({
-    queryKey: favoritesOnly
-      ? queryKeys.newsFavoritesList(page, pageSize, category, debouncedKeyword.trim())
-      : queryKeys.newsList(page, pageSize, category, debouncedKeyword.trim()),
+    queryKey:
+      mode === 'favorites'
+        ? queryKeys.newsFavoritesList(page, pageSize, category, debouncedKeyword.trim())
+        : mode === 'history'
+          ? queryKeys.newsHistoryList(page, pageSize, category, debouncedKeyword.trim())
+          : queryKeys.newsList(page, pageSize, category, debouncedKeyword.trim()),
     queryFn: async () => {
       const params = new URLSearchParams()
       params.set('page', String(page))
@@ -86,11 +89,11 @@ export default function NewsPage() {
       if (category) params.set('category', category)
       if (debouncedKeyword.trim()) params.set('keyword', debouncedKeyword.trim())
 
-      const endpoint = favoritesOnly ? '/news/favorites' : '/news'
+      const endpoint = mode === 'favorites' ? '/news/favorites' : mode === 'history' ? '/news/history' : '/news'
       const res = await api.get(`${endpoint}?${params.toString()}`)
       return res.data as NewsListResponse
     },
-    enabled: favoritesOnly ? isAuthenticated : true,
+    enabled: mode === 'all' ? true : isAuthenticated,
     placeholderData: (prev) => prev,
     retry: 1,
     refetchOnWindowFocus: false,
@@ -162,10 +165,20 @@ export default function NewsPage() {
             <Chip
               key="__favorites"
               size="sm"
-              active={favoritesOnly}
-              onClick={() => setFavoritesOnly((prev) => !prev)}
+              active={mode === 'favorites'}
+              onClick={() => setMode((prev) => (prev === 'favorites' ? 'all' : 'favorites'))}
             >
               我的收藏
+            </Chip>
+          ) : null}
+          {isAuthenticated ? (
+            <Chip
+              key="__history"
+              size="sm"
+              active={mode === 'history'}
+              onClick={() => setMode((prev) => (prev === 'history' ? 'all' : 'history'))}
+            >
+              最近浏览
             </Chip>
           ) : null}
           {displayCategories.map((cat) => {

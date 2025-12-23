@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, update, and_, or_, case
 from sqlalchemy.exc import IntegrityError
 
-from ..models.news import News, NewsFavorite
+from ..models.news import News, NewsFavorite, NewsViewHistory
 from ..schemas.news import NewsCreate, NewsUpdate
 
 
@@ -124,6 +124,83 @@ class NewsService:
             .values(view_count=News.view_count + 1)
         )
         await db.commit()
+
+    @staticmethod
+    async def record_view_history(db: AsyncSession, news_id: int, user_id: int) -> None:
+        result = await db.execute(
+            select(NewsViewHistory).where(
+                and_(NewsViewHistory.news_id == news_id, NewsViewHistory.user_id == user_id)
+            )
+        )
+        existing = result.scalar_one_or_none()
+        if existing is not None:
+            existing.viewed_at = datetime.now()
+            await db.commit()
+            return
+
+        db.add(NewsViewHistory(news_id=news_id, user_id=user_id))
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+
+    @staticmethod
+    async def get_user_history(
+        db: AsyncSession,
+        user_id: int,
+        page: int = 1,
+        page_size: int = 20,
+        category: str | None = None,
+        keyword: str | None = None,
+    ) -> tuple[list[News], int]:
+        query = (
+            select(News)
+            .join(NewsViewHistory, News.id == NewsViewHistory.news_id)
+            .where(
+                and_(
+                    NewsViewHistory.user_id == user_id,
+                    News.is_published == True,
+                )
+            )
+            .order_by(desc(NewsViewHistory.viewed_at))
+        )
+
+        count_query = (
+            select(func.count(NewsViewHistory.id))
+            .join(News, News.id == NewsViewHistory.news_id)
+            .where(
+                and_(
+                    NewsViewHistory.user_id == user_id,
+                    News.is_published == True,
+                )
+            )
+        )
+
+        if category:
+            query = query.where(News.category == category)
+            count_query = count_query.where(News.category == category)
+
+        if keyword:
+            pattern = f"%{keyword}%"
+            search_filter = or_(
+                News.title.ilike(pattern),
+                News.summary.ilike(pattern),
+                News.content.ilike(pattern),
+                News.source.ilike(pattern),
+                News.author.ilike(pattern),
+            )
+            query = query.where(search_filter)
+            count_query = count_query.where(search_filter)
+
+        query = query.offset((page - 1) * page_size).limit(page_size)
+
+        result = await db.execute(query)
+        items = list(result.scalars().all())
+
+        count_result = await db.execute(count_query)
+        total = int(count_result.scalar() or 0)
+
+        return items, total
     
     @staticmethod
     async def get_categories(db: AsyncSession) -> list[dict[str, object]]:

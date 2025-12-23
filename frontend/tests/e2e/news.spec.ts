@@ -131,6 +131,42 @@ test('新闻列表：关键词搜索可命中 title/summary/source/author/conten
   }
 })
 
+test('新闻列表：最近浏览（登录用户访问详情后可在列表中看到）', async ({ page, request }) => {
+  const now = Date.now()
+  const adminToken = await loginAdmin(request)
+  const user = await registerAndLoginUser(request, now)
+
+  const token = `E2E_NEWS_HISTORY_${now}`
+  const newsId = await createNews(request, adminToken, {
+    title: `历史新闻-${token}`,
+    category: '法律动态',
+    summary: `摘要-${token}`,
+    cover_image: null,
+    source: 'E2E',
+    author: 'E2E',
+    content: `内容-${token}`,
+    is_top: false,
+    is_published: true,
+  })
+
+  try {
+    await page.goto('/login')
+    await page.getByPlaceholder('请输入用户名').fill(user.username)
+    await page.getByPlaceholder('请输入密码').fill(user.password)
+    await page.getByRole('button', { name: '登录' }).click()
+    await page.waitForURL('**/', { timeout: 12_000 })
+
+    await page.goto(`/news/${newsId}`)
+    await expect(page.getByRole('heading', { level: 1, name: `历史新闻-${token}` })).toBeVisible({ timeout: 12_000 })
+
+    await page.goto('/news')
+    await page.getByRole('button', { name: '最近浏览' }).click()
+    await expect(page.getByText(`历史新闻-${token}`).first()).toBeVisible({ timeout: 12_000 })
+  } finally {
+    await deleteNews(request, adminToken, newsId)
+  }
+})
+
 test('新闻详情：相关推荐可见（同分类新闻优先）', async ({ page, request }) => {
   const now = Date.now()
   const adminToken = await loginAdmin(request)

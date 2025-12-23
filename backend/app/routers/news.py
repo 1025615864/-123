@@ -46,6 +46,29 @@ async def get_news_list(
     return NewsListResponse(items=items, total=total, page=page, page_size=page_size)
 
 
+@router.get("/history", response_model=NewsListResponse, summary="获取最近浏览新闻")
+async def get_my_news_history(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    category: str | None = None,
+    keyword: str | None = None,
+):
+    news_list, total = await news_service.get_user_history(db, current_user.id, page, page_size, category, keyword)
+
+    items: list[NewsListItem] = []
+    for news in news_list:
+        fav_count = await news_service.get_favorite_count(db, news.id)
+        is_fav = await news_service.is_favorited(db, news.id, current_user.id)
+        item = NewsListItem.model_validate(news)
+        item.favorite_count = fav_count
+        item.is_favorited = is_fav
+        items.append(item)
+
+    return NewsListResponse(items=items, total=total, page=page, page_size=page_size)
+
+
 @router.get("/top", response_model=list[NewsListItem], summary="获取置顶新闻")
 async def get_top_news(
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -139,6 +162,10 @@ async def get_news_detail(
     
     await news_service.increment_view(db, news)
     await db.refresh(news)
+
+    if current_user is not None:
+        await news_service.record_view_history(db, news.id, current_user.id)
+
     fav_count = await news_service.get_favorite_count(db, news.id)
     is_fav = False
     if current_user is not None:

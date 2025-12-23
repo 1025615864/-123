@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Integer, String, Text, DateTime, Boolean, ForeignKey, UniqueConstraint
+from sqlalchemy import Integer, String, Text, DateTime, Boolean, ForeignKey, UniqueConstraint, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 from ..database import Base
@@ -41,5 +41,20 @@ class NewsFavorite(Base):
     news_id: Mapped[int] = mapped_column(Integer, ForeignKey("news.id"), nullable=False)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    news: Mapped[News] = relationship("News")
+
+
+class NewsViewHistory(Base):
+    __tablename__: str = "news_view_history"
+    __table_args__: tuple[object, ...] = (
+        UniqueConstraint("news_id", "user_id", name="uq_news_view_history_news_user"),
+        Index("ix_news_view_history_user_viewed_at", "user_id", "viewed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    news_id: Mapped[int] = mapped_column(Integer, ForeignKey("news.id"), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    viewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     news: Mapped[News] = relationship("News")
