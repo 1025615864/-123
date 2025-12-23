@@ -131,6 +131,55 @@ test('新闻列表：关键词搜索可命中 title/summary/source/author/conten
   }
 })
 
+test('首页：热门新闻卡片可见（包含高阅读新闻）', async ({ page, request }) => {
+  const now = Date.now()
+  const adminToken = await loginAdmin(request)
+
+  const token = `E2E_HOME_NEWS_HOT_${now}`
+  const hotId = await createNews(request, adminToken, {
+    title: `首页热门新闻A-${token}`,
+    category: '法律动态',
+    summary: `摘要A-${token}`,
+    cover_image: null,
+    source: 'E2E',
+    author: 'E2E',
+    content: `内容A-${token}`,
+    is_top: false,
+    is_published: true,
+  })
+
+  const normalId = await createNews(request, adminToken, {
+    title: `首页热门新闻B-${token}`,
+    category: '法律动态',
+    summary: `摘要B-${token}`,
+    cover_image: null,
+    source: 'E2E',
+    author: 'E2E',
+    content: `内容B-${token}`,
+    is_top: false,
+    is_published: true,
+  })
+
+  try {
+    for (let i = 0; i < 30; i++) {
+      const res = await request.get(`${apiBase}/news/${hotId}`)
+      expect(res.ok()).toBeTruthy()
+    }
+    const res2 = await request.get(`${apiBase}/news/${normalId}`)
+    expect(res2.ok()).toBeTruthy()
+
+    await page.goto('/')
+
+    const hotCard = page.getByTestId('home-news-hot')
+    await hotCard.scrollIntoViewIfNeeded()
+    await expect(hotCard).toBeVisible({ timeout: 12_000 })
+    await expect(hotCard.getByText(`首页热门新闻A-${token}`).first()).toBeVisible({ timeout: 12_000 })
+  } finally {
+    await deleteNews(request, adminToken, hotId)
+    await deleteNews(request, adminToken, normalId)
+  }
+})
+
 test('新闻列表：热门新闻区块可见（按阅读量排序）', async ({ page, request }) => {
   const now = Date.now()
   const adminToken = await loginAdmin(request)

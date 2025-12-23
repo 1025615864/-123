@@ -8,6 +8,7 @@ import {
   Shield,
   Clock,
   Award,
+  TrendingUp,
   ArrowRight,
 } from "lucide-react";
 import { Badge, Card, LinkButton, Skeleton } from "../components/ui";
@@ -19,6 +20,7 @@ interface HomeNewsListItem {
   title: string;
   category: string;
   is_top: boolean;
+  view_count: number;
   published_at: string | null;
   created_at: string;
 }
@@ -216,6 +218,8 @@ export default function HomePage() {
 function HomeNewsRecommendSection() {
   const topLimit = 5;
   const recentLimit = 6;
+  const hotLimit = 6;
+  const hotDays = 7;
 
   const topNewsQuery = useQuery({
     queryKey: queryKeys.newsTop(topLimit),
@@ -247,7 +251,22 @@ function HomeNewsRecommendSection() {
     refetchOnWindowFocus: false,
   });
 
-  const renderList = (items: HomeNewsListItem[], emptyText: string) => {
+  const hotNewsQuery = useQuery({
+    queryKey: queryKeys.newsHot(hotDays, hotLimit),
+    queryFn: async () => {
+      try {
+        const res = await api.get(`/news/hot?days=${hotDays}&limit=${hotLimit}`);
+        return (Array.isArray(res.data) ? res.data : []) as HomeNewsListItem[];
+      } catch {
+        return [] as HomeNewsListItem[];
+      }
+    },
+    staleTime: 60 * 1000,
+    retry: 1,
+    refetchOnWindowFocus: false,
+  });
+
+  const renderList = (items: HomeNewsListItem[], emptyText: string, showViews: boolean = false) => {
     if (items.length === 0) {
       return (
         <div className="text-sm text-slate-600 dark:text-white/45">
@@ -281,6 +300,7 @@ function HomeNewsRecommendSection() {
               {new Date(
                 item.published_at || item.created_at
               ).toLocaleDateString()}
+              {showViews ? ` · 阅读 ${item.view_count}` : null}
             </div>
           </Link>
         ))}
@@ -321,7 +341,7 @@ function HomeNewsRecommendSection() {
         </LinkButton>
       </div>
 
-      <div className="grid lg:grid-cols-2 gap-10">
+      <div className="grid lg:grid-cols-3 gap-10">
         <Card variant="surface" className="p-8">
           <div className="flex items-center gap-3 mb-6">
             <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-amber-500/15 to-orange-500/5 flex items-center justify-center">
@@ -358,6 +378,25 @@ function HomeNewsRecommendSection() {
           {recentNewsQuery.isLoading
             ? renderLoading()
             : renderList(recentNewsQuery.data ?? [], "暂无最新新闻")}
+        </Card>
+
+        <Card variant="surface" className="p-8" data-testid="home-news-hot">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-amber-500/15 to-orange-500/5 flex items-center justify-center">
+              <TrendingUp className="h-5 w-5 text-amber-400/90" />
+            </div>
+            <div>
+              <div className="text-lg font-medium text-slate-900 dark:text-white">
+                热门新闻
+              </div>
+              <div className="text-sm text-slate-600 dark:text-white/45">
+                近7天阅读最多
+              </div>
+            </div>
+          </div>
+          {hotNewsQuery.isLoading
+            ? renderLoading()
+            : renderList(hotNewsQuery.data ?? [], "暂无热门新闻", true)}
         </Card>
       </div>
     </section>
