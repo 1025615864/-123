@@ -39,6 +39,10 @@ export interface Post {
   images?: string[];
   attachments?: Array<{ name: string; url: string }>;
   reactions?: Array<{ emoji: string; count: number }>;
+  is_deleted?: boolean;
+  review_status?: string | null;
+  review_reason?: string | null;
+  reviewed_at?: string | null;
   created_at: string;
   updated_at?: string;
 }

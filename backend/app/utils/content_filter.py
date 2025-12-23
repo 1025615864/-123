@@ -28,14 +28,48 @@ AD_WORDS = [
 ]
 
 
+DEFAULT_AD_WORDS_THRESHOLD = 2
+DEFAULT_CHECK_URL = True
+DEFAULT_CHECK_PHONE = True
+
+
 class ContentFilter:
     """内容过滤器"""
     
-    def __init__(self, custom_words: list[str] | None = None):
+    def __init__(
+        self,
+        custom_words: list[str] | None = None,
+        ad_threshold: int = DEFAULT_AD_WORDS_THRESHOLD,
+        check_url: bool = DEFAULT_CHECK_URL,
+        check_phone: bool = DEFAULT_CHECK_PHONE,
+    ):
         self.sensitive_words: set[str] = set(SENSITIVE_WORDS)
         self.ad_words: set[str] = set(AD_WORDS)
+        self.ad_threshold: int = int(ad_threshold) if int(ad_threshold) > 0 else DEFAULT_AD_WORDS_THRESHOLD
+        self.check_url: bool = bool(check_url)
+        self.check_phone: bool = bool(check_phone)
         if custom_words:
             self.sensitive_words.update(custom_words)
+
+    def apply_config(
+        self,
+        sensitive_words: list[str] | None = None,
+        ad_words: list[str] | None = None,
+        ad_threshold: int | None = None,
+        check_url: bool | None = None,
+        check_phone: bool | None = None,
+    ) -> None:
+        if sensitive_words is not None:
+            self.sensitive_words = {str(w).strip() for w in sensitive_words if str(w).strip()}
+        if ad_words is not None:
+            self.ad_words = {str(w).strip() for w in ad_words if str(w).strip()}
+        if ad_threshold is not None:
+            v = int(ad_threshold)
+            self.ad_threshold = v if v > 0 else DEFAULT_AD_WORDS_THRESHOLD
+        if check_url is not None:
+            self.check_url = bool(check_url)
+        if check_phone is not None:
+            self.check_phone = bool(check_phone)
     
     def check_content(self, content: str) -> tuple[bool, str, list[str]]:
         """
@@ -64,7 +98,7 @@ class ContentFilter:
         if matched_sensitive:
             return False, "内容包含敏感词汇", matched_sensitive
         
-        if len(matched_ads) >= 2:  # 多个广告词才判定
+        if len(matched_ads) >= int(self.ad_threshold):
             return False, "内容疑似广告", matched_ads
         
         return True, "", []
@@ -114,6 +148,22 @@ class ContentFilter:
 content_filter = ContentFilter()
 
 
+def apply_content_filter_config(
+    sensitive_words: list[str] | None = None,
+    ad_words: list[str] | None = None,
+    ad_words_threshold: int | None = None,
+    check_url: bool | None = None,
+    check_phone: bool | None = None,
+) -> None:
+    content_filter.apply_config(
+        sensitive_words=sensitive_words,
+        ad_words=ad_words,
+        ad_threshold=ad_words_threshold,
+        check_url=check_url,
+        check_phone=check_phone,
+    )
+
+
 def check_post_content(title: str, content: str) -> tuple[bool, str]:
     """
     检查帖子内容
@@ -124,11 +174,15 @@ def check_post_content(title: str, content: str) -> tuple[bool, str]:
     # 检查标题
     passed, reason, _ = content_filter.check_content(title)
     if not passed:
+        if reason == "内容疑似广告":
+            return True, ""
         return False, f"标题{reason}"
     
     # 检查内容
     passed, reason, _ = content_filter.check_content(content)
     if not passed:
+        if reason == "内容疑似广告":
+            return True, ""
         return False, f"内容{reason}"
     
     return True, ""
@@ -143,7 +197,9 @@ def check_comment_content(content: str) -> tuple[bool, str]:
     """
     passed, reason, _ = content_filter.check_content(content)
     if not passed:
-        return False, reason
+        if reason == "内容包含敏感词汇":
+            return False, reason
+        return True, ""
     
     return True, ""
 
@@ -155,20 +211,26 @@ def needs_review(content: str) -> tuple[bool, str]:
     Returns:
         Tuple[bool, str]: (是否需要审核, 原因)
     """
+    passed, reason, _ = content_filter.check_content(content)
+    if not passed:
+        return True, reason
+
     risk_level = content_filter.get_risk_level(content)
     
     if risk_level == 'danger':
         return True, "内容风险较高，需要人工审核"
     
     # 检查是否包含链接
-    url_pattern = r'https?://[^\s]+'
-    if re.search(url_pattern, content):
-        return True, "内容包含链接，需要人工审核"
+    if content_filter.check_url:
+        url_pattern = r'https?://[^\s]+'
+        if re.search(url_pattern, content):
+            return True, "内容包含链接，需要人工审核"
     
     # 检查是否包含联系方式
-    phone_pattern = r'1[3-9]\d{9}'
-    if re.search(phone_pattern, content):
-        return True, "内容包含联系方式，需要人工审核"
+    if content_filter.check_phone:
+        phone_pattern = r'1[3-9]\d{9}'
+        if re.search(phone_pattern, content):
+            return True, "内容包含联系方式，需要人工审核"
     
     return False, ""
 

@@ -1,23 +1,24 @@
 """法律咨询所API路由"""
 from datetime import datetime
+from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel
 from sqlalchemy import select, func, or_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
-from app.models.lawfirm import LawyerVerification, Lawyer, LawFirm
-from app.models.user import User
-from app.schemas.lawfirm import (
+from ..database import get_db
+from ..models.lawfirm import LawyerVerification, Lawyer, LawFirm
+from ..models.user import User
+from ..schemas.lawfirm import (
     LawFirmCreate, LawFirmUpdate, LawFirmResponse, LawFirmListResponse,
     LawyerCreate, LawyerResponse, LawyerListResponse,
     ConsultationCreate, ConsultationResponse, ConsultationListResponse,
     ReviewCreate, ReviewResponse, ReviewListResponse
 )
-from app.services.lawfirm_service import (
+from ..services.lawfirm_service import (
     lawfirm_service, lawyer_service, consultation_service, review_service
 )
-from app.utils.deps import get_current_user, require_admin
+from ..utils.deps import get_current_user, require_admin
 
 router = APIRouter(prefix="/lawfirm", tags=["律所服务"])
 
@@ -33,11 +34,11 @@ def _split_specialties(value: str | None) -> list[str]:
 
 @router.get("/firms", response_model=LawFirmListResponse, summary="获取律所列表")
 async def get_law_firms(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    db: Annotated[AsyncSession, Depends(get_db)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     city: str | None = None,
     keyword: str | None = None,
-    db: AsyncSession = Depends(get_db)
 ):
     """获取律所列表"""
     firms, total = await lawfirm_service.get_list(db, page, page_size, city, keyword)
@@ -70,7 +71,7 @@ async def get_law_firms(
 
 
 @router.get("/firms/{firm_id}", response_model=LawFirmResponse, summary="获取律所详情")
-async def get_law_firm(firm_id: int, db: AsyncSession = Depends(get_db)):
+async def get_law_firm(firm_id: int, db: Annotated[AsyncSession, Depends(get_db)]):
     """获取律所详情"""
     firm = await lawfirm_service.get_by_id(db, firm_id)
     if not firm:
@@ -102,8 +103,8 @@ async def get_law_firm(firm_id: int, db: AsyncSession = Depends(get_db)):
 @router.post("/firms", response_model=LawFirmResponse, summary="创建律所")
 async def create_law_firm(
     data: LawFirmCreate,
-    current_user: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db)
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """创建律所（需要管理员权限）"""
     _ = current_user
@@ -132,13 +133,13 @@ async def create_law_firm(
 
 @router.get("/admin/firms", response_model=LawFirmListResponse, summary="管理员获取律所列表")
 async def admin_list_law_firms(
-    current_user: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     city: str | None = None,
     keyword: str | None = None,
-    include_inactive: bool = Query(True, description="是否包含已禁用的律所"),
+    include_inactive: Annotated[bool, Query(description="是否包含已禁用的律所")] = True,
 ):
     """管理员获取律所列表（可包含已禁用律所）"""
     _ = current_user
@@ -201,8 +202,8 @@ async def admin_list_law_firms(
 async def admin_update_law_firm(
     firm_id: int,
     data: LawFirmUpdate,
-    current_user: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """管理员更新律所信息（含认证/启用禁用）"""
     _ = current_user
@@ -237,8 +238,8 @@ async def admin_update_law_firm(
 @router.delete("/admin/firms/{firm_id}", summary="管理员删除律所")
 async def admin_delete_law_firm(
     firm_id: int,
-    current_user: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """管理员软删除律所（设置 is_active=false）"""
     _ = current_user
@@ -256,12 +257,12 @@ async def admin_delete_law_firm(
 
 @router.get("/lawyers", response_model=LawyerListResponse, summary="获取律师列表")
 async def get_lawyers(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    db: Annotated[AsyncSession, Depends(get_db)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     firm_id: int | None = None,
     specialty: str | None = None,
     keyword: str | None = None,
-    db: AsyncSession = Depends(get_db)
 ):
     """获取律师列表"""
     lawyers, total = await lawyer_service.get_list(db, page, page_size, firm_id, specialty, keyword)
@@ -295,7 +296,7 @@ async def get_lawyers(
 
 
 @router.get("/lawyers/{lawyer_id}", response_model=LawyerResponse, summary="获取律师详情")
-async def get_lawyer(lawyer_id: int, db: AsyncSession = Depends(get_db)):
+async def get_lawyer(lawyer_id: int, db: Annotated[AsyncSession, Depends(get_db)]):
     """获取律师详情"""
     lawyer = await lawyer_service.get_by_id(db, lawyer_id)
     if not lawyer:
@@ -328,8 +329,8 @@ async def get_lawyer(lawyer_id: int, db: AsyncSession = Depends(get_db)):
 @router.post("/lawyers", response_model=LawyerResponse, summary="创建律师")
 async def create_lawyer(
     data: LawyerCreate,
-    current_user: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db)
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """创建律师（需要管理员权限）"""
     _ = current_user
@@ -363,8 +364,8 @@ async def create_lawyer(
 @router.post("/consultations", response_model=ConsultationResponse, summary="预约咨询")
 async def create_consultation(
     data: ConsultationCreate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """预约律师咨询"""
     # 检查律师是否存在
@@ -392,10 +393,10 @@ async def create_consultation(
 
 @router.get("/consultations", response_model=ConsultationListResponse, summary="获取我的咨询")
 async def get_my_consultations(
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
     """获取当前用户的咨询列表"""
     consultations, total = await consultation_service.get_user_consultations(
@@ -428,8 +429,8 @@ async def get_my_consultations(
 @router.post("/reviews", response_model=ReviewResponse, summary="提交评价")
 async def create_review(
     data: ReviewCreate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """提交律师评价"""
     # 检查律师是否存在
@@ -454,9 +455,9 @@ async def create_review(
 @router.get("/lawyers/{lawyer_id}/reviews", response_model=ReviewListResponse, summary="获取律师评价")
 async def get_lawyer_reviews(
     lawyer_id: int,
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
-    db: AsyncSession = Depends(get_db)
+    db: Annotated[AsyncSession, Depends(get_db)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
     """获取律师评价列表"""
     reviews, total, avg_rating = await review_service.get_lawyer_reviews(db, lawyer_id, page, page_size)
@@ -515,8 +516,8 @@ class VerificationReview(BaseModel):
 @router.post("/verification/apply", summary="申请律师认证")
 async def apply_verification(
     data: VerificationCreate,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """
     用户申请律师认证
@@ -569,8 +570,8 @@ async def apply_verification(
 
 @router.get("/verification/status", summary="查询认证状态")
 async def get_verification_status(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """查询当前用户的律师认证状态"""
     result = await db.execute(
@@ -595,11 +596,11 @@ async def get_verification_status(
 
 @router.get("/admin/verifications", summary="获取认证申请列表（管理员）")
 async def get_verification_list(
-    current_user: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
-    status_filter: str | None = Query(None, description="状态筛选: pending/approved/rejected"),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    status_filter: Annotated[str | None, Query(description="状态筛选: pending/approved/rejected")] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
     """管理员获取律师认证申请列表"""
     _ = current_user
@@ -647,8 +648,8 @@ async def get_verification_list(
 async def review_verification(
     verification_id: int,
     data: VerificationReview,
-    current_user: User = Depends(require_admin),
-    db: AsyncSession = Depends(get_db),
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """管理员审核律师认证申请"""
     result = await db.execute(

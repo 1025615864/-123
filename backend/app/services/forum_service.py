@@ -1,14 +1,25 @@
 """论坛服务层"""
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, and_, update, case
+from sqlalchemy import select, func, desc, and_, or_, update, case, delete
 from sqlalchemy.engine import CursorResult
-from typing import cast, Any
-from sqlalchemy.orm import selectinload
+from typing import cast
+from sqlalchemy.orm import selectinload, joinedload
+from sqlalchemy.orm.attributes import set_committed_value
 from sqlalchemy.exc import IntegrityError
 
-from app.models.forum import Post, Comment, PostLike, PostFavorite, PostReaction
-from app.schemas.forum import PostCreate, PostUpdate, CommentCreate
+from ..models.forum import Post, Comment, PostLike, PostFavorite, PostReaction, CommentLike
+from ..schemas.forum import PostCreate, PostUpdate, CommentCreate
+from .cache_service import cache_service
+from ..utils.content_filter import (
+    AD_WORDS,
+    DEFAULT_AD_WORDS_THRESHOLD,
+    DEFAULT_CHECK_PHONE,
+    DEFAULT_CHECK_URL,
+    SENSITIVE_WORDS,
+    apply_content_filter_config,
+    needs_review,
+)
 import json
 import math
 from datetime import datetime
@@ -16,6 +27,357 @@ from datetime import datetime
 
 class ForumService:
     """论坛服务"""
+
+    _CONTENT_FILTER_SENSITIVE_KEY = "forum.content_filter.sensitive_words"
+    _CONTENT_FILTER_AD_KEY = "forum.content_filter.ad_words"
+    _CONTENT_FILTER_AD_THRESHOLD_KEY = "forum.content_filter.ad_words_threshold"
+    _CONTENT_FILTER_CHECK_URL_KEY = "forum.content_filter.check_url"
+    _CONTENT_FILTER_CHECK_PHONE_KEY = "forum.content_filter.check_phone"
+
+    _CONTENT_FILTER_CACHE_KEY = "forum:content_filter_config:v1"
+    _CONTENT_FILTER_CACHE_EXPIRE_SECONDS = 60
+
+    @staticmethod
+    def _parse_bool_value(value: str | None, default: bool = True) -> bool:
+        if value is None:
+            return default
+        v = value.strip().lower()
+        if v in ("1", "true", "yes", "y", "on"):
+            return True
+        if v in ("0", "false", "no", "n", "off"):
+            return False
+        return default
+
+    @staticmethod
+    async def is_comment_review_enabled(db: AsyncSession) -> bool:
+        from ..models.system import SystemConfig
+
+        result = await db.execute(
+            select(SystemConfig.value).where(SystemConfig.key == "forum.review.enabled")
+        )
+        value: str | None = result.scalar_one_or_none()
+        return ForumService._parse_bool_value(value, default=True)
+
+    @staticmethod
+    async def is_post_review_enabled(db: AsyncSession) -> bool:
+        from ..models.system import SystemConfig
+
+        result = await db.execute(
+            select(SystemConfig.value).where(SystemConfig.key == "forum.post_review.enabled")
+        )
+        value: str | None = result.scalar_one_or_none()
+        return ForumService._parse_bool_value(value, default=False)
+
+    @staticmethod
+    async def get_post_review_mode(db: AsyncSession) -> str:
+        from ..models.system import SystemConfig
+
+        result = await db.execute(
+            select(SystemConfig.value).where(SystemConfig.key == "forum.post_review.mode")
+        )
+        value: str | None = result.scalar_one_or_none()
+        if not value:
+            return "rule"
+        mode = value.strip().lower()
+        if mode in ("all", "rule"):
+            return mode
+        return "rule"
+
+    @staticmethod
+    def _parse_int_value(value: str | None, default: int) -> int:
+        if value is None:
+            return int(default)
+        try:
+            v = int(str(value).strip())
+        except (TypeError, ValueError):
+            return int(default)
+        return v if v > 0 else int(default)
+
+    @staticmethod
+    def _parse_json_list(value: str | None) -> list[str] | None:
+        if not value:
+            return None
+        try:
+            loaded = json.loads(value)
+        except Exception:
+            return None
+        if not isinstance(loaded, list):
+            return None
+        result: list[str] = []
+        seen: set[str] = set()
+        for item in loaded:
+            s = str(item).strip()
+            if not s:
+                continue
+            if s in seen:
+                continue
+            seen.add(s)
+            result.append(s)
+        return result
+
+    @staticmethod
+    async def _upsert_system_config(
+        db: AsyncSession,
+        *,
+        key: str,
+        value: str,
+        description: str,
+        updated_by: int | None,
+        category: str = "forum",
+    ) -> None:
+        from ..models.system import SystemConfig
+
+        result = await db.execute(select(SystemConfig).where(SystemConfig.key == key))
+        config = result.scalar_one_or_none()
+        if config:
+            config.value = value
+            config.updated_by = updated_by
+            if not config.description:
+                config.description = description
+            if not config.category:
+                config.category = category
+        else:
+            db.add(
+                SystemConfig(
+                    key=key,
+                    value=value,
+                    description=description,
+                    category=category,
+                    updated_by=updated_by,
+                )
+            )
+
+    @staticmethod
+    async def get_content_filter_config(db: AsyncSession) -> dict[str, object]:
+        from ..models.system import SystemConfig
+
+        cached = await cache_service.get_json(ForumService._CONTENT_FILTER_CACHE_KEY)
+        if isinstance(cached, dict):
+            if (
+                "sensitive_words" in cached
+                and "ad_words" in cached
+                and "ad_words_threshold" in cached
+                and "check_url" in cached
+                and "check_phone" in cached
+            ):
+                return cast(dict[str, object], cached)
+
+        keys = (
+            ForumService._CONTENT_FILTER_SENSITIVE_KEY,
+            ForumService._CONTENT_FILTER_AD_KEY,
+            ForumService._CONTENT_FILTER_AD_THRESHOLD_KEY,
+            ForumService._CONTENT_FILTER_CHECK_URL_KEY,
+            ForumService._CONTENT_FILTER_CHECK_PHONE_KEY,
+        )
+
+        result = await db.execute(
+            select(SystemConfig.key, SystemConfig.value).where(SystemConfig.key.in_(list(keys)))
+        )
+        pairs = list(result.all())
+        kv: dict[str, str | None] = {str(k): (str(v) if v is not None else None) for k, v in pairs}
+
+        sensitive_words = ForumService._parse_json_list(kv.get(ForumService._CONTENT_FILTER_SENSITIVE_KEY))
+        ad_words = ForumService._parse_json_list(kv.get(ForumService._CONTENT_FILTER_AD_KEY))
+
+        if sensitive_words is None:
+            sensitive_words = list(SENSITIVE_WORDS)
+        if ad_words is None:
+            ad_words = list(AD_WORDS)
+
+        ad_words_threshold = ForumService._parse_int_value(
+            kv.get(ForumService._CONTENT_FILTER_AD_THRESHOLD_KEY),
+            DEFAULT_AD_WORDS_THRESHOLD,
+        )
+        check_url = ForumService._parse_bool_value(
+            kv.get(ForumService._CONTENT_FILTER_CHECK_URL_KEY),
+            default=DEFAULT_CHECK_URL,
+        )
+        check_phone = ForumService._parse_bool_value(
+            kv.get(ForumService._CONTENT_FILTER_CHECK_PHONE_KEY),
+            default=DEFAULT_CHECK_PHONE,
+        )
+
+        config: dict[str, object] = {
+            "sensitive_words": sensitive_words,
+            "ad_words": ad_words,
+            "ad_words_threshold": int(ad_words_threshold),
+            "check_url": bool(check_url),
+            "check_phone": bool(check_phone),
+        }
+
+        await cache_service.set_json(
+            ForumService._CONTENT_FILTER_CACHE_KEY,
+            config,
+            expire=ForumService._CONTENT_FILTER_CACHE_EXPIRE_SECONDS,
+        )
+
+        return config
+
+    @staticmethod
+    async def invalidate_content_filter_config_cache() -> None:
+        await cache_service.delete(ForumService._CONTENT_FILTER_CACHE_KEY)
+
+    @staticmethod
+    async def apply_content_filter_config_from_db(db: AsyncSession) -> dict[str, object]:
+        config = await ForumService.get_content_filter_config(db)
+        apply_content_filter_config(
+            sensitive_words=cast(list[str], config.get("sensitive_words")),
+            ad_words=cast(list[str], config.get("ad_words")),
+            ad_words_threshold=cast(int, config.get("ad_words_threshold")),
+            check_url=cast(bool, config.get("check_url")),
+            check_phone=cast(bool, config.get("check_phone")),
+        )
+        return config
+
+    @staticmethod
+    async def update_content_filter_rules(
+        db: AsyncSession,
+        *,
+        updated_by: int | None,
+        ad_words_threshold: int | None = None,
+        check_url: bool | None = None,
+        check_phone: bool | None = None,
+    ) -> dict[str, object]:
+        await ForumService.invalidate_content_filter_config_cache()
+        current = await ForumService.get_content_filter_config(db)
+
+        # 确保词库也落库（这样首次保存规则时会把默认词库写入DB，后续可持久化）
+        await ForumService._upsert_system_config(
+            db,
+            key=ForumService._CONTENT_FILTER_SENSITIVE_KEY,
+            value=json.dumps(cast(list[str], current.get("sensitive_words") or []), ensure_ascii=False),
+            description="论坛内容过滤：敏感词列表",
+            updated_by=updated_by,
+        )
+        await ForumService._upsert_system_config(
+            db,
+            key=ForumService._CONTENT_FILTER_AD_KEY,
+            value=json.dumps(cast(list[str], current.get("ad_words") or []), ensure_ascii=False),
+            description="论坛内容过滤：广告词列表",
+            updated_by=updated_by,
+        )
+
+        next_threshold = int(current.get("ad_words_threshold") or DEFAULT_AD_WORDS_THRESHOLD)
+        if ad_words_threshold is not None:
+            next_threshold = ad_words_threshold if int(ad_words_threshold) > 0 else DEFAULT_AD_WORDS_THRESHOLD
+
+        next_check_url = bool(current.get("check_url") if current.get("check_url") is not None else DEFAULT_CHECK_URL)
+        if check_url is not None:
+            next_check_url = bool(check_url)
+
+        next_check_phone = bool(
+            current.get("check_phone") if current.get("check_phone") is not None else DEFAULT_CHECK_PHONE
+        )
+        if check_phone is not None:
+            next_check_phone = bool(check_phone)
+
+        await ForumService._upsert_system_config(
+            db,
+            key=ForumService._CONTENT_FILTER_AD_THRESHOLD_KEY,
+            value=str(int(next_threshold)),
+            description="论坛内容过滤：广告词命中阈值",
+            updated_by=updated_by,
+        )
+        await ForumService._upsert_system_config(
+            db,
+            key=ForumService._CONTENT_FILTER_CHECK_URL_KEY,
+            value="true" if next_check_url else "false",
+            description="论坛内容过滤：是否检查链接",
+            updated_by=updated_by,
+        )
+        await ForumService._upsert_system_config(
+            db,
+            key=ForumService._CONTENT_FILTER_CHECK_PHONE_KEY,
+            value="true" if next_check_phone else "false",
+            description="论坛内容过滤：是否检查手机号",
+            updated_by=updated_by,
+        )
+
+        await db.commit()
+        await ForumService.invalidate_content_filter_config_cache()
+        return await ForumService.apply_content_filter_config_from_db(db)
+
+    @staticmethod
+    async def add_sensitive_word(db: AsyncSession, *, word: str, updated_by: int | None) -> dict[str, object]:
+        await ForumService.invalidate_content_filter_config_cache()
+        w = str(word or "").strip()
+        if not w:
+            return await ForumService.apply_content_filter_config_from_db(db)
+
+        current = await ForumService.get_content_filter_config(db)
+        words = cast(list[str], current.get("sensitive_words"))
+        if w not in words:
+            words.append(w)
+
+        await ForumService._upsert_system_config(
+            db,
+            key=ForumService._CONTENT_FILTER_SENSITIVE_KEY,
+            value=json.dumps(words, ensure_ascii=False),
+            description="论坛内容过滤：敏感词列表",
+            updated_by=updated_by,
+        )
+        await db.commit()
+        await ForumService.invalidate_content_filter_config_cache()
+        return await ForumService.apply_content_filter_config_from_db(db)
+
+    @staticmethod
+    async def remove_sensitive_word(db: AsyncSession, *, word: str, updated_by: int | None) -> dict[str, object]:
+        await ForumService.invalidate_content_filter_config_cache()
+        w = str(word or "").strip()
+        current = await ForumService.get_content_filter_config(db)
+        words = [x for x in cast(list[str], current.get("sensitive_words")) if x != w]
+
+        await ForumService._upsert_system_config(
+            db,
+            key=ForumService._CONTENT_FILTER_SENSITIVE_KEY,
+            value=json.dumps(words, ensure_ascii=False),
+            description="论坛内容过滤：敏感词列表",
+            updated_by=updated_by,
+        )
+        await db.commit()
+        await ForumService.invalidate_content_filter_config_cache()
+        return await ForumService.apply_content_filter_config_from_db(db)
+
+    @staticmethod
+    async def add_ad_word(db: AsyncSession, *, word: str, updated_by: int | None) -> dict[str, object]:
+        await ForumService.invalidate_content_filter_config_cache()
+        w = str(word or "").strip()
+        if not w:
+            return await ForumService.apply_content_filter_config_from_db(db)
+
+        current = await ForumService.get_content_filter_config(db)
+        words = cast(list[str], current.get("ad_words"))
+        if w not in words:
+            words.append(w)
+
+        await ForumService._upsert_system_config(
+            db,
+            key=ForumService._CONTENT_FILTER_AD_KEY,
+            value=json.dumps(words, ensure_ascii=False),
+            description="论坛内容过滤：广告词列表",
+            updated_by=updated_by,
+        )
+        await db.commit()
+        await ForumService.invalidate_content_filter_config_cache()
+        return await ForumService.apply_content_filter_config_from_db(db)
+
+    @staticmethod
+    async def remove_ad_word(db: AsyncSession, *, word: str, updated_by: int | None) -> dict[str, object]:
+        await ForumService.invalidate_content_filter_config_cache()
+        w = str(word or "").strip()
+        current = await ForumService.get_content_filter_config(db)
+        words = [x for x in cast(list[str], current.get("ad_words")) if x != w]
+
+        await ForumService._upsert_system_config(
+            db,
+            key=ForumService._CONTENT_FILTER_AD_KEY,
+            value=json.dumps(words, ensure_ascii=False),
+            description="论坛内容过滤：广告词列表",
+            updated_by=updated_by,
+        )
+        await db.commit()
+        await ForumService.invalidate_content_filter_config_cache()
+        return await ForumService.apply_content_filter_config_from_db(db)
     
     # ============ 帖子相关 ============
     
@@ -25,6 +387,24 @@ class ForumService:
         # 处理图片和附件
         images_json = json.dumps(post_data.images) if post_data.images else None
         attachments_json = json.dumps(post_data.attachments) if post_data.attachments else None
+
+        _ = await ForumService.apply_content_filter_config_from_db(db)
+
+        requires_review = False
+        review_reason: str | None = None
+
+        review_enabled = await ForumService.is_post_review_enabled(db)
+        if not review_enabled:
+            review_status = "approved"
+        else:
+            review_mode = await ForumService.get_post_review_mode(db)
+            if review_mode == "all":
+                requires_review = True
+                review_reason = "全量审核"
+                review_status = "pending"
+            else:
+                requires_review, review_reason = needs_review(f"{post_data.title}\n{post_data.content}")
+                review_status = "pending" if requires_review else "approved"
         
         post = Post(
             title=post_data.title,
@@ -34,6 +414,8 @@ class ForumService:
             cover_image=post_data.cover_image,
             images=images_json,
             attachments=attachments_json,
+            review_status=review_status,
+            review_reason=review_reason if requires_review else None,
         )
         db.add(post)
         await db.commit()
@@ -43,10 +425,21 @@ class ForumService:
     @staticmethod
     async def get_post(db: AsyncSession, post_id: int) -> Post | None:
         """获取帖子详情"""
+        approved_filter = or_(Post.review_status.is_(None), Post.review_status == "approved")
         result = await db.execute(
             select(Post)
             .options(selectinload(Post.author))
-            .where(and_(Post.id == post_id, Post.is_deleted == False))
+            .where(and_(Post.id == post_id, Post.is_deleted == False, approved_filter))
+        )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_post_any(db: AsyncSession, post_id: int) -> Post | None:
+        """获取帖子详情（包含已删除）"""
+        result = await db.execute(
+            select(Post)
+            .options(selectinload(Post.author))
+            .where(Post.id == post_id)
         )
         return result.scalar_one_or_none()
     
@@ -56,11 +449,30 @@ class ForumService:
         page: int = 1,
         page_size: int = 20,
         category: str | None = None,
-        keyword: str | None = None
+        keyword: str | None = None,
+        include_deleted: bool = False,
+        deleted: bool | None = None,
+        approved_only: bool = True,
     ) -> tuple[list[Post], int]:
         """获取帖子列表"""
-        query = select(Post).options(selectinload(Post.author)).where(Post.is_deleted == False)
-        count_query = select(func.count(Post.id)).where(Post.is_deleted == False)
+        query = select(Post).options(selectinload(Post.author))
+        count_query = select(func.count(Post.id))
+
+        if deleted is True:
+            query = query.where(Post.is_deleted == True)
+            count_query = count_query.where(Post.is_deleted == True)
+        elif deleted is False:
+            query = query.where(Post.is_deleted == False)
+            count_query = count_query.where(Post.is_deleted == False)
+        else:
+            if not include_deleted:
+                query = query.where(Post.is_deleted == False)
+                count_query = count_query.where(Post.is_deleted == False)
+
+        if approved_only and deleted is not True:
+            approved_filter = or_(Post.review_status.is_(None), Post.review_status == "approved")
+            query = query.where(approved_filter)
+            count_query = count_query.where(approved_filter)
         
         if category:
             query = query.where(Post.category == category)
@@ -81,6 +493,43 @@ class ForumService:
         count_result = await db.execute(count_query)
         total = int(count_result.scalar() or 0)
         
+        return list(posts), total
+
+    @staticmethod
+    async def get_user_deleted_posts(
+        db: AsyncSession,
+        user_id: int,
+        page: int = 1,
+        page_size: int = 20,
+        category: str | None = None,
+        keyword: str | None = None,
+    ) -> tuple[list[Post], int]:
+        """获取用户删除的帖子列表（回收站）"""
+        query = (
+            select(Post)
+            .options(selectinload(Post.author))
+            .where(and_(Post.user_id == user_id, Post.is_deleted == True))
+        )
+        count_query = select(func.count(Post.id)).where(and_(Post.user_id == user_id, Post.is_deleted == True))
+
+        if category:
+            query = query.where(Post.category == category)
+            count_query = count_query.where(Post.category == category)
+
+        if keyword:
+            search_filter = Post.title.contains(keyword) | Post.content.contains(keyword)
+            query = query.where(search_filter)
+            count_query = count_query.where(search_filter)
+
+        query = query.order_by(desc(Post.updated_at))
+        query = query.offset((page - 1) * page_size).limit(page_size)
+
+        result = await db.execute(query)
+        posts = result.scalars().all()
+
+        count_result = await db.execute(count_query)
+        total = int(count_result.scalar() or 0)
+
         return list(posts), total
 
     @staticmethod
@@ -124,6 +573,12 @@ class ForumService:
     async def update_post(db: AsyncSession, post: Post, post_data: PostUpdate) -> Post:
         """更新帖子"""
         update_data: dict[str, object] = post_data.model_dump(exclude_unset=True)
+        if "images" in update_data:
+            update_data["images"] = json.dumps(update_data["images"]) if update_data.get("images") else None
+        if "attachments" in update_data:
+            update_data["attachments"] = (
+                json.dumps(update_data["attachments"]) if update_data.get("attachments") else None
+            )
         for field, value in update_data.items():
             setattr(post, field, value)
         await db.commit()
@@ -134,6 +589,30 @@ class ForumService:
     async def delete_post(db: AsyncSession, post: Post) -> None:
         """删除帖子（软删除）"""
         post.is_deleted = True
+        await db.commit()
+
+    @staticmethod
+    async def restore_post(db: AsyncSession, post: Post) -> Post:
+        """恢复帖子（回收站 -> 正常）"""
+        post.is_deleted = False
+        await db.commit()
+        await db.refresh(post)
+        return post
+
+    @staticmethod
+    async def purge_post(db: AsyncSession, post: Post) -> None:
+        """永久删除帖子（硬删除）"""
+        # 删除评论点赞 -> 评论 -> 帖子点赞/收藏/反应 -> 帖子
+        comment_ids_subq = select(Comment.id).where(Comment.post_id == post.id)
+
+        _ = await db.execute(delete(CommentLike).where(CommentLike.comment_id.in_(comment_ids_subq)))
+        _ = await db.execute(delete(Comment).where(Comment.post_id == post.id))
+
+        _ = await db.execute(delete(PostLike).where(PostLike.post_id == post.id))
+        _ = await db.execute(delete(PostFavorite).where(PostFavorite.post_id == post.id))
+        _ = await db.execute(delete(PostReaction).where(PostReaction.post_id == post.id))
+
+        await db.delete(post)
         await db.commit()
     
     @staticmethod
@@ -177,7 +656,10 @@ class ForumService:
                 .where(Post.id == post_id)
                 .values(
                     like_count=case(
-                        (Post.like_count > 0, Post.like_count - 1),
+                        (
+                            func.coalesce(Post.like_count, 0) > 0,
+                            func.coalesce(Post.like_count, 0) - 1,
+                        ),
                         else_=0,
                     )
                 )
@@ -192,7 +674,7 @@ class ForumService:
         _ = await db.execute(
             update(Post)
             .where(Post.id == post_id)
-            .values(like_count=Post.like_count + 1)
+            .values(like_count=func.coalesce(Post.like_count, 0) + 1)
         )
         try:
             await db.commit()
@@ -224,19 +706,37 @@ class ForumService:
         comment_data: CommentCreate
     ) -> Comment:
         """创建评论"""
+        images_json = json.dumps(comment_data.images) if comment_data.images else None
+
+        _ = await ForumService.apply_content_filter_config_from_db(db)
+
+        requires_review = False
+        review_reason: str | None = None
+
+        review_enabled = await ForumService.is_comment_review_enabled(db)
+        if not review_enabled:
+            review_status = "approved"
+        else:
+            requires_review, review_reason = needs_review(comment_data.content)
+            review_status = "pending" if requires_review else "approved"
+
         comment = Comment(
             content=comment_data.content,
             post_id=post_id,
             user_id=user_id,
-            parent_id=comment_data.parent_id
+            parent_id=comment_data.parent_id,
+            images=images_json,
+            review_status=review_status,
+            review_reason=review_reason if requires_review else None,
         )
         db.add(comment)
 
-        _ = await db.execute(
-            update(Post)
-            .where(Post.id == post_id)
-            .values(comment_count=Post.comment_count + 1)
-        )
+        if review_status == "approved":
+            _ = await db.execute(
+                update(Post)
+                .where(Post.id == post_id)
+                .values(comment_count=func.coalesce(Post.comment_count, 0) + 1)
+            )
 
         await db.commit()
         await db.refresh(comment)
@@ -250,53 +750,158 @@ class ForumService:
         page_size: int = 50
     ) -> tuple[list[Comment], int]:
         """获取帖子评论列表"""
-        # 只获取顶级评论
-        query = (
+        approved_filter = or_(Comment.review_status.is_(None), Comment.review_status == "approved")
+        result = await db.execute(
             select(Comment)
-            .options(selectinload(Comment.author))
+            .options(joinedload(Comment.author))
             .where(
                 and_(
                     Comment.post_id == post_id,
-                    Comment.parent_id == None,
-                    Comment.is_deleted == False
+                    approved_filter,
+                    Comment.is_deleted == False,
                 )
             )
             .order_by(desc(Comment.created_at))
-            .offset((page - 1) * page_size)
-            .limit(page_size)
         )
-        
-        result = await db.execute(query)
-        comments = result.scalars().all()
-        
-        count_result = await db.execute(
-            select(func.count(Comment.id)).where(
-                and_(
-                    Comment.post_id == post_id,
-                    Comment.parent_id == None,
-                    Comment.is_deleted == False
-                )
+
+        all_comments = list(result.scalars().all())
+        top_level = [c for c in all_comments if c.parent_id is None]
+        total = len(top_level)
+
+        start = max(0, (page - 1) * page_size)
+        end = start + page_size
+        page_top = top_level[start:end]
+
+        children_by_parent: dict[int, list[Comment]] = {}
+        for c in all_comments:
+            if c.parent_id is None:
+                continue
+            children_by_parent.setdefault(int(c.parent_id), []).append(c)
+
+        def _created_at_ts(value: Comment) -> float:
+            created_at = getattr(value, "created_at", None)
+            if isinstance(created_at, datetime):
+                try:
+                    return float(created_at.timestamp())
+                except (OSError, ValueError, OverflowError):
+                    return 0.0
+            return 0.0
+
+        for children in children_by_parent.values():
+            children.sort(key=_created_at_ts)
+
+        def attach_replies(node: Comment) -> None:
+            replies = children_by_parent.get(int(node.id), [])
+            set_committed_value(node, "replies", replies)
+            for child in replies:
+                attach_replies(child)
+
+        for c in page_top:
+            attach_replies(c)
+
+        return list(page_top), int(total)
+
+    @staticmethod
+    async def get_comments_visible(
+        db: AsyncSession,
+        post_id: int,
+        page: int = 1,
+        page_size: int = 50,
+        viewer_user_id: int | None = None,
+        viewer_role: str | None = None,
+        include_unapproved: bool = False,
+    ) -> tuple[list[Comment], int]:
+        if not include_unapproved or not viewer_user_id:
+            return await ForumService.get_comments(db, post_id, page, page_size)
+
+        is_admin = (viewer_role or "") in ("admin", "super_admin", "moderator")
+
+        viewer_id = int(viewer_user_id)
+
+        not_rejected_filter = or_(Comment.review_status.is_(None), Comment.review_status != "rejected")
+
+        if is_admin:
+            base_filter = and_(
+                Comment.post_id == post_id,
+                or_(
+                    and_(Comment.is_deleted == False, not_rejected_filter),
+                    and_(Comment.user_id == viewer_id, Comment.review_status == "rejected"),
+                ),
             )
+        else:
+            approved_filter = or_(Comment.review_status.is_(None), Comment.review_status == "approved")
+            base_filter = and_(
+                Comment.post_id == post_id,
+                or_(
+                    and_(Comment.is_deleted == False, approved_filter),
+                    and_(Comment.user_id == viewer_id, Comment.review_status == "pending", Comment.is_deleted == False),
+                    and_(Comment.user_id == viewer_id, Comment.review_status == "rejected"),
+                ),
+            )
+
+        result = await db.execute(
+            select(Comment)
+            .options(joinedload(Comment.author))
+            .where(base_filter)
+            .order_by(desc(Comment.created_at))
         )
-        total = int(count_result.scalar() or 0)
-        
-        return list(comments), total
+
+        all_comments = list(result.scalars().all())
+        top_level = [c for c in all_comments if c.parent_id is None]
+        total = len(top_level)
+
+        start = max(0, (page - 1) * page_size)
+        end = start + page_size
+        page_top = top_level[start:end]
+
+        children_by_parent: dict[int, list[Comment]] = {}
+        for c in all_comments:
+            if c.parent_id is None:
+                continue
+            children_by_parent.setdefault(int(c.parent_id), []).append(c)
+
+        def _created_at_ts(value: Comment) -> float:
+            created_at = getattr(value, "created_at", None)
+            if isinstance(created_at, datetime):
+                try:
+                    return float(created_at.timestamp())
+                except (OSError, ValueError, OverflowError):
+                    return 0.0
+            return 0.0
+
+        for children in children_by_parent.values():
+            children.sort(key=_created_at_ts)
+
+        def attach_replies(node: Comment) -> None:
+            replies = children_by_parent.get(int(node.id), [])
+            set_committed_value(node, "replies", replies)
+            for child in replies:
+                attach_replies(child)
+
+        for c in page_top:
+            attach_replies(c)
+
+        return list(page_top), int(total)
     
     @staticmethod
     async def delete_comment(db: AsyncSession, comment: Comment) -> None:
         """删除评论（软删除）"""
         comment.is_deleted = True
 
-        _ = await db.execute(
-            update(Post)
-            .where(Post.id == comment.post_id)
-            .values(
-                comment_count=case(
-                    (Post.comment_count > 0, Post.comment_count - 1),
-                    else_=0,
+        if comment.review_status in (None, "approved"):
+            _ = await db.execute(
+                update(Post)
+                .where(Post.id == comment.post_id)
+                .values(
+                    comment_count=case(
+                        (
+                            func.coalesce(Post.comment_count, 0) > 0,
+                            func.coalesce(Post.comment_count, 0) - 1,
+                        ),
+                        else_=0,
+                    )
                 )
             )
-        )
 
         await db.commit()
     
@@ -309,6 +914,59 @@ class ForumService:
             )
         )
         return result.scalar_one_or_none()
+
+    @staticmethod
+    async def is_comment_liked(db: AsyncSession, comment_id: int, user_id: int) -> bool:
+        result = await db.execute(
+            select(CommentLike).where(
+                and_(CommentLike.comment_id == comment_id, CommentLike.user_id == user_id)
+            )
+        )
+        return result.scalar_one_or_none() is not None
+
+    @staticmethod
+    async def toggle_comment_like(db: AsyncSession, comment_id: int, user_id: int) -> tuple[bool, int]:
+        result = await db.execute(
+            select(CommentLike).where(
+                and_(CommentLike.comment_id == comment_id, CommentLike.user_id == user_id)
+            )
+        )
+        existing_like = result.scalar_one_or_none()
+
+        if existing_like:
+            await db.delete(existing_like)
+            _ = await db.execute(
+                update(Comment)
+                .where(Comment.id == comment_id)
+                .values(
+                    like_count=case(
+                        (
+                            func.coalesce(Comment.like_count, 0) > 0,
+                            func.coalesce(Comment.like_count, 0) - 1,
+                        ),
+                        else_=0,
+                    )
+                )
+            )
+            await db.commit()
+            like_count_result = await db.execute(select(Comment.like_count).where(Comment.id == comment_id))
+            return False, int(like_count_result.scalar() or 0)
+
+        like = CommentLike(comment_id=comment_id, user_id=user_id)
+        db.add(like)
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+
+        _ = await db.execute(
+            update(Comment)
+            .where(Comment.id == comment_id)
+            .values(like_count=func.coalesce(Comment.like_count, 0) + 1)
+        )
+        await db.commit()
+        like_count_result = await db.execute(select(Comment.like_count).where(Comment.id == comment_id))
+        return True, int(like_count_result.scalar() or 0)
 
     # ============ 收藏相关 ============
     
@@ -382,7 +1040,8 @@ class ForumService:
             .where(
                 and_(
                     PostFavorite.user_id == user_id,
-                    Post.is_deleted == False
+                    Post.is_deleted == False,
+                    or_(Post.review_status.is_(None), Post.review_status == "approved"),
                 )
             )
         )
@@ -411,7 +1070,8 @@ class ForumService:
             .where(
                 and_(
                     PostFavorite.user_id == user_id,
-                    Post.is_deleted == False
+                    Post.is_deleted == False,
+                    or_(Post.review_status.is_(None), Post.review_status == "approved"),
                 )
             )
         )
@@ -490,7 +1150,12 @@ class ForumService:
     async def update_heat_scores(db: AsyncSession) -> int:
         """批量更新所有帖子热度分数"""
         result = await db.execute(
-            select(Post).where(Post.is_deleted == False)
+            select(Post).where(
+                and_(
+                    Post.is_deleted == False,
+                    or_(Post.review_status.is_(None), Post.review_status == "approved"),
+                )
+            )
         )
         posts = result.scalars().all()
         
@@ -514,7 +1179,12 @@ class ForumService:
         query = (
             select(Post)
             .options(selectinload(Post.author))
-            .where(and_(Post.is_deleted == False))
+            .where(
+                and_(
+                    Post.is_deleted == False,
+                    or_(Post.review_status.is_(None), Post.review_status == "approved"),
+                )
+            )
             .order_by(desc(Post.heat_score), desc(Post.created_at))
             .limit(limit)
         )
@@ -534,7 +1204,9 @@ class ForumService:
             .values(is_hot=is_hot)
         )
         await db.commit()
-        return cast(CursorResult[Any], result).rowcount > 0
+        cursor = cast(CursorResult[tuple[object, ...]], result)
+        rowcount = getattr(cursor, "rowcount", 0)
+        return int(rowcount or 0) > 0
     
     @staticmethod
     async def set_post_essence(db: AsyncSession, post_id: int, is_essence: bool) -> bool:
@@ -545,7 +1217,9 @@ class ForumService:
             .values(is_essence=is_essence)
         )
         await db.commit()
-        return cast(CursorResult[Any], result).rowcount > 0
+        cursor = cast(CursorResult[tuple[object, ...]], result)
+        rowcount = getattr(cursor, "rowcount", 0)
+        return int(rowcount or 0) > 0
     
     @staticmethod
     async def set_post_pinned(db: AsyncSession, post_id: int, is_pinned: bool) -> bool:
@@ -556,7 +1230,9 @@ class ForumService:
             .values(is_pinned=is_pinned)
         )
         await db.commit()
-        return cast(CursorResult[Any], result).rowcount > 0
+        cursor = cast(CursorResult[tuple[object, ...]], result)
+        rowcount = getattr(cursor, "rowcount", 0)
+        return int(rowcount or 0) > 0
 
     # ============ 表情反应 ============
     
@@ -633,10 +1309,15 @@ class ForumService:
         total_likes = total_likes_result.scalar() or 0
         
         # 总评论数
-        total_comments_result = await db.execute(
-            select(func.count(Comment.id)).where(Comment.is_deleted == False)
+        approved_comments_result = await db.execute(
+            select(func.count(Comment.id)).where(
+                and_(
+                    Comment.is_deleted == False,
+                    or_(Comment.review_status.is_(None), Comment.review_status == "approved"),
+                )
+            )
         )
-        total_comments = total_comments_result.scalar() or 0
+        approved_comments = approved_comments_result.scalar() or 0
         
         # 热门帖子数
         hot_posts_result = await db.execute(
@@ -669,7 +1350,7 @@ class ForumService:
             "total_posts": int(total_posts),
             "total_views": int(total_views),
             "total_likes": int(total_likes),
-            "total_comments": int(total_comments),
+            "total_comments": int(approved_comments),
             "hot_posts_count": int(hot_posts_count),
             "essence_posts_count": int(essence_posts_count),
             "category_stats": category_stats,

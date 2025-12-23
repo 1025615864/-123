@@ -1,5 +1,6 @@
 """知识库相关的Pydantic模式"""
-from pydantic import BaseModel, Field
+from typing import ClassVar
+from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 from enum import Enum
 
@@ -54,7 +55,7 @@ class LegalKnowledgeResponse(LegalKnowledgeBase):
     created_at: datetime
     updated_at: datetime
     
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 class LegalKnowledgeListResponse(BaseModel):
@@ -112,7 +113,7 @@ class ConsultationTemplateResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 # 知识库统计

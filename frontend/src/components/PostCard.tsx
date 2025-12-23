@@ -3,6 +3,19 @@ import { Clock, MessageSquare, ThumbsUp, Star, Eye, Flame, Award, Pin, Image as 
 import { Card, Badge, FadeInImage } from './ui'
 import type { Post } from '../types'
 
+function getExcerpt(content: string, maxLen: number): string {
+  const withoutImages = content.replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+  const withoutLinks = withoutImages.replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+  const withoutMd = withoutLinks
+    .replace(/[`*_>#]/g, ' ')
+    .replace(/\r\n/g, '\n')
+    .replace(/\n+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (withoutMd.length <= maxLen) return withoutMd
+  return withoutMd.slice(0, maxLen) + '...'
+}
+
 export interface PostCardProps {
   post: Post
   onToggleFavorite?: (postId: number) => void
@@ -14,6 +27,8 @@ export interface PostCardProps {
 export default function PostCard({ post, onToggleFavorite, favoriteDisabled, showHeatScore = false, onPrefetch }: PostCardProps) {
   const images = post.images || []
   const hasImages = images.length > 0
+  const excerpt = getExcerpt(post.content ?? '', 120)
+  const reviewStatus = post.review_status || null
   
   return (
     <Link
@@ -25,6 +40,15 @@ export default function PostCard({ post, onToggleFavorite, favoriteDisabled, sho
       <Card variant="surface" hover padding="none" className="p-6 rounded-3xl group overflow-hidden">
         {/* 标签区域 */}
         <div className="flex items-center gap-2 flex-wrap mb-3">
+          {reviewStatus === 'pending' ? (
+            <Badge variant="warning" size="sm" className="rounded-full">
+              审核中
+            </Badge>
+          ) : reviewStatus === 'rejected' ? (
+            <Badge variant="danger" size="sm" className="rounded-full" title={post.review_reason || undefined}>
+              已驳回
+            </Badge>
+          ) : null}
           {post.is_pinned && (
             <Badge variant="warning" size="sm" className="rounded-full flex items-center gap-1">
               <Pin className="h-3 w-3" />
@@ -55,7 +79,7 @@ export default function PostCard({ post, onToggleFavorite, favoriteDisabled, sho
               {post.title}
             </h3>
             <p className="text-slate-600 mt-2 line-clamp-2 text-sm leading-relaxed dark:text-white/50">
-              {post.content}
+              {excerpt}
             </p>
           </div>
 

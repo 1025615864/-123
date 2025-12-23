@@ -240,16 +240,29 @@ export default function NotificationsPage() {
                     <p className="text-sm text-slate-600 mt-3 whitespace-pre-wrap dark:text-white/60">{n.content}</p>
                   )}
 
-                  {n.link && (
+                  {n.link && (n.link.startsWith('/') ? (
+                    <Link
+                      className="inline-block text-sm text-amber-700 hover:underline mt-3 dark:text-amber-400"
+                      to={n.link}
+                      onClick={() => {
+                        if (!n.is_read) handleMarkAsRead(n.id)
+                      }}
+                    >
+                      查看链接
+                    </Link>
+                  ) : (
                     <a
                       className="inline-block text-sm text-amber-700 hover:underline mt-3 dark:text-amber-400"
                       href={n.link}
                       target="_blank"
                       rel="noreferrer"
+                      onClick={() => {
+                        if (!n.is_read) handleMarkAsRead(n.id)
+                      }}
                     >
                       查看链接
                     </a>
-                  )}
+                  ))}
                 </div>
               </div>
             ))}

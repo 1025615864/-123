@@ -9,8 +9,8 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from app.config import get_settings
-from app.schemas.ai import LawReference
+from ..config import get_settings
+from ..schemas.ai import LawReference
 
 settings = get_settings()
 

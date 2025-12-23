@@ -9,6 +9,7 @@
     }
   ],
     "reportCallInDefaultInitializer": "none",
+  "reportImplicitRelativeImport": "none",
   "reportMissingImports": "none",
   "reportMissingModuleSource": "none"
 }

@@ -1,16 +1,16 @@
 """通知消息API路由"""
-from typing import Annotated
+from typing import Annotated, ClassVar, cast
 
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 
-from app.database import get_db
-from app.models.notification import Notification, NotificationType
-from app.models.user import User
-from app.utils.deps import get_current_user, require_admin
+from ..database import get_db
+from ..models.notification import Notification, NotificationType
+from ..models.user import User
+from ..utils.deps import get_current_user, require_admin
 
 router = APIRouter(prefix="/notifications", tags=["通知管理"])
 
@@ -26,7 +26,7 @@ class NotificationResponse(BaseModel):
     related_user_name: str | None = None
     created_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 class NotificationListResponse(BaseModel):
@@ -39,10 +39,10 @@ class NotificationListResponse(BaseModel):
 async def get_notifications(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     unread_only: bool = False,
-    notification_type: str | None = Query(None, description="通知类型筛选"),
+    notification_type: Annotated[str | None, Query(description="通知类型筛选")] = None,
 ):
     """获取当前用户的通知列表，支持按类型筛选"""
     query = select(Notification).where(Notification.user_id == current_user.id)
@@ -70,30 +70,34 @@ async def get_notifications(
     query = query.order_by(Notification.created_at.desc())
     query = query.offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(query)
-    notifications = result.scalars().all()
+    notifications = cast(list[Notification], result.scalars().all())
     
-    items = []
+    items: list[NotificationResponse] = []
     for n in notifications:
-        related_user_name = None
+        related_user_name: str | None = None
         if n.related_user_id:
             user_result = await db.execute(
                 select(User.nickname, User.username).where(User.id == n.related_user_id)
             )
             user_row = user_result.first()
             if user_row:
-                related_user_name = user_row[0] or user_row[1]
+                nickname = cast(str | None, user_row[0])
+                username = cast(str, user_row[1])
+                related_user_name = nickname or username
         
-        items.append(NotificationResponse(
-            id=n.id,
-            type=n.type,
-            title=n.title,
-            content=n.content,
-            link=n.link,
-            is_read=n.is_read,
-            related_user_id=n.related_user_id,
-            related_user_name=related_user_name,
-            created_at=n.created_at,
-        ))
+        items.append(
+            NotificationResponse(
+                id=int(n.id),
+                type=str(n.type),
+                title=str(n.title),
+                content=n.content,
+                link=n.link,
+                is_read=bool(n.is_read),
+                related_user_id=n.related_user_id,
+                related_user_name=related_user_name,
+                created_at=n.created_at,
+            )
+        )
     
     return NotificationListResponse(items=items, total=total, unread_count=unread_count)
 
@@ -144,7 +148,7 @@ async def mark_all_as_read(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """标记所有通知为已读"""
-    await db.execute(
+    _ = await db.execute(
         update(Notification)
         .where(Notification.user_id == current_user.id, Notification.is_read == False)
         .values(is_read=True)
@@ -194,7 +198,7 @@ async def batch_mark_read(
     if not data.ids:
         return {"message": "没有选择通知", "count": 0}
     
-    await db.execute(
+    _ = await db.execute(
         update(Notification)
         .where(
             Notification.id.in_(data.ids),
@@ -215,9 +219,9 @@ async def batch_delete(
     """批量删除通知"""
     if not data.ids:
         return {"message": "没有选择通知", "count": 0}
-    
+     
     from sqlalchemy import delete
-    await db.execute(
+    _ = await db.execute(
         delete(Notification).where(
             Notification.id.in_(data.ids),
             Notification.user_id == current_user.id
@@ -240,9 +244,10 @@ async def get_notification_types(
     )
     result = await db.execute(query)
     
-    type_stats = {}
+    type_stats: dict[str, int] = {}
     for row in result.all():
-        type_stats[row[0]] = row[1]
+        type_key = str(cast(object, row[0]))
+        type_stats[type_key] = int(cast(int, row[1]))
     
     return {
         "types": type_stats,
@@ -276,13 +281,13 @@ class SystemNotificationResponse(BaseModel):
     created_at: datetime
     created_by: str | None = None
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 @router.post("/admin/broadcast", summary="发布系统通知（管理员）")
 async def broadcast_notification(
     data: SystemNotificationCreate,
-    current_user: Annotated[User, Depends(require_admin)],
+    _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """
@@ -296,13 +301,13 @@ async def broadcast_notification(
     result = await db.execute(
         select(User.id).where(User.is_active == True)
     )
-    user_ids = [row[0] for row in result.fetchall()]
+    user_ids: list[int] = [cast(int, row[0]) for row in result.fetchall()]
     
     if not user_ids:
         raise HTTPException(status_code=400, detail="没有可发送的目标用户")
     
     # 批量创建通知
-    notifications = []
+    notifications: list[Notification] = []
     for user_id in user_ids:
         notification = Notification(
             user_id=user_id,
@@ -319,8 +324,8 @@ async def broadcast_notification(
     
     # 通过WebSocket推送实时通知
     try:
-        from app.services.websocket_service import broadcast_system_message
-        await broadcast_system_message(data.title, data.content)
+        from ..services.websocket_service import broadcast_system_message
+        _ = await broadcast_system_message(data.title, data.content)
     except Exception:
         pass  # WebSocket推送失败不影响主流程
     
@@ -332,10 +337,10 @@ async def broadcast_notification(
 
 @router.get("/admin/system", summary="获取系统通知列表（管理员）")
 async def get_system_notifications(
-    current_user: Annotated[User, Depends(require_admin)],
+    _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
     """获取系统通知发送记录"""
     # 获取系统通知（按创建时间分组，取每组第一条）
@@ -345,11 +350,11 @@ async def get_system_notifications(
     
     # 简化：直接获取唯一标题+时间的通知
     result = await db.execute(query.limit(page_size * 10))
-    all_notifications = result.scalars().all()
+    all_notifications = cast(list[Notification], result.scalars().all())
     
     # 按标题+时间去重
-    seen = set()
-    unique_notifications = []
+    seen: set[tuple[str, str]] = set()
+    unique_notifications: list[Notification] = []
     for n in all_notifications:
         key = (n.title, n.created_at.strftime("%Y-%m-%d %H:%M"))
         if key not in seen:
@@ -359,20 +364,22 @@ async def get_system_notifications(
     # 分页
     start = (page - 1) * page_size
     end = start + page_size
-    items = unique_notifications[start:end]
-    
+    items: list[Notification] = unique_notifications[start:end]
+
+    payload_items: list[dict[str, object]] = [
+        {
+            "id": int(n.id),
+            "title": str(n.title),
+            "content": n.content,
+            "link": n.link,
+            "created_at": n.created_at,
+        }
+        for n in items
+    ]
+
     return {
-        "items": [
-            {
-                "id": n.id,
-                "title": n.title,
-                "content": n.content,
-                "link": n.link,
-                "created_at": n.created_at
-            }
-            for n in items
-        ],
+        "items": payload_items,
         "total": len(unique_notifications),
         "page": page,
-        "page_size": page_size
+        "page_size": page_size,
     }

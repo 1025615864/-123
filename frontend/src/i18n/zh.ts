@@ -94,7 +94,6 @@ export const zh = {
   admin: {
     dashboard: "仪表板",
     users: "用户管理",
-    posts: "帖子管理",
     comments: "评论管理",
     news: "资讯管理",
     lawfirms: "律所管理",

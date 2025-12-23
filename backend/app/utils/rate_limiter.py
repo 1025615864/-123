@@ -13,7 +13,7 @@ from typing import Optional, Callable
 from fastapi import Request, HTTPException, status
 from functools import wraps
 
-from app.config import get_settings
+from ..config import get_settings
 
 settings = get_settings()
 

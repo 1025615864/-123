@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 1440
 
+    payment_webhook_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices("PAYMENT_WEBHOOK_SECRET", "PAYMENT_CALLBACK_SECRET"),
+    )
+
     cors_allow_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174", "http://127.0.0.1:5174"]
     cors_allow_credentials: bool = False
     
@@ -67,6 +72,9 @@ class Settings(BaseSettings):
         if not self.debug:
             if self.secret_key in insecure_defaults or len(self.secret_key) < 32:
                 raise ValueError("SECRET_KEY must be set to a secure value when DEBUG is False")
+
+            if not self.payment_webhook_secret or len(self.payment_webhook_secret) < 16:
+                raise ValueError("PAYMENT_WEBHOOK_SECRET must be set when DEBUG is False")
         return self
 
 

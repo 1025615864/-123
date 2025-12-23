@@ -1,20 +1,25 @@
 """支付API路由"""
+import hashlib
+import hmac
 from typing import Annotated, cast
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, timezone
 import uuid
 from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, update
+from sqlalchemy import select, func, update, cast as sa_cast, Integer
 from pydantic import BaseModel
 
-from app.database import get_db
-from app.models.payment import PaymentOrder, UserBalance, BalanceTransaction, PaymentStatus
-from app.models.user import User
-from app.utils.deps import get_current_user, require_admin
+from ..config import get_settings
+from ..database import get_db
+from ..models.payment import PaymentOrder, UserBalance, BalanceTransaction, PaymentStatus
+from ..models.user import User
+from ..utils.deps import get_current_user, require_admin
 
 router = APIRouter(prefix="/payment", tags=["支付管理"])
+
+settings = get_settings()
 
 
 # ============ 请求/响应模型 ============
@@ -30,6 +35,18 @@ class CreateOrderRequest(BaseModel):
 
 class PayOrderRequest(BaseModel):
     payment_method: str  # alipay/wechat/balance
+
+
+class MarkPaidRequest(BaseModel):
+    payment_method: str  # alipay/wechat
+
+
+class PaymentWebhookRequest(BaseModel):
+    order_no: str
+    trade_no: str
+    payment_method: str
+    amount: float
+    signature: str
 
 
 class OrderResponse(BaseModel):
@@ -56,12 +73,16 @@ class BalanceResponse(BaseModel):
 
 def generate_order_no() -> str:
     """生成订单号"""
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     return f"{now.strftime('%Y%m%d%H%M%S')}{uuid.uuid4().hex[:8].upper()}"
 
 
 def _quantize_amount(amount: float) -> Decimal:
     return Decimal(str(amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _decimal_to_cents(amount: Decimal) -> int:
+    return int(amount * 100)
 
 
 async def _get_or_create_balance_in_tx(db: AsyncSession, user_id: int) -> UserBalance:
@@ -72,7 +93,17 @@ async def _get_or_create_balance_in_tx(db: AsyncSession, user_id: int) -> UserBa
     if balance:
         return balance
 
-    balance = UserBalance(user_id=user_id, balance=0.0, frozen=0.0)
+    balance = UserBalance(
+        user_id=user_id,
+        balance=0.0,
+        frozen=0.0,
+        total_recharged=0.0,
+        total_consumed=0.0,
+        balance_cents=0,
+        frozen_cents=0,
+        total_recharged_cents=0,
+        total_consumed_cents=0,
+    )
     db.add(balance)
     await db.flush()
     return balance
@@ -86,7 +117,17 @@ async def get_or_create_balance(db: AsyncSession, user_id: int) -> UserBalance:
     balance = result.scalar_one_or_none()
     
     if not balance:
-        balance = UserBalance(user_id=user_id, balance=0.0, frozen=0.0)
+        balance = UserBalance(
+            user_id=user_id,
+            balance=0.0,
+            frozen=0.0,
+            total_recharged=0.0,
+            total_consumed=0.0,
+            balance_cents=0,
+            frozen_cents=0,
+            total_recharged_cents=0,
+            total_consumed_cents=0,
+        )
         db.add(balance)
         await db.commit()
         await db.refresh(balance)
@@ -103,7 +144,11 @@ async def create_order(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """创建支付订单"""
+    if data.order_type not in {"consultation", "service", "vip", "recharge"}:
+        raise HTTPException(status_code=400, detail="无效的订单类型")
+
     amount = _quantize_amount(data.amount)
+    amount_cents = _decimal_to_cents(amount)
     if amount <= 0:
         raise HTTPException(status_code=400, detail="金额必须大于0")
     
@@ -113,12 +158,14 @@ async def create_order(
         order_type=data.order_type,
         amount=float(amount),
         actual_amount=float(amount),  # 可添加优惠逻辑
+        amount_cents=amount_cents,
+        actual_amount_cents=amount_cents,
         status=PaymentStatus.PENDING,
         title=data.title,
         description=data.description,
         related_id=data.related_id,
         related_type=data.related_type,
-        expires_at=datetime.now() + timedelta(hours=2),  # 2小时过期
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=2),  # 2小时过期
     )
     db.add(order)
     await db.commit()
@@ -140,6 +187,9 @@ async def pay_order(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """支付订单"""
+    if data.payment_method not in {"alipay", "wechat", "balance"}:
+        raise HTTPException(status_code=400, detail="无效的支付方式")
+
     result = await db.execute(
         select(PaymentOrder).where(
             PaymentOrder.order_no == order_no,
@@ -150,40 +200,60 @@ async def pay_order(
     
     if not order:
         raise HTTPException(status_code=404, detail="订单不存在")
+
+    if order.order_type == "recharge" and data.payment_method == "balance":
+        raise HTTPException(status_code=400, detail="充值订单不支持余额支付")
     
     if order.status == PaymentStatus.PAID:
         return {"message": "支付成功", "trade_no": order.trade_no}
     if order.status != PaymentStatus.PENDING:
         raise HTTPException(status_code=400, detail=f"订单状态异常: {order.status}")
-    
-    if order.expires_at and order.expires_at < datetime.now():
+
+    expires_at = order.expires_at
+    if expires_at is not None and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+    if expires_at and expires_at < datetime.now(timezone.utc):
         order.status = PaymentStatus.CANCELLED
         await db.commit()
         raise HTTPException(status_code=400, detail="订单已过期")
 
     actual_amount = _quantize_amount(float(order.actual_amount))
+    actual_amount_cents = _decimal_to_cents(actual_amount)
 
     # 余额支付
     if data.payment_method == "balance":
         trade_no = f"BAL{generate_order_no()}"
-        paid_at = datetime.now()
+        paid_at = datetime.now(timezone.utc)
  
-        async with db.begin():
+        try:
             balance_account = await _get_or_create_balance_in_tx(db, current_user.id)
             balance_before = _quantize_amount(float(balance_account.balance))
+            balance_before_cents = _decimal_to_cents(balance_before)
 
             if balance_before < actual_amount:
                 raise HTTPException(status_code=400, detail="余额不足")
+
+            effective_balance_cents = func.coalesce(
+                UserBalance.balance_cents,
+                sa_cast(func.round(func.coalesce(UserBalance.balance, 0) * 100), Integer),
+            )
+            effective_total_consumed_cents = func.coalesce(
+                UserBalance.total_consumed_cents,
+                sa_cast(func.round(func.coalesce(UserBalance.total_consumed, 0) * 100), Integer),
+            )
 
             bal_update = await db.execute(
                 update(UserBalance)
                 .where(
                     UserBalance.user_id == current_user.id,
-                    UserBalance.balance >= float(actual_amount),
+                    effective_balance_cents >= actual_amount_cents,
                 )
                 .values(
-                    balance=UserBalance.balance - float(actual_amount),
-                    total_consumed=UserBalance.total_consumed + float(actual_amount),
+                    balance=func.coalesce(UserBalance.balance, 0) - float(actual_amount),
+                    total_consumed=func.coalesce(UserBalance.total_consumed, 0) + float(actual_amount),
+                    balance_cents=effective_balance_cents - actual_amount_cents,
+                    total_consumed_cents=effective_total_consumed_cents + actual_amount_cents,
                 )
             )
             if getattr(bal_update, "rowcount", 0) != 1:
@@ -197,12 +267,18 @@ async def pay_order(
                     payment_method=data.payment_method,
                     paid_at=paid_at,
                     trade_no=trade_no,
+                    amount_cents=func.coalesce(
+                        PaymentOrder.amount_cents,
+                        sa_cast(func.round(PaymentOrder.amount * 100), Integer),
+                    ),
+                    actual_amount_cents=actual_amount_cents,
                 )
             )
             if getattr(order_update, "rowcount", 0) != 1:
                 raise HTTPException(status_code=400, detail="订单状态异常")
 
             balance_after = balance_before - actual_amount
+            balance_after_cents = balance_before_cents - actual_amount_cents
             transaction = BalanceTransaction(
                 user_id=current_user.id,
                 order_id=order.id,
@@ -210,9 +286,20 @@ async def pay_order(
                 amount=-float(actual_amount),
                 balance_before=float(balance_before),
                 balance_after=float(balance_after),
+                amount_cents=-actual_amount_cents,
+                balance_before_cents=balance_before_cents,
+                balance_after_cents=balance_after_cents,
                 description=f"支付订单: {order.title}",
             )
             db.add(transaction)
+
+            await db.commit()
+        except HTTPException:
+            await db.rollback()
+            raise
+        except Exception:
+            await db.rollback()
+            raise
 
         await db.refresh(order)
         return {"message": "支付成功", "trade_no": order.trade_no}
@@ -228,12 +315,118 @@ async def pay_order(
     }
 
 
+@router.post("/webhook", summary="支付回调（验签）")
+async def payment_webhook(
+    data: PaymentWebhookRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    if data.payment_method not in {"alipay", "wechat"}:
+        raise HTTPException(status_code=400, detail="无效的支付方式")
+
+    amount = _quantize_amount(data.amount)
+    amount_cents = _decimal_to_cents(amount)
+    sign_payload = f"{data.order_no}|{data.trade_no}|{data.payment_method}|{amount}"
+    expected_signature = hmac.new(
+        settings.payment_webhook_secret.encode("utf-8"),
+        sign_payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(expected_signature, data.signature):
+        raise HTTPException(status_code=400, detail="签名校验失败")
+
+    result = await db.execute(select(PaymentOrder).where(PaymentOrder.order_no == data.order_no))
+    order = result.scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="订单不存在")
+
+    if order.status == PaymentStatus.PAID:
+        return {"message": "OK"}
+
+    if order.status != PaymentStatus.PENDING:
+        raise HTTPException(status_code=400, detail="订单状态异常")
+
+    if _quantize_amount(float(order.actual_amount)) != amount:
+        raise HTTPException(status_code=400, detail="金额不一致")
+
+    paid_at = datetime.now(timezone.utc)
+
+    try:
+        order_update = await db.execute(
+            update(PaymentOrder)
+            .where(PaymentOrder.id == order.id, PaymentOrder.status == PaymentStatus.PENDING)
+            .values(
+                status=PaymentStatus.PAID,
+                payment_method=data.payment_method,
+                paid_at=paid_at,
+                trade_no=data.trade_no,
+                amount_cents=func.coalesce(
+                    PaymentOrder.amount_cents,
+                    sa_cast(func.round(PaymentOrder.amount * 100), Integer),
+                ),
+                actual_amount_cents=amount_cents,
+            )
+        )
+        if getattr(order_update, "rowcount", 0) != 1:
+            raise HTTPException(status_code=400, detail="订单状态异常")
+
+        if order.order_type == "recharge":
+            balance_account = await _get_or_create_balance_in_tx(db, order.user_id)
+            balance_before = _quantize_amount(float(balance_account.balance))
+            balance_before_cents = _decimal_to_cents(balance_before)
+
+            effective_balance_cents = func.coalesce(
+                UserBalance.balance_cents,
+                sa_cast(func.round(func.coalesce(UserBalance.balance, 0) * 100), Integer),
+            )
+            effective_total_recharged_cents = func.coalesce(
+                UserBalance.total_recharged_cents,
+                sa_cast(func.round(func.coalesce(UserBalance.total_recharged, 0) * 100), Integer),
+            )
+
+            _ = await db.execute(
+                update(UserBalance)
+                .where(UserBalance.user_id == order.user_id)
+                .values(
+                    balance=func.coalesce(UserBalance.balance, 0) + float(amount),
+                    total_recharged=func.coalesce(UserBalance.total_recharged, 0) + float(amount),
+                    balance_cents=effective_balance_cents + amount_cents,
+                    total_recharged_cents=effective_total_recharged_cents + amount_cents,
+                )
+            )
+
+            balance_after = balance_before + amount
+            balance_after_cents = balance_before_cents + amount_cents
+            transaction = BalanceTransaction(
+                user_id=order.user_id,
+                order_id=order.id,
+                type="recharge",
+                amount=float(amount),
+                balance_before=float(balance_before),
+                balance_after=float(balance_after),
+                amount_cents=amount_cents,
+                balance_before_cents=balance_before_cents,
+                balance_after_cents=balance_after_cents,
+                description=f"充值: {order.title}",
+            )
+            db.add(transaction)
+
+        await db.commit()
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception:
+        await db.rollback()
+        raise
+
+    return {"message": "OK"}
+
+
 @router.get("/orders", summary="获取订单列表")
 async def get_orders(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     status_filter: str | None = None,
 ):
     """获取当前用户的订单列表"""
@@ -352,8 +545,8 @@ async def get_balance(
 async def get_balance_transactions(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
     """获取余额交易记录"""
     query = select(BalanceTransaction).where(
@@ -391,8 +584,8 @@ async def get_balance_transactions(
 async def admin_get_orders(
     current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     status_filter: str | None = None,
     user_id: int | None = None,
 ):
@@ -458,8 +651,9 @@ async def admin_refund(
         raise HTTPException(status_code=400, detail="只能退款已支付订单")
 
     refund_amount = _quantize_amount(float(order.actual_amount))
+    refund_amount_cents = _decimal_to_cents(refund_amount)
 
-    async with db.begin():
+    try:
         # 原子更新订单状态，确保幂等
         order_update = await db.execute(
             update(PaymentOrder)
@@ -474,13 +668,23 @@ async def admin_refund(
             balance_account = await _get_or_create_balance_in_tx(db, order.user_id)
             balance_before = _quantize_amount(float(balance_account.balance))
 
+            balance_before_cents = _decimal_to_cents(balance_before)
+            effective_balance_cents = func.coalesce(
+                UserBalance.balance_cents,
+                sa_cast(func.round(func.coalesce(UserBalance.balance, 0) * 100), Integer),
+            )
+
             _ = await db.execute(
                 update(UserBalance)
                 .where(UserBalance.user_id == order.user_id)
-                .values(balance=UserBalance.balance + float(refund_amount))
+                .values(
+                    balance=func.coalesce(UserBalance.balance, 0) + float(refund_amount),
+                    balance_cents=effective_balance_cents + refund_amount_cents,
+                )
             )
 
             balance_after = balance_before + refund_amount
+            balance_after_cents = balance_before_cents + refund_amount_cents
             transaction = BalanceTransaction(
                 user_id=order.user_id,
                 order_id=order.id,
@@ -488,11 +692,125 @@ async def admin_refund(
                 amount=float(refund_amount),
                 balance_before=float(balance_before),
                 balance_after=float(balance_after),
+                amount_cents=refund_amount_cents,
+                balance_before_cents=balance_before_cents,
+                balance_after_cents=balance_after_cents,
                 description=f"退款: {order.title}",
             )
             db.add(transaction)
 
+        await db.commit()
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception:
+        await db.rollback()
+        raise
+
     return {"message": "退款成功"}
+
+
+@router.post("/admin/orders/{order_no}/mark-paid", summary="管理员-标记订单已支付")
+async def admin_mark_paid(
+    order_no: str,
+    data: MarkPaidRequest,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """管理员标记订单已支付（开发环境/人工对账用）"""
+    _ = current_user
+
+    if data.payment_method not in {"alipay", "wechat"}:
+        raise HTTPException(status_code=400, detail="无效的支付方式")
+
+    result = await db.execute(select(PaymentOrder).where(PaymentOrder.order_no == order_no))
+    order = result.scalar_one_or_none()
+
+    if not order:
+        raise HTTPException(status_code=404, detail="订单不存在")
+
+    if order.status == PaymentStatus.PAID:
+        return {"message": "订单已是支付成功状态"}
+
+    if order.status != PaymentStatus.PENDING:
+        raise HTTPException(status_code=400, detail="订单状态异常")
+
+    if order.order_type != "recharge":
+        raise HTTPException(status_code=400, detail="仅充值订单支持该操作")
+
+    paid_at = datetime.now(timezone.utc)
+    trade_no = f"ADM{generate_order_no()}"
+    recharge_amount = _quantize_amount(float(order.actual_amount))
+    recharge_amount_cents = _decimal_to_cents(recharge_amount)
+
+    try:
+        order_update = await db.execute(
+            update(PaymentOrder)
+            .where(PaymentOrder.id == order.id, PaymentOrder.status == PaymentStatus.PENDING)
+            .values(
+                status=PaymentStatus.PAID,
+                payment_method=data.payment_method,
+                paid_at=paid_at,
+                trade_no=trade_no,
+                amount_cents=func.coalesce(
+                    PaymentOrder.amount_cents,
+                    sa_cast(func.round(PaymentOrder.amount * 100), Integer),
+                ),
+                actual_amount_cents=recharge_amount_cents,
+            )
+        )
+        if getattr(order_update, "rowcount", 0) != 1:
+            raise HTTPException(status_code=400, detail="订单状态异常")
+
+        balance_account = await _get_or_create_balance_in_tx(db, order.user_id)
+        balance_before = _quantize_amount(float(balance_account.balance))
+
+        balance_before_cents = _decimal_to_cents(balance_before)
+        effective_balance_cents = func.coalesce(
+            UserBalance.balance_cents,
+            sa_cast(func.round(func.coalesce(UserBalance.balance, 0) * 100), Integer),
+        )
+        effective_total_recharged_cents = func.coalesce(
+            UserBalance.total_recharged_cents,
+            sa_cast(func.round(func.coalesce(UserBalance.total_recharged, 0) * 100), Integer),
+        )
+
+        _ = await db.execute(
+            update(UserBalance)
+            .where(UserBalance.user_id == order.user_id)
+            .values(
+                balance=func.coalesce(UserBalance.balance, 0) + float(recharge_amount),
+                total_recharged=func.coalesce(UserBalance.total_recharged, 0) + float(recharge_amount),
+                balance_cents=effective_balance_cents + recharge_amount_cents,
+                total_recharged_cents=effective_total_recharged_cents + recharge_amount_cents,
+            )
+        )
+
+        balance_after = balance_before + recharge_amount
+        balance_after_cents = balance_before_cents + recharge_amount_cents
+        transaction = BalanceTransaction(
+            user_id=order.user_id,
+            order_id=order.id,
+            type="recharge",
+            amount=float(recharge_amount),
+            balance_before=float(balance_before),
+            balance_after=float(balance_after),
+            amount_cents=recharge_amount_cents,
+            balance_before_cents=balance_before_cents,
+            balance_after_cents=balance_after_cents,
+            description=f"充值: {order.title}",
+        )
+        db.add(transaction)
+
+        await db.commit()
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception:
+        await db.rollback()
+        raise
+
+    return {"message": "标记成功"}
 
 
 @router.get("/admin/stats", summary="管理员-支付统计")
@@ -513,20 +831,34 @@ async def admin_payment_stats(
     ) or 0
     
     # 总收入
-    total_revenue = await db.scalar(
-        select(func.sum(PaymentOrder.actual_amount)).where(
-            PaymentOrder.status == PaymentStatus.PAID
-        )
+    total_revenue_cents = await db.scalar(
+        select(
+            func.sum(
+                func.coalesce(
+                    PaymentOrder.actual_amount_cents,
+                    sa_cast(func.round(PaymentOrder.actual_amount * 100), Integer),
+                )
+            )
+        ).where(PaymentOrder.status == PaymentStatus.PAID)
     ) or 0
+    total_revenue = float((Decimal(int(total_revenue_cents)) / 100).quantize(Decimal("0.01")))
     
     # 今日收入
-    today = date.today()
-    today_revenue = await db.scalar(
-        select(func.sum(PaymentOrder.actual_amount)).where(
+    today = datetime.now(timezone.utc).date()
+    today_revenue_cents = await db.scalar(
+        select(
+            func.sum(
+                func.coalesce(
+                    PaymentOrder.actual_amount_cents,
+                    sa_cast(func.round(PaymentOrder.actual_amount * 100), Integer),
+                )
+            )
+        ).where(
             PaymentOrder.status == PaymentStatus.PAID,
-            func.date(PaymentOrder.paid_at) == today
+            func.date(PaymentOrder.paid_at) == today,
         )
     ) or 0
+    today_revenue = float((Decimal(int(today_revenue_cents)) / 100).quantize(Decimal("0.01")))
     
     return {
         "total_orders": total_orders,

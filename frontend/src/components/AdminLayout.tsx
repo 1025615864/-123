@@ -1,6 +1,6 @@
 import { Outlet, Link, useLocation, Navigate } from 'react-router-dom'
 import { 
-  LayoutDashboard, Users, Newspaper, MessageSquare, Building2, 
+  LayoutDashboard, Users, Newspaper, Building2, 
   Settings, LogOut, Scale, ChevronRight, Database, FileQuestion, Flame, FileText, Bell 
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
@@ -9,7 +9,6 @@ const sidebarItems = [
   { icon: LayoutDashboard, label: '仪表盘', path: '/admin' },
   { icon: Users, label: '用户管理', path: '/admin/users' },
   { icon: Newspaper, label: '新闻管理', path: '/admin/news' },
-  { icon: MessageSquare, label: '帖子管理', path: '/admin/posts' },
   { icon: Flame, label: '论坛管理', path: '/admin/forum' },
   { icon: Building2, label: '律所管理', path: '/admin/lawfirms' },
   { icon: Database, label: '知识库管理', path: '/admin/knowledge' },

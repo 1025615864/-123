@@ -1,5 +1,6 @@
 """AI助手相关的Pydantic模式"""
-from pydantic import BaseModel, Field
+from typing import Annotated, ClassVar
+from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 
 
@@ -21,7 +22,7 @@ class ChatResponse(BaseModel):
     """聊天响应"""
     session_id: str = Field(..., description="会话ID")
     answer: str = Field(..., description="AI回复内容")
-    references: list[LawReference] = Field(default_factory=list, description="引用的法律条文")
+    references: Annotated[list[LawReference], Field(default_factory=list, description="引用的法律条文")]
     assistant_message_id: int | None = Field(None, description="本次AI回复对应的消息ID（用于评价）")
     created_at: datetime = Field(default_factory=datetime.now)
 
@@ -39,7 +40,7 @@ class MessageResponse(BaseModel):
     references: str | None = None
     created_at: datetime
     
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 class ConsultationResponse(BaseModel):
@@ -51,7 +52,7 @@ class ConsultationResponse(BaseModel):
     updated_at: datetime
     messages: list[MessageResponse] = []
     
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 class ConsultationListItem(BaseModel):
@@ -62,7 +63,7 @@ class ConsultationListItem(BaseModel):
     created_at: datetime
     message_count: int = 0
     
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 class RatingRequest(BaseModel):

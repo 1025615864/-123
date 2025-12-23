@@ -1,12 +1,11 @@
 """知识库管理API路由"""
-import json
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
-from app.schemas.knowledge import (
+from ..database import get_db
+from ..schemas.knowledge import (
     KnowledgeType,
     LegalKnowledgeCreate,
     LegalKnowledgeUpdate,
@@ -15,13 +14,12 @@ from app.schemas.knowledge import (
     ConsultationTemplateCreate,
     ConsultationTemplateUpdate,
     ConsultationTemplateResponse,
-    TemplateQuestionItem,
     KnowledgeStats,
     BatchVectorizeRequest,
     BatchDeleteRequest,
     BatchOperationResponse,
 )
-from app.services.knowledge_service import get_knowledge_service, KnowledgeService
+from ..services.knowledge_service import get_knowledge_service, KnowledgeService
 
 router = APIRouter(prefix="/knowledge", tags=["知识库管理"])
 
@@ -51,12 +49,12 @@ async def create_knowledge(
 async def list_knowledge(
     db: Annotated[AsyncSession, Depends(get_db)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
-    page: int = Query(1, ge=1, description="页码"),
-    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
-    knowledge_type: str | None = Query(None, description="知识类型过滤"),
-    category: str | None = Query(None, description="分类过滤"),
-    keyword: str | None = Query(None, description="关键词搜索"),
-    is_active: bool | None = Query(None, description="是否启用"),
+    page: Annotated[int, Query(ge=1, description="页码")] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100, description="每页数量")] = 20,
+    knowledge_type: Annotated[str | None, Query(description="知识类型过滤")] = None,
+    category: Annotated[str | None, Query(description="分类过滤")] = None,
+    keyword: Annotated[str | None, Query(description="关键词搜索")] = None,
+    is_active: Annotated[bool | None, Query(description="是否启用")] = None,
 ):
     """
     获取法律知识列表
@@ -228,8 +226,8 @@ async def create_template(
 async def list_templates(
     db: Annotated[AsyncSession, Depends(get_db)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
-    category: str | None = Query(None, description="分类过滤"),
-    is_active: str | None = Query(None, description="是否启用（true/false，为空表示不筛选）"),
+    category: Annotated[str | None, Query(description="分类过滤")] = None,
+    is_active: Annotated[str | None, Query(description="是否启用（true/false，为空表示不筛选）")] = None,
 ):
     """获取咨询模板列表"""
 
@@ -248,7 +246,7 @@ async def list_templates(
             raise HTTPException(status_code=422, detail="is_active 参数无效，应为 true/false")
 
     templates = await service.list_templates(db, category, parsed_is_active)
-    result = []
+    result: list[ConsultationTemplateResponse] = []
     for template in templates:
         questions = service.parse_template_questions(template)
         result.append(ConsultationTemplateResponse(
@@ -334,9 +332,10 @@ async def delete_template(
 
 # === 分类管理 API ===
 
-from pydantic import BaseModel
+from typing import ClassVar
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
-from app.models.knowledge import KnowledgeCategory
+from ..models.knowledge import KnowledgeCategory
 
 
 class CategoryCreate(BaseModel):
@@ -365,7 +364,7 @@ class CategoryResponse(BaseModel):
     sort_order: int
     is_active: bool
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 @router.get("/categories", response_model=list[CategoryResponse])
@@ -495,7 +494,7 @@ async def batch_import_knowledge(
     接收JSON格式的数据列表进行批量导入
     """
     success_count = 0
-    failed_items = []
+    failed_items: list[dict[str, object]] = []
     
     for idx, item in enumerate(data.items):
         try:
@@ -517,7 +516,7 @@ async def batch_import_knowledge(
                 weight=item.weight,
                 is_active=item.is_active,
             )
-            await service.create_knowledge(db, create_data)
+            _ = await service.create_knowledge(db, create_data)
             success_count += 1
         except Exception as e:
             failed_items.append({"index": idx, "title": item.title, "error": str(e)})
@@ -532,9 +531,9 @@ async def batch_import_knowledge(
 
 @router.post("/laws/import-csv")
 async def import_csv(
-    file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db),
-    service: KnowledgeService = Depends(get_knowledge_service),
+    file: Annotated[UploadFile, File(...)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
 ):
     """
     从CSV文件导入法律知识
@@ -562,7 +561,7 @@ async def import_csv(
     reader = csv.DictReader(io.StringIO(text))
     
     success_count = 0
-    failed_items = []
+    failed_items: list[dict[str, object]] = []
     
     for idx, row in enumerate(reader):
         try:
@@ -588,7 +587,7 @@ async def import_csv(
                 weight=float(row.get('weight', 1.0)),
                 is_active=True,
             )
-            await service.create_knowledge(db, create_data)
+            _ = await service.create_knowledge(db, create_data)
             success_count += 1
         except Exception as e:
             failed_items.append({"row": idx + 2, "title": row.get('title', ''), "error": str(e)})

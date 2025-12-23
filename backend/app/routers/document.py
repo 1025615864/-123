@@ -6,10 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 from datetime import datetime
 
-from app.database import get_db
-from app.models.user import User
-from app.utils.deps import get_current_user_optional
-from app.utils.rate_limiter import rate_limit, RateLimitConfig
+from ..database import get_db
+from ..models.user import User
+from ..utils.deps import get_current_user_optional
+from ..utils.rate_limiter import rate_limit, RateLimitConfig
 
 router = APIRouter(prefix="/documents", tags=["文书生成"])
 

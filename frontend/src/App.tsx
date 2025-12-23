@@ -10,6 +10,11 @@ import { ToastProvider } from './hooks'
 const HomePage = lazy(() => import('./pages/HomePage'))
 const ChatPage = lazy(() => import('./pages/ChatPage'))
 const ForumPage = lazy(() => import('./pages/ForumPage'))
+const NewPostPage = lazy(() => import('./pages/NewPostPage'))
+const DraftsPage = lazy(() => import('./pages/DraftsPage'))
+const EditPostPage = lazy(() => import('./pages/EditPostPage'))
+const RecycleBinPage = lazy(() => import('./pages/RecycleBinPage'))
+const MyCommentsPage = lazy(() => import('./pages/MyCommentsPage'))
 const NewsPage = lazy(() => import('./pages/NewsPage'))
 const LawFirmPage = lazy(() => import('./pages/LawFirmPage'))
 const SearchPage = lazy(() => import('./pages/SearchPage'))
@@ -29,7 +34,6 @@ const NotFoundPage = lazy(() => import('./pages/NotFoundPage'))
 const DashboardPage = lazy(() => import('./pages/admin/DashboardPage'))
 const UsersPage = lazy(() => import('./pages/admin/UsersPage'))
 const NewsManagePage = lazy(() => import('./pages/admin/NewsManagePage'))
-const PostsManagePage = lazy(() => import('./pages/admin/PostsManagePage'))
 const LawFirmsManagePage = lazy(() => import('./pages/admin/LawFirmsManagePage'))
 const SettingsPage = lazy(() => import('./pages/admin/SettingsPage'))
 const KnowledgeManagePage = lazy(() => import('./pages/admin/KnowledgeManagePage'))
@@ -62,7 +66,6 @@ function App() {
               <Route index element={<DashboardPage />} />
             <Route path="users" element={<UsersPage />} />
             <Route path="news" element={<NewsManagePage />} />
-            <Route path="posts" element={<PostsManagePage />} />
             <Route path="forum" element={<ForumManagePage />} />
             <Route path="lawfirms" element={<LawFirmsManagePage />} />
             <Route path="knowledge" element={<KnowledgeManagePage />} />
@@ -70,6 +73,7 @@ function App() {
             <Route path="settings" element={<SettingsPage />} />
             <Route path="logs" element={<LogsPage />} />
             <Route path="notifications" element={<NotificationsPage />} />
+            <Route path="*" element={<NotFoundPage />} />
           </Route>
           
           {/* 前台路由 */}
@@ -78,7 +82,12 @@ function App() {
             <Route path="chat" element={<ChatPage />} />
             <Route path="chat/history" element={<ChatHistoryPage />} />
             <Route path="forum" element={<ForumPage />} />
+            <Route path="forum/new" element={<NewPostPage />} />
+            <Route path="forum/drafts" element={<DraftsPage />} />
+            <Route path="forum/recycle-bin" element={<RecycleBinPage />} />
+            <Route path="forum/my-comments" element={<MyCommentsPage />} />
             <Route path="forum/post/:postId" element={<PostDetailPage />} />
+            <Route path="forum/post/:postId/edit" element={<EditPostPage />} />
             <Route path="search" element={<SearchPage />} />
             <Route path="notifications" element={<NotificationsFrontPage />} />
             <Route path="news" element={<NewsPage />} />

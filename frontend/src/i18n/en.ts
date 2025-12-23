@@ -94,7 +94,6 @@ export const en = {
   admin: {
     dashboard: "Dashboard",
     users: "User Management",
-    posts: "Post Management",
     comments: "Comment Management",
     news: "News Management",
     lawfirms: "Law Firm Management",

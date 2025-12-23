@@ -21,6 +21,22 @@ const queryClient = new QueryClient({
   },
 })
 
+if (import.meta.env.DEV && localStorage.getItem('trace_hook_deps_warning') === '1') {
+  const originalConsoleError = console.error
+  console.error = (...args: any[]) => {
+    try {
+      const first = String(args?.[0] ?? '')
+      if (first.includes('final argument passed') && first.includes('changed size')) {
+        originalConsoleError('[hook-deps-warning] url:', window.location.href)
+        originalConsoleError('[hook-deps-warning] args:', ...args)
+        originalConsoleError('[hook-deps-warning] stack:', new Error('hook-deps-warning').stack)
+      }
+    } catch {
+    }
+    originalConsoleError(...args)
+  }
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>

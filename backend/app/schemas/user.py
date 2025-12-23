@@ -1,6 +1,7 @@
 """用户相关的Pydantic模式"""
 from datetime import datetime
-from pydantic import BaseModel, EmailStr, Field
+from typing import ClassVar
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class UserBase(BaseModel):
@@ -37,7 +38,7 @@ class UserResponse(UserBase):
     is_active: bool = True
     created_at: datetime
     
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 class Token(BaseModel):

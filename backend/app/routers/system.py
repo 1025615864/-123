@@ -1,18 +1,18 @@
 """系统配置和日志API路由"""
-from typing import Annotated
+from typing import Annotated, ClassVar, cast
 import json
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from datetime import datetime
 
-from app.database import get_db
-from app.models.system import SystemConfig, AdminLog, LogAction, LogModule
-from app.models.user import User
-from app.utils.deps import require_admin, get_current_user_optional
-from app.utils.rate_limiter import get_client_ip, rate_limit, RateLimitConfig
+from ..database import get_db
+from ..models.system import SystemConfig, AdminLog, LogAction, LogModule
+from ..models.user import User
+from ..utils.deps import require_admin, get_current_user_optional
+from ..utils.rate_limiter import get_client_ip, rate_limit, RateLimitConfig
 
 router = APIRouter(prefix="/system", tags=["系统管理"])
 
@@ -33,7 +33,7 @@ class ConfigResponse(BaseModel):
     category: str
     updated_at: datetime | None
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 class ConfigBatchUpdate(BaseModel):
@@ -42,7 +42,7 @@ class ConfigBatchUpdate(BaseModel):
 
 @router.get("/configs", response_model=list[ConfigResponse])
 async def get_all_configs(
-    current_user: Annotated[User, Depends(require_admin)],
+    _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
     category: str | None = None,
 ):
@@ -67,7 +67,7 @@ async def get_all_configs(
 @router.get("/configs/{key}")
 async def get_config(
     key: str,
-    current_user: Annotated[User, Depends(require_admin)],
+    _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """获取单个配置项"""
@@ -142,7 +142,7 @@ async def batch_update_configs(
     request: Request,
 ):
     """批量更新配置"""
-    updated = []
+    updated: list[str] = []
     for item in data.configs:
         result = await db.execute(
             select(SystemConfig).where(SystemConfig.key == item.key)
@@ -186,9 +186,10 @@ class LogResponse(BaseModel):
     target_type: str | None
     description: str | None
     ip_address: str | None
+    extra_data: dict[str, object] | None = None
     created_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 class LogListResponse(BaseModel):
@@ -200,7 +201,7 @@ class LogListResponse(BaseModel):
 
 @router.get("/logs", response_model=LogListResponse)
 async def get_admin_logs(
-    current_user: Annotated[User, Depends(require_admin)],
+    _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -227,23 +228,36 @@ async def get_admin_logs(
     query = query.order_by(AdminLog.created_at.desc())
     query = query.offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(query)
-    rows = result.all()
+    rows = cast(list[tuple[AdminLog, str | None, str]], result.all())
     
-    items = []
+    items: list[LogResponse] = []
     for log, nickname, username in rows:
-        user_name = nickname or username
-        items.append(LogResponse(
-            id=log.id,
-            user_id=log.user_id,
-            user_name=user_name,
-            action=log.action,
-            module=log.module,
-            target_id=log.target_id,
-            target_type=log.target_type,
-            description=log.description,
-            ip_address=log.ip_address,
-            created_at=log.created_at
-        ))
+        user_name: str | None = nickname or username
+        parsed_extra: dict[str, object] | None = None
+        if log.extra_data:
+            try:
+                value = json.loads(log.extra_data)
+                if isinstance(value, dict):
+                    parsed_extra = cast(dict[str, object], value)
+                else:
+                    parsed_extra = {"value": value}
+            except Exception:
+                parsed_extra = {"raw": str(log.extra_data)}
+        items.append(
+            LogResponse(
+                id=int(log.id),
+                user_id=int(log.user_id),
+                user_name=user_name,
+                action=str(log.action),
+                module=str(log.module),
+                target_id=(int(log.target_id) if log.target_id is not None else None),
+                target_type=log.target_type,
+                description=log.description,
+                ip_address=log.ip_address,
+                extra_data=parsed_extra,
+                created_at=log.created_at,
+            )
+        )
     
     return LogListResponse(items=items, total=total, page=page, page_size=page_size)
 
@@ -299,10 +313,10 @@ async def log_admin_action(
 
 # ============ 数据统计 ============
 
-from app.models.news import News
-from app.models.forum import Post, Comment
-from app.models.lawfirm import LawFirm, Lawyer
-from app.models.consultation import Consultation, ChatMessage
+from ..models.news import News
+from ..models.forum import Post, Comment
+from ..models.lawfirm import LawFirm, Lawyer
+from ..models.consultation import Consultation, ChatMessage
 
 
 class StatsOverview(BaseModel):
@@ -329,7 +343,7 @@ class DailyStats(BaseModel):
 
 @router.get("/stats/overview", response_model=StatsOverview)
 async def get_stats_overview(
-    current_user: Annotated[User, Depends(require_admin)],
+    _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """获取统计概览"""
@@ -380,14 +394,14 @@ async def get_stats_overview(
 
 @router.get("/stats/daily", response_model=list[DailyStats])
 async def get_daily_stats(
-    current_user: Annotated[User, Depends(require_admin)],
+    _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
     days: int = Query(7, ge=1, le=30),
 ):
     """获取每日统计（最近N天）"""
     from datetime import date, timedelta
     
-    results = []
+    results: list[DailyStats] = []
     today = date.today()
     
     for i in range(days - 1, -1, -1):
@@ -430,7 +444,7 @@ async def get_daily_stats(
 
 @router.get("/stats/ai-feedback")
 async def get_ai_feedback_stats(
-    current_user: Annotated[User, Depends(require_admin)],
+    _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """获取AI反馈统计"""
@@ -469,24 +483,20 @@ async def get_ai_feedback_stats(
 
 # ============ 数据统计大屏 ============
 
-from app.models.forum import Post, Comment
-from app.models.news import News
-from app.models.lawfirm import LawFirm, Lawyer, LawyerConsultation
-from app.models.knowledge import LegalKnowledge
-from app.models.notification import Notification
+from ..models.knowledge import LegalKnowledge
 
 
 @router.get("/dashboard/overview", summary="仪表板概览数据")
 async def get_dashboard_overview(
-    current_user: Annotated[User, Depends(require_admin)],
+    _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """获取仪表板概览统计数据"""
     from datetime import timedelta
     today = datetime.now().date()
-    yesterday = today - timedelta(days=1)
+    _yesterday = today - timedelta(days=1)
     week_ago = today - timedelta(days=7)
-    month_ago = today - timedelta(days=30)
+    _month_ago = today - timedelta(days=30)
     
     # 用户统计
     total_users = await db.scalar(select(func.count()).select_from(User)) or 0
@@ -555,7 +565,7 @@ async def get_dashboard_overview(
 
 @router.get("/dashboard/trends", summary="趋势数据")
 async def get_dashboard_trends(
-    current_user: Annotated[User, Depends(require_admin)],
+    _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
     days: int = Query(30, ge=7, le=90, description="统计天数"),
 ):
@@ -563,7 +573,7 @@ async def get_dashboard_trends(
     from datetime import timedelta
     today = datetime.now().date()
     
-    trends = []
+    trends: list[dict[str, object]] = []
     for i in range(days - 1, -1, -1):
         day = today - timedelta(days=i)
         
@@ -591,7 +601,7 @@ async def get_dashboard_trends(
 
 @router.get("/dashboard/category-stats", summary="分类统计")
 async def get_category_stats(
-    current_user: Annotated[User, Depends(require_admin)],
+    _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """获取各类别统计数据"""
@@ -603,7 +613,9 @@ async def get_category_stats(
         .order_by(func.count(Post.id).desc())
         .limit(10)
     )
-    post_cat_data = [{"name": r[0], "value": r[1]} for r in post_categories.all()]
+    post_cat_data: list[dict[str, object]] = [
+        {"name": str(r[0] or ""), "value": int(r[1] or 0)} for r in post_categories.all()
+    ]
     
     # 新闻分类统计
     news_categories = await db.execute(
@@ -613,7 +625,9 @@ async def get_category_stats(
         .order_by(func.count(News.id).desc())
         .limit(10)
     )
-    news_cat_data = [{"name": r[0], "value": r[1]} for r in news_categories.all()]
+    news_cat_data: list[dict[str, object]] = [
+        {"name": str(r[0] or ""), "value": int(r[1] or 0)} for r in news_categories.all()
+    ]
     
     # 知识库分类统计
     knowledge_categories = await db.execute(
@@ -623,7 +637,9 @@ async def get_category_stats(
         .order_by(func.count(LegalKnowledge.id).desc())
         .limit(10)
     )
-    knowledge_cat_data = [{"name": r[0], "value": r[1]} for r in knowledge_categories.all()]
+    knowledge_cat_data: list[dict[str, object]] = [
+        {"name": str(r[0] or ""), "value": int(r[1] or 0)} for r in knowledge_categories.all()
+    ]
     
     # 律所城市分布
     firm_cities = await db.execute(
@@ -633,7 +649,9 @@ async def get_category_stats(
         .order_by(func.count(LawFirm.id).desc())
         .limit(10)
     )
-    city_data = [{"name": r[0], "value": r[1]} for r in firm_cities.all()]
+    city_data: list[dict[str, object]] = [
+        {"name": str(r[0] or ""), "value": int(r[1] or 0)} for r in firm_cities.all()
+    ]
     
     return {
         "post_categories": post_cat_data,
@@ -645,7 +663,7 @@ async def get_category_stats(
 
 @router.get("/dashboard/realtime", summary="实时数据")
 async def get_realtime_stats(
-    current_user: Annotated[User, Depends(require_admin)],
+    _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """获取实时统计数据（最近1小时）"""
@@ -681,9 +699,15 @@ async def get_realtime_stats(
         .order_by(Consultation.created_at.desc())
         .limit(5)
     )
-    recent_list = [
-        {"id": r[0], "title": r[1] or "AI法律咨询", "user": r[2], "time": r[3].isoformat()}
-        for r in recent_consultations.all()
+    recent_rows = cast(list[tuple[int, str | None, str | None, datetime]], recent_consultations.all())
+    recent_list: list[dict[str, object]] = [
+        {
+            "id": int(r_id),
+            "title": str(r_title or "AI法律咨询"),
+            "user": str(r_user or ""),
+            "time": r_created_at.isoformat(),
+        }
+        for r_id, r_title, r_user, r_created_at in recent_rows
     ]
     
     return {
@@ -701,12 +725,12 @@ async def get_realtime_stats(
 
 @router.get("/dashboard/hot-content", summary="热门内容")
 async def get_hot_content(
-    current_user: Annotated[User, Depends(require_admin)],
+    _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
     limit: int = Query(10, ge=1, le=50),
 ):
     """获取热门内容（帖子 counting by view_count，新闻 counting by view_count）"""
-    _ = current_user
+    _ = _current_user
 
     post_rows = await db.execute(
         select(Post.id, Post.title, Post.view_count)
@@ -714,9 +738,10 @@ async def get_hot_content(
         .order_by(desc(func.coalesce(Post.view_count, 0)), desc(Post.created_at))
         .limit(limit)
     )
-    posts = [
-        {"type": "post", "id": int(r[0]), "title": str(r[1] or ""), "views": int(r[2] or 0)}
-        for r in post_rows.all()
+    post_items = cast(list[tuple[int, str | None, int | None]], post_rows.all())
+    posts: list[dict[str, object]] = [
+        {"type": "post", "id": int(r_id), "title": str(r_title or ""), "views": int(r_views or 0)}
+        for r_id, r_title, r_views in post_items
     ]
 
     news_rows = await db.execute(
@@ -725,18 +750,19 @@ async def get_hot_content(
         .order_by(desc(func.coalesce(News.view_count, 0)), desc(News.published_at), desc(News.created_at))
         .limit(limit)
     )
-    news = [
-        {"type": "news", "id": int(r[0]), "title": str(r[1] or ""), "views": int(r[2] or 0)}
-        for r in news_rows.all()
+    news_items = cast(list[tuple[int, str | None, int | None]], news_rows.all())
+    news: list[dict[str, object]] = [
+        {"type": "news", "id": int(r_id), "title": str(r_title or ""), "views": int(r_views or 0)}
+        for r_id, r_title, r_views in news_items
     ]
 
-    items = sorted(posts + news, key=lambda x: int(x.get("views", 0)), reverse=True)
+    items = sorted(posts + news, key=lambda x: cast(int, x.get("views", 0)), reverse=True)
     return {"items": items[:limit]}
 
 
 # ============ 用户行为分析 ============
 
-from app.models.system import UserActivity, PageView
+from ..models.system import UserActivity
 
 
 class ActivityCreate(BaseModel):
@@ -755,7 +781,7 @@ async def track_activity(
     data: ActivityCreate,
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: User | None = Depends(get_current_user_optional),
+    current_user: Annotated[User | None, Depends(get_current_user_optional)] = None,
 ):
     """记录用户行为数据（前端调用）"""
     user_agent = request.headers.get("user-agent", "")
@@ -790,7 +816,7 @@ async def track_activity(
 
 @router.get("/analytics/page-stats", summary="页面访问统计")
 async def get_page_stats(
-    current_user: Annotated[User, Depends(require_admin)],
+    _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
     days: int = Query(7, ge=1, le=30),
 ):
@@ -816,13 +842,13 @@ async def get_page_stats(
         .limit(20)
     )
     
-    pages = []
+    pages: list[dict[str, object]] = []
     for row in page_stats.all():
         pages.append({
-            "page": row[0],
-            "views": row[1],
-            "unique_users": row[2] or 0,
-            "avg_duration": round(row[3] or 0, 1),
+            "page": str(row[0] or ""),
+            "views": int(row[1] or 0),
+            "unique_users": int(row[2] or 0),
+            "avg_duration": round(float(row[3] or 0), 1),
         })
     
     return {"pages": pages, "days": days}
@@ -830,7 +856,7 @@ async def get_page_stats(
 
 @router.get("/analytics/user-behavior", summary="用户行为分析")
 async def get_user_behavior(
-    current_user: Annotated[User, Depends(require_admin)],
+    _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
     days: int = Query(7, ge=1, le=30),
 ):
@@ -848,7 +874,9 @@ async def get_user_behavior(
         .group_by(UserActivity.action)
         .order_by(func.count(UserActivity.id).desc())
     )
-    actions = [{"action": r[0], "count": r[1]} for r in action_stats.all()]
+    actions: list[dict[str, object]] = [
+        {"action": str(r[0] or ""), "count": int(r[1] or 0)} for r in action_stats.all()
+    ]
     
     # 按设备类型统计
     device_stats = await db.execute(
@@ -862,7 +890,9 @@ async def get_user_behavior(
         )
         .group_by(UserActivity.device_type)
     )
-    devices = [{"device": r[0], "count": r[1]} for r in device_stats.all()]
+    devices: list[dict[str, object]] = [
+        {"device": str(r[0] or ""), "count": int(r[1] or 0)} for r in device_stats.all()
+    ]
     
     # 按小时统计活跃度
     hourly_stats = await db.execute(
@@ -874,7 +904,9 @@ async def get_user_behavior(
         .group_by(func.extract('hour', UserActivity.created_at))
         .order_by(func.extract('hour', UserActivity.created_at))
     )
-    hourly = [{"hour": int(r[0]), "count": r[1]} for r in hourly_stats.all()]
+    hourly: list[dict[str, object]] = [
+        {"hour": int(cast(int | float, r[0] or 0)), "count": int(r[1] or 0)} for r in hourly_stats.all()
+    ]
     
     return {
         "actions": actions,
@@ -886,7 +918,7 @@ async def get_user_behavior(
 
 @router.get("/analytics/user-journey", summary="用户路径分析")
 async def get_user_journey(
-    current_user: Annotated[User, Depends(require_admin)],
+    _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
     limit: int = Query(100, ge=10, le=500),
 ):
@@ -906,12 +938,12 @@ async def get_user_journey(
         .limit(limit)
     )
     
-    journeys = []
+    journeys: list[dict[str, object]] = []
     for row in result.all():
         journeys.append({
-            "from": row[1] or "直接访问",
-            "to": row[0],
-            "count": row[2],
+            "from": str(row[1] or "直接访问"),
+            "to": str(row[0] or ""),
+            "count": int(row[2] or 0),
         })
     
     return {"journeys": journeys}
@@ -919,14 +951,14 @@ async def get_user_journey(
 
 @router.get("/analytics/retention", summary="用户留存分析")
 async def get_retention_stats(
-    current_user: Annotated[User, Depends(require_admin)],
+    _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """获取用户留存率数据"""
     from datetime import timedelta
     today = datetime.now().date()
     
-    retention_data = []
+    retention_data: list[dict[str, object]] = []
     for i in range(7):  # 近7天
         day = today - timedelta(days=i)
         next_day = day + timedelta(days=1)

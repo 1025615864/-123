@@ -6,20 +6,20 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import ResponseValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import get_settings
-from app.database import init_db
-from app.services.cache_service import cache_service
-from app.routers import api_router, websocket
-from app.middleware.logging_middleware import RequestLoggingMiddleware, ErrorLoggingMiddleware
-from app.middleware.rate_limit import RateLimitMiddleware
-# from app.routers import ai  # AI module disabled - needs langchain dependencies
+from .config import get_settings
+from .database import init_db
+from .services.cache_service import cache_service
+from .routers import api_router, websocket
+from .middleware.logging_middleware import RequestLoggingMiddleware, ErrorLoggingMiddleware
+from .middleware.rate_limit import RateLimitMiddleware
+# from .routers import ai  # AI module disabled - needs langchain dependencies
 
 settings = get_settings()
 
 logger = logging.getLogger(__name__)
 
 try:
-    from app.routers import ai
+    from .routers import ai
 except Exception:
     ai = None
     logger.exception("AI路由加载失败")
@@ -190,7 +190,7 @@ async def health_check_detailed():
     # 数据库检查
     try:
         from sqlalchemy import text
-        from app.database import engine
+        from .database import engine
         start = time.time()
         async with engine.connect() as conn:
             _ = await conn.execute(text("SELECT 1"))

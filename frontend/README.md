@@ -93,6 +93,53 @@ npm run build
 npm run preview
 ```
 
+## 端到端测试（Playwright E2E）
+
+本项目已提供 Playwright 端到端测试，用于覆盖论坛审核/通知深链等关键回归场景。
+
+### 前置条件
+
+- 后端服务已启动且可访问（默认前端通过 Vite 代理访问 `http://localhost:8000`）
+- 数据库可写（E2E 会注册新用户、创建帖子/评论、触发审核/驳回等）
+
+### 安装浏览器（首次/Playwright 更新后需要）
+
+```bash
+npm run test:e2e:install
+```
+
+### 运行 E2E
+
+```bash
+npm run test:e2e
+```
+
+可选：以 UI 模式调试
+
+```bash
+npm run test:e2e:ui
+```
+
+### 可选环境变量
+
+- `E2E_API_BASE`
+  - 默认：`http://localhost:5173/api`
+  - 说明：Playwright 通过该地址直连后端 API（通常由 Vite 代理转发到后端）。
+- `E2E_ADMIN_USER`
+  - 默认：`123311`
+  - 说明：用于执行管理员审核/驳回接口的账号。
+- `E2E_ADMIN_PASS`
+  - 默认：`123311`
+
+在 PowerShell 中示例：
+
+```powershell
+$env:E2E_API_BASE="http://localhost:5173/api"
+$env:E2E_ADMIN_USER="123311"
+$env:E2E_ADMIN_PASS="123311"
+npm run test:e2e
+```
+
 ## 环境配置
 
 后端 API 代理配置在 `vite.config.ts` 中：
@@ -224,6 +271,8 @@ toast.warning("警告信息");
 
 ```css
 .animate-fade-in      /* 淡入动画 */
+/* 淡入动画 */
+/* 淡入动画 */
 /* 淡入动画 */
 .animate-slide-in     /* 滑入动画 */
 .animate-float        /* 浮动动画 */

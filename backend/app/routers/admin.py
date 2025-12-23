@@ -10,14 +10,14 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
-from app.database import get_db
-from app.models.user import User
-from app.models.forum import Post, Comment
-from app.models.news import News
-from app.models.lawfirm import LawFirm
-from app.models.consultation import Consultation, ChatMessage
-from app.models.knowledge import LegalKnowledge
-from app.utils.deps import require_admin
+from ..database import get_db
+from ..models.user import User
+from ..models.forum import Post, Comment
+from ..models.news import News
+from ..models.lawfirm import LawFirm
+from ..models.consultation import Consultation, ChatMessage
+from ..models.knowledge import LegalKnowledge
+from ..utils.deps import require_admin
 
 router = APIRouter(prefix="/admin", tags=["管理后台"])
 
@@ -108,7 +108,7 @@ async def generate_csv_stream(fieldnames: list[str], rows_iter: AsyncIterator[Ma
 async def export_users(
     current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    format: str = Query("csv", description="导出格式: csv"),
+    format: Annotated[str, Query(description="导出格式: csv")] = "csv",
 ):
     """导出所有用户数据为CSV"""
     _ = current_user

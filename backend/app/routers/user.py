@@ -5,20 +5,20 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.database import get_db
-from app.models.user import User
-from app.schemas.user import (
+from ..database import get_db
+from ..models.user import User
+from ..schemas.user import (
     UserCreate, UserLogin, UserUpdate, UserResponse,
     Token, LoginResponse, RegisterResponse, PasswordChange, MessageResponse,
     PasswordResetRequest, PasswordResetConfirm
 )
-from app.services.user_service import user_service
-from app.services.forum_service import forum_service
-from app.services.email_service import email_service
-from app.utils.security import create_access_token, verify_password, hash_password
-from app.utils.deps import get_current_user, require_admin
-from app.utils.rate_limiter import rate_limit, RateLimitConfig
-from app.config import get_settings
+from ..services.user_service import user_service
+from ..services.forum_service import forum_service
+from ..services.email_service import email_service
+from ..utils.security import create_access_token, verify_password, hash_password
+from ..utils.deps import get_current_user, require_admin
+from ..utils.rate_limiter import rate_limit, RateLimitConfig
+from ..config import get_settings
 
 settings = get_settings()
 
@@ -205,9 +205,9 @@ async def admin_get_user_stats(
 async def admin_list_users(
     current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    page: int = Query(default=1),
-    page_size: int = Query(default=20),
-    keyword: str | None = Query(default=None),
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+    keyword: Annotated[str | None, Query()] = None,
 ):
     """获取所有用户列表（需要管理员权限）"""
     _ = current_user

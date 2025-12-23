@@ -4,7 +4,7 @@ from functools import wraps
 from typing import Callable, Any
 from fastapi import HTTPException, status
 
-from app.models.user import User
+from ..models.user import User
 
 logger = logging.getLogger(__name__)
 

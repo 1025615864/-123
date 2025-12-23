@@ -1,6 +1,7 @@
 """论坛相关的Pydantic模式"""
+from typing import Annotated, ClassVar
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ============ 帖子相关 ============
@@ -35,7 +36,7 @@ class AuthorInfo(BaseModel):
     nickname: str | None = None
     avatar: str | None = None
     
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 class ReactionCount(BaseModel):
@@ -59,18 +60,22 @@ class PostResponse(BaseModel):
     is_pinned: bool
     is_hot: bool = False
     is_essence: bool = False
+    is_deleted: bool = False
     heat_score: float = 0.0
     cover_image: str | None = None
     images: list[str] = []
     attachments: list[dict[str, str]] = []
     created_at: datetime
     updated_at: datetime
+    review_status: str | None = None
+    review_reason: str | None = None
+    reviewed_at: datetime | None = None
     author: AuthorInfo | None = None
     is_liked: bool = False
     is_favorited: bool = False
     reactions: list[ReactionCount] = []  # 表情反应统计
     
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 class PostListResponse(BaseModel):
@@ -79,6 +84,11 @@ class PostListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class PostIdListRequest(BaseModel):
+    """批量操作帖子请求"""
+    ids: Annotated[list[int], Field(default_factory=list, description="帖子ID列表")]
 
 
 # ============ 评论相关 ============
@@ -100,17 +110,23 @@ class CommentResponse(BaseModel):
     like_count: int
     images: list[str] = []
     created_at: datetime
+    review_status: str | None = None
+    review_reason: str | None = None
+    reviewed_at: datetime | None = None
     author: AuthorInfo | None = None
     is_liked: bool = False
     replies: list["CommentResponse"] = []
     
-    model_config = {"from_attributes": True}
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
 
 
 class CommentListResponse(BaseModel):
     """评论列表响应"""
     items: list[CommentResponse]
     total: int
+
+
+_ = CommentResponse.model_rebuild()
 
 
 # ============ 点赞相关 ============

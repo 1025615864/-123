@@ -4,7 +4,7 @@ from typing import TypedDict
 import secrets
 from datetime import datetime, timedelta
 
-from app.services.cache_service import cache_service
+from .cache_service import cache_service
 
 logger = logging.getLogger(__name__)
 

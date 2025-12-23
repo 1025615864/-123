@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Integer, String, Text, DateTime, Float, ForeignKey, Enum
+from sqlalchemy import Integer, String, Text, DateTime, Float, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 from ..database import Base
@@ -49,6 +49,8 @@ class PaymentOrder(Base):
     order_type: Mapped[str] = mapped_column(String(20), nullable=False)  # 订单类型
     amount: Mapped[float] = mapped_column(Float, nullable=False)  # 订单金额
     actual_amount: Mapped[float] = mapped_column(Float, nullable=False)  # 实付金额
+    amount_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    actual_amount_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
     
     status: Mapped[str] = mapped_column(String(20), default=PaymentStatus.PENDING)
     payment_method: Mapped[str | None] = mapped_column(String(20), nullable=True)
@@ -84,6 +86,10 @@ class UserBalance(Base):
     frozen: Mapped[float] = mapped_column(Float, default=0.0)  # 冻结金额
     total_recharged: Mapped[float] = mapped_column(Float, default=0.0)  # 累计充值
     total_consumed: Mapped[float] = mapped_column(Float, default=0.0)  # 累计消费
+    balance_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    frozen_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_recharged_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_consumed_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     
     # 关系
@@ -102,6 +108,9 @@ class BalanceTransaction(Base):
     amount: Mapped[float] = mapped_column(Float, nullable=False)  # 正数为收入，负数为支出
     balance_before: Mapped[float] = mapped_column(Float, nullable=False)  # 交易前余额
     balance_after: Mapped[float] = mapped_column(Float, nullable=False)  # 交易后余额
+    amount_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    balance_before_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    balance_after_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
     
     description: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

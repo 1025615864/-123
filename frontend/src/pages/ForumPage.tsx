@@ -1,12 +1,12 @@
 import { useMemo, useState, useEffect, useCallback } from 'react'
-import { MessageSquare, Plus, Search } from 'lucide-react'
+import { Link, useNavigate } from 'react-router-dom'
+import { FileText, MessageSquare, Plus, Search, Trash2 } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Modal, Input, Button, Chip, EmptyState, LinkButton, ModalActions, PostCardSkeleton, VirtualWindowList } from '../components/ui'
+import { Card, Input, Button, Chip, EmptyState, LinkButton, PostCardSkeleton, VirtualWindowList } from '../components/ui'
 import PageHeader from '../components/PageHeader'
 import PostCard from '../components/PostCard'
-import RichTextEditor from '../components/RichTextEditor'
 import api from '../api/client'
-import { usePrefetchLimiter, useToast, useAppMutation } from '../hooks'
+import { usePrefetchLimiter, useToast } from '../hooks'
 import { useAuth } from '../contexts/AuthContext'
 import { useTheme } from '../contexts/ThemeContext'
 import type { Post } from '../types'
@@ -21,14 +21,13 @@ interface PostsListResponse {
 export default function ForumPage() {
   const [page, setPage] = useState(1)
   const pageSize = 20
-  const [showCreateModal, setShowCreateModal] = useState(false)
-  const [newPost, setNewPost] = useState({ title: '', content: '', category: '法律咨询', images: [] as string[] })
   const [activeCategory, setActiveCategory] = useState('全部')
   const [keyword, setKeyword] = useState('')
-  const { isAuthenticated } = useAuth()
+  const { isAuthenticated, user } = useAuth()
   const { actualTheme } = useTheme()
   const toast = useToast()
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
 
   const { prefetch } = usePrefetchLimiter()
 
@@ -40,6 +39,7 @@ export default function ForumPage() {
   }, [keyword])
 
   const isFavoritesMode = isAuthenticated && activeCategory === '我的收藏'
+  const isMyPostsMode = isAuthenticated && activeCategory === '我的帖子'
 
   const postsQueryKey = useMemo(
     () =>
@@ -54,14 +54,14 @@ export default function ForumPage() {
       params.set('page', String(page))
       params.set('page_size', String(pageSize))
 
-      if (!isFavoritesMode && activeCategory && activeCategory !== '全部') {
+      if (!isFavoritesMode && !isMyPostsMode && activeCategory && activeCategory !== '全部') {
         params.set('category', activeCategory)
       }
       if (debouncedKeyword.trim()) {
         params.set('keyword', debouncedKeyword.trim())
       }
 
-      const endpoint = isFavoritesMode ? '/forum/favorites' : '/forum/posts'
+      const endpoint = isFavoritesMode ? '/forum/favorites' : isMyPostsMode ? '/forum/me/posts' : '/forum/posts'
       const res = await api.get(`${endpoint}?${params.toString()}`)
       const data = res.data as PostsListResponse
       return {
@@ -145,27 +145,27 @@ export default function ForumPage() {
     [isAuthenticated, toggleFavoriteMutation]
   )
 
-  const createPostMutation = useAppMutation({
-    mutationFn: async (_: void) => {
-      const res = await api.post('/forum/posts', newPost)
-      return res.data
-    },
-    errorMessageFallback: '发布失败，请稍后重试',
-    invalidateQueryKeys: [queryKeys.forumPostsRoot()],
-    onSuccess: () => {
-      setShowCreateModal(false)
-      setNewPost({ title: '', content: '', category: '法律咨询', images: [] })
-      setPage(1)
-    },
-  })
-
-  const createPost = async () => {
-    if (!newPost.title.trim() || !newPost.content.trim()) return
-    createPostMutation.mutate()
-  }
-
   const postCategories = ['法律咨询', '经验分享', '案例讨论', '政策解读', '其他']
-  const categories = isAuthenticated ? ['我的收藏', '全部', ...postCategories] : ['全部', ...postCategories]
+  const categories = isAuthenticated ? ['我的帖子', '我的收藏', '全部', ...postCategories] : ['全部', ...postCategories]
+
+  const hotLimit = 8
+  const activeCategoryForHot = !isFavoritesMode && !isMyPostsMode && activeCategory && activeCategory !== '全部' ? activeCategory : null
+  const hotQuery = useQuery({
+    queryKey: queryKeys.forumHotPosts(hotLimit, activeCategoryForHot),
+    queryFn: async () => {
+      const params = new URLSearchParams()
+      params.set('limit', String(hotLimit))
+      if (activeCategoryForHot) {
+        params.set('category', activeCategoryForHot)
+      }
+      const res = await api.get(`/forum/hot?${params.toString()}`)
+      const items = res.data?.items ?? []
+      return (Array.isArray(items) ? items : []) as Post[]
+    },
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  })
 
   const posts = postsQuery.data?.items ?? []
   const total = postsQuery.data?.total ?? 0
@@ -191,10 +191,25 @@ export default function ForumPage() {
         return res.data
       },
     })
+
+    const commentsQueryKey = [
+      ...queryKeys.forumPostComments(postId),
+      {
+        include_unapproved: isAuthenticated ? 1 : 0,
+        viewer: isAuthenticated ? (user?.id ?? null) : null,
+      },
+    ] as const
+
     prefetch({
-      queryKey: queryKeys.forumPostComments(postId),
+      queryKey: commentsQueryKey,
       queryFn: async () => {
-        const res = await api.get(`/forum/posts/${postId}/comments`)
+        const params = new URLSearchParams()
+        if (isAuthenticated) params.append('include_unapproved', '1')
+        const url = params.toString()
+          ? `/forum/posts/${postId}/comments?${params.toString()}`
+          : `/forum/posts/${postId}/comments`
+
+        const res = await api.get(url)
         const items = res.data?.items ?? []
         return Array.isArray(items) ? items : []
       },
@@ -221,13 +236,42 @@ export default function ForumPage() {
               />
             </div>
             {isAuthenticated ? (
-              <Button
-                onClick={() => setShowCreateModal(true)}
-                icon={Plus}
-                className="py-2.5"
-              >
-                发布
-              </Button>
+              <>
+                <LinkButton
+                  to="/forum/my-comments"
+                  variant="outline"
+                  size="md"
+                  className="px-5 py-2.5"
+                  icon={MessageSquare}
+                >
+                  我的评论
+                </LinkButton>
+                <LinkButton
+                  to="/forum/drafts"
+                  variant="outline"
+                  size="md"
+                  className="px-5 py-2.5"
+                  icon={FileText}
+                >
+                  草稿箱
+                </LinkButton>
+                <LinkButton
+                  to="/forum/recycle-bin"
+                  variant="outline"
+                  size="md"
+                  className="px-5 py-2.5"
+                  icon={Trash2}
+                >
+                  回收站
+                </LinkButton>
+                <Button
+                  onClick={() => navigate('/forum/new')}
+                  icon={Plus}
+                  className="py-2.5"
+                >
+                  发布
+                </Button>
+              </>
             ) : (
               <LinkButton
                 to="/login"
@@ -250,126 +294,125 @@ export default function ForumPage() {
         ))}
       </div>
 
-      <div>
-        {posts.length === 0 ? (
-          <EmptyState
-            icon={MessageSquare}
-            title="暂无符合条件的帖子"
-            description="试试切换分类或修改搜索关键词"
-            size="lg"
-            action={
-              isAuthenticated ? (
-                <div className="mt-6">
-                  <Button
-                    onClick={() => setShowCreateModal(true)}
-                    icon={Plus}
-                    className="py-2.5"
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
+        <div className="lg:col-span-8">
+          {posts.length === 0 ? (
+            <EmptyState
+              icon={MessageSquare}
+              title="暂无符合条件的帖子"
+              description="试试切换分类或修改搜索关键词"
+              size="lg"
+              action={
+                isAuthenticated ? (
+                  <div className="mt-6">
+                    <Button
+                      onClick={() => navigate('/forum/new')}
+                      icon={Plus}
+                      className="py-2.5"
+                    >
+                      发布第一个帖子
+                    </Button>
+                  </div>
+                ) : null
+              }
+            />
+          ) : (
+            <VirtualWindowList
+              items={posts}
+              estimateItemHeight={220}
+              overscan={8}
+              getItemKey={(post: Post) => post.id}
+              itemClassName="pb-6"
+              renderItem={(post) => (
+                <PostCard
+                  post={post}
+                  onToggleFavorite={handleToggleFavorite}
+                  favoriteDisabled={!isAuthenticated}
+                  onPrefetch={prefetchPostDetail}
+                />
+              )}
+            />
+          )}
+
+          {totalPages > 1 ? (
+            <div className="flex items-center justify-center gap-4 pt-2">
+              <Button
+                variant="outline"
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                className="px-5"
+              >
+                上一页
+              </Button>
+              <div className="text-sm text-slate-600 dark:text-white/60">
+                第 {page} / {totalPages} 页
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages}
+                className="px-5"
+              >
+                下一页
+              </Button>
+            </div>
+          ) : null}
+        </div>
+
+        <aside className="lg:col-span-4 space-y-6">
+          <Card variant="surface" padding="lg" className="rounded-3xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-semibold text-slate-900 dark:text-white">热度榜</h3>
+              <Link to="/forum" className="text-xs text-slate-500 hover:text-slate-900 dark:text-white/40 dark:hover:text-white">
+                刷新
+              </Link>
+            </div>
+
+            {hotQuery.isLoading && (hotQuery.data ?? []).length === 0 ? (
+              <div className="space-y-3">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="h-10 rounded-xl bg-slate-900/5 dark:bg-white/5" />
+                ))}
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {(hotQuery.data ?? []).slice(0, hotLimit).map((p, idx) => (
+                  <Link
+                    key={p.id}
+                    to={`/forum/post/${p.id}`}
+                    className="flex items-start gap-3 p-3 rounded-2xl hover:bg-slate-900/5 transition-colors dark:hover:bg-white/5"
+                    onMouseEnter={() => prefetchPostDetail(p.id)}
                   >
-                    发布第一个帖子
-                  </Button>
-                </div>
-              ) : null
-            }
-          />
-        ) : (
-          <VirtualWindowList
-            items={posts}
-            estimateItemHeight={220}
-            overscan={8}
-            getItemKey={(post: Post) => post.id}
-            itemClassName="pb-6"
-            renderItem={(post) => (
-              <PostCard
-                post={post}
-                onToggleFavorite={handleToggleFavorite}
-                favoriteDisabled={!isAuthenticated}
-                onPrefetch={prefetchPostDetail}
-              />
+                    <div className={`w-7 h-7 rounded-xl flex items-center justify-center text-xs font-bold ${idx < 3 ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400' : 'bg-slate-900/5 text-slate-600 dark:bg-white/5 dark:text-white/60'}`}>
+                      {idx + 1}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-slate-900 line-clamp-2 dark:text-white">
+                        {p.title}
+                      </p>
+                      <p className="text-xs text-slate-500 mt-1 dark:text-white/40">
+                        热度 {(p.heat_score ?? 0).toFixed(0)} · 浏览 {p.view_count ?? 0}
+                      </p>
+                    </div>
+                  </Link>
+                ))}
+
+                {(hotQuery.data ?? []).length === 0 ? (
+                  <p className="text-sm text-slate-500 dark:text-white/40">暂无热榜数据</p>
+                ) : null}
+              </div>
             )}
-          />
-        )}
+          </Card>
+
+          <Card variant="surface" padding="lg" className="rounded-3xl">
+            <h3 className="text-base font-semibold text-slate-900 dark:text-white mb-2">发帖小贴士</h3>
+            <p className="text-sm text-slate-600 leading-relaxed dark:text-white/50">
+              贴出关键事实、时间线、合同/聊天截图（可打码），更容易获得高质量回复。
+            </p>
+          </Card>
+        </aside>
       </div>
 
-      {totalPages > 1 ? (
-        <div className="flex items-center justify-center gap-4 pt-2">
-          <Button
-            variant="outline"
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            disabled={page <= 1}
-            className="px-5"
-          >
-            上一页
-          </Button>
-          <div className="text-sm text-slate-600 dark:text-white/60">
-            第 {page} / {totalPages} 页
-          </div>
-          <Button
-            variant="outline"
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            disabled={page >= totalPages}
-            className="px-5"
-          >
-            下一页
-          </Button>
-        </div>
-      ) : null}
-
-      <Modal
-        isOpen={showCreateModal}
-        onClose={() => setShowCreateModal(false)}
-        title="发布新帖子"
-        description="请尽量描述清楚问题，方便他人回复"
-      >
-        <div className="space-y-4">
-          <Input
-            label="标题"
-            value={newPost.title}
-            onChange={(e) => setNewPost({ ...newPost, title: e.target.value })}
-            placeholder="请输入标题"
-          />
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">分类</label>
-            <select
-              value={newPost.category}
-              onChange={(e) => setNewPost({ ...newPost, category: e.target.value })}
-              className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none transition focus-visible:border-amber-500/50 focus-visible:ring-2 focus-visible:ring-amber-500/20 dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
-            >
-              {postCategories.map((cat) => (
-                <option key={cat} value={cat} className="bg-white text-slate-900 dark:bg-[#0f0a1e] dark:text-white">
-                  {cat}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">内容</label>
-            <RichTextEditor
-              value={newPost.content}
-              onChange={(content) => setNewPost({ ...newPost, content })}
-              images={newPost.images}
-              onImagesChange={(images) => setNewPost({ ...newPost, images })}
-              placeholder="请输入内容，支持表情、图片和链接..."
-              minHeight="180px"
-            />
-          </div>
-        </div>
-
-        <ModalActions className="mt-7">
-          <Button
-            variant="outline"
-            onClick={() => setShowCreateModal(false)}
-          >
-            取消
-          </Button>
-          <Button
-            onClick={createPost}
-            disabled={!newPost.title.trim() || !newPost.content.trim()}
-            isLoading={createPostMutation.isPending}
-          >
-            发布
-          </Button>
-        </ModalActions>
-      </Modal>
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { FileText, User, Calendar, Filter, RefreshCw } from 'lucide-react'
+import { FileText, User, Calendar, Filter, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react'
 import { Card, Button, Badge } from '../../components/ui'
 import { useQuery } from '@tanstack/react-query'
 import api from '../../api/client'
@@ -15,6 +15,7 @@ interface LogItem {
   target_id: number | null
   description: string | null
   ip_address: string | null
+  extra_data?: Record<string, unknown> | null
   created_at: string
 }
 
@@ -34,6 +35,7 @@ const moduleLabels: Record<string, string> = {
   user: '用户',
   post: '帖子',
   comment: '评论',
+  forum: '论坛',
   news: '新闻',
   lawfirm: '律所',
   lawyer: '律师',
@@ -47,6 +49,7 @@ export default function LogsPage() {
   const [page, setPage] = useState(1)
   const [module, setModule] = useState('')
   const [action, setAction] = useState('')
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
   const toast = useToast()
   const pageSize = 20
 
@@ -87,6 +90,15 @@ export default function LogsPage() {
   const loading = logsQuery.isFetching
 
   const totalPages = Math.ceil(total / pageSize)
+
+  const toggleExpanded = (id: number) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   const formatTime = (dateStr: string) => {
     const date = new Date(dateStr)
@@ -193,9 +205,38 @@ export default function LogsPage() {
                     </Badge>
                   </td>
                   <td className="py-3 px-4">
-                    <span className="text-slate-600 text-sm max-w-xs truncate block dark:text-white/60">
-                      {log.description || '-'}
-                    </span>
+                    <div className="max-w-xl">
+                      <span className="text-slate-600 text-sm truncate block dark:text-white/60">
+                        {log.description || '-'}
+                      </span>
+                      {log.extra_data ? (
+                        <div className="mt-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="px-2 py-1"
+                            onClick={() => toggleExpanded(log.id)}
+                          >
+                            {expandedIds.has(log.id) ? (
+                              <>
+                                <ChevronUp className="h-4 w-4" />
+                                收起详情
+                              </>
+                            ) : (
+                              <>
+                                <ChevronDown className="h-4 w-4" />
+                                查看详情
+                              </>
+                            )}
+                          </Button>
+                          {expandedIds.has(log.id) && (
+                            <pre className="mt-2 whitespace-pre-wrap break-words rounded-xl border border-slate-200/70 bg-slate-50 p-3 text-xs text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/70">
+                              {JSON.stringify(log.extra_data, null, 2)}
+                            </pre>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
                   </td>
                   <td className="py-3 px-4">
                     <span className="text-slate-500 text-sm font-mono dark:text-white/40">

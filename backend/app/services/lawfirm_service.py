@@ -3,8 +3,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, or_
 from sqlalchemy.orm import selectinload
 
-from app.models.lawfirm import LawFirm, Lawyer, LawyerConsultation, LawyerReview
-from app.schemas.lawfirm import (
+from ..models.lawfirm import LawFirm, Lawyer, LawyerConsultation, LawyerReview
+from ..schemas.lawfirm import (
     LawFirmCreate, LawFirmUpdate, LawyerCreate, LawyerUpdate,
     ConsultationCreate, ConsultationUpdate, ReviewCreate
 )

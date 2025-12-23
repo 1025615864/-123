@@ -1,13 +1,14 @@
 """WebSocket路由"""
 import logging
+from typing import Annotated
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from sqlalchemy import select
 
-from app.config import get_settings
-from app.database import AsyncSessionLocal
-from app.models.user import User
-from app.services.websocket_service import manager, MessageType, create_message
-from app.utils.security import decode_token
+from ..config import get_settings
+from ..database import AsyncSessionLocal
+from ..models.user import User
+from ..services.websocket_service import manager, MessageType, create_message
+from ..utils.security import decode_token
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -51,7 +52,7 @@ async def _get_active_user_id(token: str | None) -> int | None:
 @router.websocket("/ws")
 async def websocket_endpoint(
     websocket: WebSocket,
-    token: str | None = Query(default=None)
+    token: Annotated[str | None, Query()] = None,
 ):
     """
     WebSocket连接端点

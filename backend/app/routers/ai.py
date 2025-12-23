@@ -2,7 +2,7 @@
 import asyncio
 import json
 import time
-from typing import cast
+from typing import Annotated, cast
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -10,11 +10,11 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
-from app.database import get_db
-from app.models.consultation import Consultation, ChatMessage
-from app.models.user import User
-from app.config import get_settings
-from app.schemas.ai import (
+from ..database import get_db
+from ..models.consultation import Consultation, ChatMessage
+from ..models.user import User
+from ..config import get_settings
+from ..schemas.ai import (
     ChatRequest, 
     ChatResponse, 
     ConsultationResponse,
@@ -23,8 +23,8 @@ from app.schemas.ai import (
     RatingRequest,
     RatingResponse
 )
-from app.utils.deps import get_current_user, get_current_user_optional
-from app.utils.rate_limiter import rate_limit, RateLimitConfig, rate_limiter, get_client_ip
+from ..utils.deps import get_current_user, get_current_user_optional
+from ..utils.rate_limiter import rate_limit, RateLimitConfig, rate_limiter, get_client_ip
 
 router = APIRouter(prefix="/ai", tags=["AI法律助手"])
 
@@ -55,7 +55,7 @@ def _enforce_guest_ai_quota(request: Request) -> None:
 
 def _try_get_ai_assistant():
     try:
-        from app.services.ai_assistant import get_ai_assistant
+        from ..services.ai_assistant import get_ai_assistant
 
         return get_ai_assistant()
     except Exception:
@@ -67,8 +67,8 @@ def _try_get_ai_assistant():
 async def chat_with_ai(
     payload: ChatRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db),
-    current_user: User | None = Depends(get_current_user_optional)
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User | None, Depends(get_current_user_optional)] = None,
 ):
     """
     与AI法律助手对话
@@ -154,8 +154,8 @@ async def chat_with_ai(
 async def chat_with_ai_stream(
     payload: ChatRequest,
     request: Request,
-    db: AsyncSession = Depends(get_db),
-    current_user: User | None = Depends(get_current_user_optional),
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User | None, Depends(get_current_user_optional)] = None,
 ):
     """
     流式对话（SSE）
@@ -280,10 +280,10 @@ async def chat_with_ai_stream(
 
 @router.get("/consultations", response_model=list[ConsultationListItem])
 async def list_consultations(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    skip: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
     """
     获取咨询历史列表
@@ -331,8 +331,8 @@ async def list_consultations(
 @router.get("/consultations/{session_id}", response_model=ConsultationResponse)
 async def get_consultation(
     session_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
     """
     获取单次咨询详情
@@ -371,8 +371,8 @@ async def get_consultation(
 @router.delete("/consultations/{session_id}")
 async def delete_consultation(
     session_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
     """
     删除咨询记录
@@ -407,8 +407,8 @@ async def delete_consultation(
 @router.get("/consultations/{session_id}/export")
 async def export_consultation(
     session_id: str,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
     """
     导出咨询记录为结构化数据（用于前端生成PDF）
@@ -464,8 +464,8 @@ async def export_consultation(
 @router.post("/messages/rate", response_model=RatingResponse)
 async def rate_message(
     request: RatingRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
 ):
     """
     评价AI回复

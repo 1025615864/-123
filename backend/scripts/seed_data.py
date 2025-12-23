@@ -1,7 +1,9 @@
 """数据库种子数据脚本"""
 import asyncio
 import sys
-sys.path.insert(0, '..')
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select

@@ -3,9 +3,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, func
 from sqlalchemy.exc import IntegrityError
 
-from app.models.user import User
-from app.schemas.user import UserCreate, UserUpdate
-from app.utils.security import hash_password, verify_password
+from ..models.user import User
+from ..schemas.user import UserCreate, UserUpdate
+from ..utils.security import hash_password, verify_password
 
 
 class UserService:

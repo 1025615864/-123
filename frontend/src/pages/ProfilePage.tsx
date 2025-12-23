@@ -26,7 +26,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import api from "../api/client";
 import { useAppMutation, useToast } from "../hooks";
-import { Card, Button, Input, Modal, Loading, EmptyState, FadeInImage, Pagination, Textarea } from "../components/ui";
+import { Card, Button, Input, Modal, Loading, EmptyState, FadeInImage, Pagination, Textarea, Badge } from "../components/ui";
 import PageHeader from "../components/PageHeader";
 import { useTheme } from "../contexts/ThemeContext";
 import type { Post } from "../types";
@@ -741,6 +741,21 @@ export default function ProfilePage() {
                             {post.title}
                           </h4>
                         </Link>
+                        <div className="flex flex-wrap items-center gap-2 mb-2">
+                          {post.review_status === "pending" ? (
+                            <Badge variant="warning" size="sm" title={post.review_reason || undefined}>
+                              审核中
+                            </Badge>
+                          ) : post.review_status === "rejected" ? (
+                            <Badge variant="danger" size="sm" title={post.review_reason || undefined}>
+                              已驳回
+                            </Badge>
+                          ) : (
+                            <Badge variant="success" size="sm">
+                              已通过
+                            </Badge>
+                          )}
+                        </div>
                         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-white/40">
                           <span>{post.category}</span>
                           <span>{new Date(post.created_at).toLocaleDateString()}</span>

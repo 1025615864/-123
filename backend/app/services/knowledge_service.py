@@ -6,8 +6,8 @@ from typing import cast
 from sqlalchemy import select, func, delete, CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.knowledge import LegalKnowledge, ConsultationTemplate, KnowledgeType
-from app.schemas.knowledge import (
+from ..models.knowledge import LegalKnowledge, ConsultationTemplate, KnowledgeType
+from ..schemas.knowledge import (
     LegalKnowledgeCreate,
     LegalKnowledgeUpdate,
     ConsultationTemplateCreate,
@@ -168,7 +168,7 @@ class KnowledgeService:
     
     def _try_get_ai_assistant(self):
         try:
-            from app.services.ai_assistant import get_ai_assistant
+            from .ai_assistant import get_ai_assistant
 
             return get_ai_assistant()
         except Exception:

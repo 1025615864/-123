@@ -1,5 +1,5 @@
 """Pydantic模式"""
-from app.schemas.ai import (
+from .ai import (
     ChatRequest, 
     ChatResponse, 
     ConsultationCreate,
