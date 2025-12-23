@@ -14,15 +14,33 @@ import MarkdownContent from "../components/MarkdownContent";
 interface NewsDetail {
   id: number;
   title: string;
-  summary: string;
+  summary: string | null;
   content: string;
   category: string;
-  source: string;
+  source: string | null;
+  author?: string | null;
   cover_image: string | null;
   view_count: number;
   favorite_count: number;
   is_favorited: boolean;
-  published_at: string;
+  published_at: string | null;
+  created_at: string;
+  updated_at?: string;
+}
+
+interface RelatedNewsItem {
+  id: number;
+  title: string;
+  summary: string | null;
+  cover_image: string | null;
+  category: string;
+  source: string | null;
+  author: string | null;
+  view_count: number;
+  favorite_count: number;
+  is_favorited: boolean;
+  is_top: boolean;
+  published_at: string | null;
   created_at: string;
 }
 
@@ -62,6 +80,27 @@ function upsertMetaTag(
     } else {
       el.setAttribute('content', prev);
     }
+  };
+}
+
+function upsertJsonLd(id: string, json: unknown): () => void {
+  const selector = `script#${id}[type="application/ld+json"]`;
+  const existing = document.head.querySelector(selector) as HTMLScriptElement | null;
+  const created = !existing;
+  const el = existing ?? document.createElement('script');
+  if (created) {
+    el.id = id;
+    el.type = 'application/ld+json';
+    document.head.appendChild(el);
+  }
+  const prev = el.textContent;
+  el.textContent = JSON.stringify(json);
+  return () => {
+    if (created) {
+      el.remove();
+      return;
+    }
+    el.textContent = prev ?? '';
   };
 }
 
@@ -120,6 +159,19 @@ export default function NewsDetailPage() {
   const bookmarked = !!news?.is_favorited;
   const favoriteCount = Number(news?.favorite_count || 0);
 
+  const relatedLimit = 6;
+  const relatedQuery = useQuery({
+    queryKey: queryKeys.newsRelated(newsId, relatedLimit),
+    queryFn: async () => {
+      const res = await api.get(`/news/${newsId}/related?limit=${relatedLimit}`);
+      return (Array.isArray(res.data) ? res.data : []) as RelatedNewsItem[];
+    },
+    enabled: !!newsId,
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  });
+
   useEffect(() => {
     if (!news) return;
 
@@ -162,11 +214,42 @@ export default function NewsDetailPage() {
 
     cleanups.push(upsertMetaTag('property', 'og:type', 'article'));
 
+    try {
+      const jsonLd: Record<string, unknown> = {
+        '@context': 'https://schema.org',
+        '@type': 'NewsArticle',
+        headline: safeTitle,
+        articleSection: typeof news.category === 'string' ? news.category : undefined,
+        description: description || undefined,
+        datePublished: (news as any).published_at || (news as any).created_at || undefined,
+        dateModified: (news as any).updated_at || (news as any).published_at || (news as any).created_at || undefined,
+        mainEntityOfPage: url || undefined,
+        image: imageUrl ? [imageUrl] : undefined,
+        author:
+          typeof (news as any).author === 'string' && (news as any).author
+            ? { '@type': 'Person', name: (news as any).author }
+            : undefined,
+        publisher: {
+          '@type': 'Organization',
+          name:
+            typeof (news as any).source === 'string' && (news as any).source
+              ? (news as any).source
+              : '法律资讯',
+        },
+      };
+      for (const k of Object.keys(jsonLd)) {
+        if (jsonLd[k] === undefined) delete jsonLd[k];
+      }
+      cleanups.push(upsertJsonLd('news-jsonld', jsonLd));
+    } catch {
+      // ignore
+    }
+
     return () => {
       document.title = prevTitle;
       for (const fn of cleanups.reverse()) fn();
     };
-  }, [newsId, news?.title, (news as any)?.summary, news?.content, news?.cover_image]);
+  }, [newsId, news?.title, (news as any)?.summary, news?.content, news?.cover_image, (news as any)?.author, (news as any)?.category, (news as any)?.source, (news as any)?.published_at, (news as any)?.created_at, (news as any)?.updated_at]);
 
   const bookmarkMutation = useMutation({
     mutationFn: async () => {
@@ -259,6 +342,8 @@ export default function NewsDetailPage() {
     );
   }
 
+  const relatedItems = (relatedQuery.data ?? []).filter((i) => String(i.id) !== String(newsId));
+
   return (
     <div className="max-w-3xl mx-auto space-y-8">
       {/* 返回按钮 */}
@@ -349,6 +434,70 @@ export default function NewsDetailPage() {
           </Button>
         </div>
       </article>
+
+      {relatedQuery.isLoading || relatedQuery.isSuccess ? (
+        <section data-testid="news-related">
+          <Card variant="surface" padding="md">
+            <div className="flex items-center justify-between gap-3 mb-4">
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-white">相关推荐</h2>
+              <Link
+                to="/news"
+                className="text-sm text-amber-600 hover:underline dark:text-amber-400"
+              >
+                更多
+              </Link>
+            </div>
+
+            {relatedQuery.isLoading ? (
+              <p className="text-sm text-slate-600 dark:text-white/50">加载中...</p>
+            ) : relatedItems.length === 0 ? (
+              <p className="text-sm text-slate-600 dark:text-white/50">暂无相关推荐</p>
+            ) : (
+              <div className="space-y-3">
+                {relatedItems.map((item) => (
+                  <Link
+                    key={item.id}
+                    to={`/news/${item.id}`}
+                    className="block rounded-xl border border-slate-200/70 p-4 hover:bg-slate-50 transition-colors dark:border-white/10 dark:hover:bg-white/5"
+                  >
+                    <div className="flex gap-4">
+                      {item.cover_image ? (
+                        <div className="w-24 h-16 rounded-lg overflow-hidden bg-slate-900/5 dark:bg-white/5 flex-shrink-0">
+                          <FadeInImage
+                            src={item.cover_image}
+                            alt={item.title}
+                            wrapperClassName="w-full h-full"
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                      ) : null}
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Badge variant="primary" size="sm">
+                            {item.category}
+                          </Badge>
+                          {item.is_top ? <Badge variant="warning" size="sm">置顶</Badge> : null}
+                        </div>
+
+                        <div className="text-slate-900 font-medium line-clamp-2 leading-snug dark:text-white">
+                          {item.title}
+                        </div>
+
+                        {item.summary ? (
+                          <div className="text-sm text-slate-600 line-clamp-2 mt-1 dark:text-white/50">
+                            {item.summary}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </Card>
+        </section>
+      ) : null}
     </div>
   );
 }

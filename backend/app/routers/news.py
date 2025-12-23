@@ -101,6 +101,31 @@ async def get_my_news_favorites(
     return NewsListResponse(items=items, total=total, page=page, page_size=page_size)
 
 
+@router.get("/{news_id}/related", response_model=list[NewsListItem], summary="获取相关新闻")
+async def get_related_news(
+    news_id: int,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User | None, Depends(get_current_user_optional)],
+    limit: Annotated[int, Query(ge=1, le=20)] = 6,
+):
+    """获取相关新闻（同分类优先，不包含当前新闻）"""
+    news_list = await news_service.get_related_news(db, news_id, limit)
+
+    user_id = current_user.id if current_user else None
+    items: list[NewsListItem] = []
+    for news in news_list:
+        fav_count = await news_service.get_favorite_count(db, news.id)
+        is_fav = False
+        if user_id is not None:
+            is_fav = await news_service.is_favorited(db, news.id, user_id)
+        item = NewsListItem.model_validate(news)
+        item.favorite_count = fav_count
+        item.is_favorited = is_fav
+        items.append(item)
+
+    return items
+
+
 @router.get("/{news_id}", response_model=NewsResponse, summary="获取新闻详情")
 async def get_news_detail(
     news_id: int,

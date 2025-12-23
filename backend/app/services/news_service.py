@@ -1,7 +1,7 @@
 """新闻服务层"""
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, update, and_, or_
+from sqlalchemy import select, func, desc, update, and_, or_, case
 from sqlalchemy.exc import IntegrityError
 
 from ..models.news import News, NewsFavorite
@@ -235,6 +235,32 @@ class NewsService:
         total = int(count_result.scalar() or 0)
 
         return items, total
+
+    @staticmethod
+    async def get_related_news(
+        db: AsyncSession,
+        news_id: int,
+        limit: int = 6,
+    ) -> list[News]:
+        """获取相关新闻（同分类优先，不包含当前新闻）"""
+        current = await NewsService.get_published(db, news_id)
+        if not current:
+            return []
+
+        same_category_first = case((News.category == current.category, 0), else_=1)
+
+        result = await db.execute(
+            select(News)
+            .where(
+                and_(
+                    News.is_published == True,
+                    News.id != news_id,
+                )
+            )
+            .order_by(same_category_first, desc(News.published_at), desc(News.created_at))
+            .limit(limit)
+        )
+        return list(result.scalars().all())
     
     @staticmethod
     async def get_top_news(db: AsyncSession, limit: int = 5) -> list[News]:

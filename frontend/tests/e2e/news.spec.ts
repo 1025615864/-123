@@ -131,6 +131,63 @@ test('新闻列表：关键词搜索可命中 title/summary/source/author/conten
   }
 })
 
+test('新闻详情：相关推荐可见（同分类新闻优先）', async ({ page, request }) => {
+  const now = Date.now()
+  const adminToken = await loginAdmin(request)
+
+  const token = `E2E_NEWS_RELATED_${now}`
+  const category = `关联分类-${token}`
+
+  const newsIdA = await createNews(request, adminToken, {
+    title: `关联新闻A-${token}`,
+    category,
+    summary: `摘要A-${token}`,
+    cover_image: null,
+    source: 'E2E',
+    author: 'E2E',
+    content: `内容A-${token}`,
+    is_top: false,
+    is_published: true,
+  })
+
+  const newsIdB = await createNews(request, adminToken, {
+    title: `关联新闻B-${token}`,
+    category,
+    summary: `摘要B-${token}`,
+    cover_image: null,
+    source: 'E2E',
+    author: 'E2E',
+    content: `内容B-${token}`,
+    is_top: false,
+    is_published: true,
+  })
+
+  const newsIdOther = await createNews(request, adminToken, {
+    title: `其他分类新闻-${token}`,
+    category: `其他分类-${token}`,
+    summary: `摘要Other-${token}`,
+    cover_image: null,
+    source: 'E2E',
+    author: 'E2E',
+    content: `内容Other-${token}`,
+    is_top: false,
+    is_published: true,
+  })
+
+  try {
+    await page.goto(`/news/${newsIdA}`)
+    await expect(page.getByRole('heading', { level: 1, name: `关联新闻A-${token}` })).toBeVisible({ timeout: 12_000 })
+
+    const related = page.getByTestId('news-related')
+    await expect(related).toBeVisible({ timeout: 12_000 })
+    await expect(related.getByText(`关联新闻B-${token}`).first()).toBeVisible({ timeout: 12_000 })
+  } finally {
+    await deleteNews(request, adminToken, newsIdA)
+    await deleteNews(request, adminToken, newsIdB)
+    await deleteNews(request, adminToken, newsIdOther)
+  }
+})
+
 test('新闻详情：正文支持 Markdown 渲染；登录用户可收藏并在“我的收藏”中可见', async ({ page, request }) => {
   const now = Date.now()
   const adminToken = await loginAdmin(request)

@@ -21,6 +21,7 @@ export const queryKeys = {
   newsTop: (limit: number) => ['news-top', { limit }] as const,
   newsRecent: (limit: number) => ['news-recent', { limit }] as const,
   newsDetail: (newsId: string | undefined) => ['news', newsId] as const,
+  newsRelated: (newsId: string | undefined, limit: number) => ['news-related', { newsId, limit }] as const,
 
   documentTypes: () => ['document-types'] as const,
 
