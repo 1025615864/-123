@@ -7,7 +7,8 @@ from ..database import get_db
 from ..models.user import User
 from ..schemas.news import (
     NewsCreate, NewsUpdate, NewsResponse, NewsListResponse,
-    NewsListItem, NewsCategoryCount, NewsFavoriteResponse
+    NewsListItem, NewsCategoryCount, NewsFavoriteResponse,
+    NewsAdminListResponse, NewsAdminListItem
 )
 from ..services.news_service import news_service
 from ..utils.deps import require_admin, get_current_user, get_current_user_optional
@@ -185,7 +186,7 @@ async def delete_news(
     return {"message": "删除成功"}
 
 
-@router.get("/admin/all", response_model=NewsListResponse, summary="获取所有新闻（含未发布）")
+@router.get("/admin/all", response_model=NewsAdminListResponse, summary="获取所有新闻（含未发布）")
 async def get_all_news(
     current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -200,8 +201,8 @@ async def get_all_news(
         db, page, page_size, category, keyword, published_only=False
     )
     
-    items = [NewsListItem.model_validate(news) for news in news_list]
-    return NewsListResponse(items=items, total=total, page=page, page_size=page_size)
+    items = [NewsAdminListItem.model_validate(news) for news in news_list]
+    return NewsAdminListResponse(items=items, total=total, page=page, page_size=page_size)
 
 
 @router.get("/admin/{news_id}", response_model=NewsResponse, summary="管理员获取新闻详情")

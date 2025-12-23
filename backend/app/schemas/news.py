@@ -79,6 +79,35 @@ class NewsListResponse(BaseModel):
     page_size: int
 
 
+class NewsAdminListItem(BaseModel):
+    """管理员新闻列表项（包含发布状态等管理字段）"""
+
+    id: int
+    title: str
+    summary: str | None = None
+    cover_image: str | None = None
+    category: str
+    source: str | None = None
+    author: str | None = None
+    view_count: int
+    is_top: bool
+    is_published: bool
+    published_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
+
+
+class NewsAdminListResponse(BaseModel):
+    """管理员新闻列表响应"""
+
+    items: list[NewsAdminListItem]
+    total: int
+    page: int
+    page_size: int
+
+
 class NewsCategoryCount(BaseModel):
     """分类统计"""
     category: str

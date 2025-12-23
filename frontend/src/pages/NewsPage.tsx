@@ -6,6 +6,7 @@ import { Card, Input, Chip, Badge, EmptyState, Pagination, NewsCardSkeleton, Fad
 import PageHeader from '../components/PageHeader'
 import api from '../api/client'
 import { usePrefetchLimiter, useToast } from '../hooks'
+import { useAuth } from '../contexts/AuthContext'
 import { useTheme } from '../contexts/ThemeContext'
 import { getApiErrorMessage } from '../utils'
 import { queryKeys } from '../queryKeys'
@@ -40,6 +41,7 @@ interface NewsListResponse {
 
 export default function NewsPage() {
   const { actualTheme } = useTheme()
+  const { isAuthenticated } = useAuth()
   const toast = useToast()
   const { prefetch } = usePrefetchLimiter()
 
@@ -47,6 +49,7 @@ export default function NewsPage() {
   const pageSize = 18
   const [category, setCategory] = useState<string | null>(null)
   const [keyword, setKeyword] = useState('')
+  const [favoritesOnly, setFavoritesOnly] = useState(false)
 
   const [debouncedKeyword, setDebouncedKeyword] = useState('')
 
@@ -57,7 +60,7 @@ export default function NewsPage() {
 
   useEffect(() => {
     setPage(1)
-  }, [category, keyword])
+  }, [category, keyword, favoritesOnly])
 
   const categoriesQuery = useQuery({
     queryKey: queryKeys.newsCategories(),
@@ -73,7 +76,9 @@ export default function NewsPage() {
   })
 
   const newsQuery = useQuery({
-    queryKey: queryKeys.newsList(page, pageSize, category, debouncedKeyword.trim()),
+    queryKey: favoritesOnly
+      ? queryKeys.newsFavoritesList(page, pageSize, category, debouncedKeyword.trim())
+      : queryKeys.newsList(page, pageSize, category, debouncedKeyword.trim()),
     queryFn: async () => {
       const params = new URLSearchParams()
       params.set('page', String(page))
@@ -81,9 +86,11 @@ export default function NewsPage() {
       if (category) params.set('category', category)
       if (debouncedKeyword.trim()) params.set('keyword', debouncedKeyword.trim())
 
-      const res = await api.get(`/news?${params.toString()}`)
+      const endpoint = favoritesOnly ? '/news/favorites' : '/news'
+      const res = await api.get(`${endpoint}?${params.toString()}`)
       return res.data as NewsListResponse
     },
+    enabled: favoritesOnly ? isAuthenticated : true,
     placeholderData: (prev) => prev,
     retry: 1,
     refetchOnWindowFocus: false,
@@ -151,6 +158,16 @@ export default function NewsPage() {
         />
 
         <div className="mt-5 flex flex-wrap gap-2">
+          {isAuthenticated ? (
+            <Chip
+              key="__favorites"
+              size="sm"
+              active={favoritesOnly}
+              onClick={() => setFavoritesOnly((prev) => !prev)}
+            >
+              我的收藏
+            </Chip>
+          ) : null}
           {displayCategories.map((cat) => {
             const active = (cat === '全部' && !category) || cat === category
             return (

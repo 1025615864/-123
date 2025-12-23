@@ -9,6 +9,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
 import { getApiErrorMessage } from "../utils";
 import { queryKeys } from "../queryKeys";
+import MarkdownContent from "../components/MarkdownContent";
 
 interface NewsDetail {
   id: number;
@@ -23,6 +24,69 @@ interface NewsDetail {
   is_favorited: boolean;
   published_at: string;
   created_at: string;
+}
+
+function stripMarkdown(input: string): string {
+  return String(input || '')
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, '')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/```[\s\S]*?```/g, '')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/[#>*_~|-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function upsertMetaTag(
+  attr: 'name' | 'property',
+  key: string,
+  content: string
+): () => void {
+  const selector = `meta[${attr}="${key}"]`;
+  const existing = document.head.querySelector(selector) as HTMLMetaElement | null;
+  const created = !existing;
+  const el = existing ?? document.createElement('meta');
+  if (created) {
+    el.setAttribute(attr, key);
+    document.head.appendChild(el);
+  }
+  const prev = el.getAttribute('content');
+  el.setAttribute('content', content);
+  return () => {
+    if (created) {
+      el.remove();
+      return;
+    }
+    if (prev == null) {
+      el.removeAttribute('content');
+    } else {
+      el.setAttribute('content', prev);
+    }
+  };
+}
+
+function upsertLinkRel(rel: string, href: string): () => void {
+  const selector = `link[rel="${rel}"]`;
+  const existing = document.head.querySelector(selector) as HTMLLinkElement | null;
+  const created = !existing;
+  const el = existing ?? document.createElement('link');
+  if (created) {
+    el.rel = rel;
+    document.head.appendChild(el);
+  }
+  const prevHref = el.getAttribute('href');
+  el.setAttribute('href', href);
+  return () => {
+    if (created) {
+      el.remove();
+      return;
+    }
+    if (prevHref == null) {
+      el.removeAttribute('href');
+    } else {
+      el.setAttribute('href', prevHref);
+    }
+  };
 }
 
 export default function NewsDetailPage() {
@@ -55,6 +119,54 @@ export default function NewsDetailPage() {
   const news = newsQuery.data ?? null;
   const bookmarked = !!news?.is_favorited;
   const favoriteCount = Number(news?.favorite_count || 0);
+
+  useEffect(() => {
+    if (!news) return;
+
+    const prevTitle = document.title;
+    const safeTitle = typeof news.title === 'string' ? news.title : '';
+    const safeSummary = typeof (news as any).summary === 'string' ? (news as any).summary : '';
+    const safeContent = typeof news.content === 'string' ? news.content : '';
+
+    document.title = safeTitle ? `${safeTitle} - 法律资讯` : prevTitle;
+
+    const url = window.location.href;
+    const description = (safeSummary.trim() || stripMarkdown(safeContent).slice(0, 140)).trim();
+    const imageUrl = typeof news.cover_image === 'string' && news.cover_image ? news.cover_image : '';
+
+    const cleanups: Array<() => void> = [];
+
+    if (description) {
+      cleanups.push(upsertMetaTag('name', 'description', description));
+      cleanups.push(upsertMetaTag('property', 'og:description', description));
+      cleanups.push(upsertMetaTag('name', 'twitter:description', description));
+    }
+
+    if (safeTitle) {
+      cleanups.push(upsertMetaTag('property', 'og:title', safeTitle));
+      cleanups.push(upsertMetaTag('name', 'twitter:title', safeTitle));
+    }
+
+    if (url) {
+      cleanups.push(upsertMetaTag('property', 'og:url', url));
+      cleanups.push(upsertLinkRel('canonical', url));
+    }
+
+    const card = imageUrl ? 'summary_large_image' : 'summary';
+    cleanups.push(upsertMetaTag('name', 'twitter:card', card));
+
+    if (imageUrl) {
+      cleanups.push(upsertMetaTag('property', 'og:image', imageUrl));
+      cleanups.push(upsertMetaTag('name', 'twitter:image', imageUrl));
+    }
+
+    cleanups.push(upsertMetaTag('property', 'og:type', 'article'));
+
+    return () => {
+      document.title = prevTitle;
+      for (const fn of cleanups.reverse()) fn();
+    };
+  }, [newsId, news?.title, (news as any)?.summary, news?.content, news?.cover_image]);
 
   const bookmarkMutation = useMutation({
     mutationFn: async () => {
@@ -215,11 +327,7 @@ export default function NewsDetailPage() {
         )}
 
         {/* 正文 */}
-        <div className="prose prose-lg max-w-none dark:prose-invert">
-          <div className="text-slate-700 leading-relaxed whitespace-pre-wrap dark:text-white/80">
-            {news.content}
-          </div>
-        </div>
+        <MarkdownContent content={news.content} className="text-base" />
 
         {/* 操作栏 */}
         <div className="flex items-center gap-4 mt-12 pt-8 border-t border-slate-200/70 dark:border-white/5">

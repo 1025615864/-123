@@ -16,6 +16,10 @@ export const queryKeys = {
   newsCategories: () => ['news-categories'] as const,
   newsList: (page: number, pageSize: number, category: string | null, keyword: string) =>
     ['news', { page, pageSize, category, keyword }] as const,
+  newsFavoritesList: (page: number, pageSize: number, category: string | null, keyword: string) =>
+    ['news-favorites', { page, pageSize, category, keyword }] as const,
+  newsTop: (limit: number) => ['news-top', { limit }] as const,
+  newsRecent: (limit: number) => ['news-recent', { limit }] as const,
   newsDetail: (newsId: string | undefined) => ['news', newsId] as const,
 
   documentTypes: () => ['document-types'] as const,
@@ -24,7 +28,10 @@ export const queryKeys = {
 
   forumPost: (postId: string | undefined) => ['forum-post', postId] as const,
   forumPostComments: (postId: string | undefined) => ['forum-post-comments', postId] as const,
+  forumMyComments: (page: number, pageSize: number, status: string) =>
+    ['forum-my-comments', { page, pageSize, status }] as const,
   forumPostsRoot: () => ['forum-posts'] as const,
+  forumHotPosts: (limit: number, category: string | null) => ['forum-hot-posts', { limit, category }] as const,
   forumPosts: (
     page: number,
     pageSize: number,
@@ -44,12 +51,16 @@ export const queryKeys = {
     ] as const,
 
   forumStats: () => ['forum-stats'] as const,
-  adminForumPosts: (page: number, pageSize: number, keyword: string, category: string) =>
-    ['admin-forum-posts', { page, pageSize, keyword, category }] as const,
+  adminForumPosts: (page: number, pageSize: number, keyword: string, category: string, deleted: boolean) =>
+    ['admin-forum-posts', { page, pageSize, keyword, category, deleted }] as const,
   adminForumPendingComments: (page: number, pageSize: number) =>
     ['admin-forum-pending-comments', { page, pageSize }] as const,
+  adminForumPendingPosts: (page: number, pageSize: number) =>
+    ['admin-forum-pending-posts', { page, pageSize }] as const,
   adminForumContentStats: () => ['admin-forum-content-stats'] as const,
   adminForumWords: () => ['admin-forum-words'] as const,
+  adminForumPostReviewConfig: () => ['admin-forum-post-review-config'] as const,
+  adminForumContentFilterConfig: () => ['admin-forum-content-filter-config'] as const,
 
   knowledgeTemplates: (isActive: boolean) => ['knowledge-templates', { is_active: isActive }] as const,
 

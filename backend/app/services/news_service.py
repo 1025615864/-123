@@ -1,7 +1,7 @@
 """新闻服务层"""
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, update, and_
+from sqlalchemy import select, func, desc, update, and_, or_
 from sqlalchemy.exc import IntegrityError
 
 from ..models.news import News, NewsFavorite
@@ -69,7 +69,14 @@ class NewsService:
             count_query = count_query.where(News.category == category)
         
         if keyword:
-            search_filter = News.title.contains(keyword) | News.content.contains(keyword)
+            pattern = f"%{keyword}%"
+            search_filter = or_(
+                News.title.ilike(pattern),
+                News.summary.ilike(pattern),
+                News.content.ilike(pattern),
+                News.source.ilike(pattern),
+                News.author.ilike(pattern),
+            )
             query = query.where(search_filter)
             count_query = count_query.where(search_filter)
         

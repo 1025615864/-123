@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react'
-import { Image, Link, Smile, Bold, Italic, List, X, Upload } from 'lucide-react'
+import { Image, Link, Smile, Bold, Italic, List, X, Upload, Paperclip } from 'lucide-react'
 import { Button, FadeInImage } from './ui'
 import api from '../api/client'
 import { useToast } from '../hooks'
@@ -23,6 +23,8 @@ interface RichTextEditorProps {
   placeholder?: string
   images?: string[]
   onImagesChange?: (images: string[]) => void
+  attachments?: Array<{ name: string; url: string }>
+  onAttachmentsChange?: (attachments: Array<{ name: string; url: string }>) => void
   minHeight?: string
 }
 
@@ -32,15 +34,19 @@ export default function RichTextEditor({
   placeholder = '请输入内容...',
   images = [],
   onImagesChange,
+  attachments = [],
+  onAttachmentsChange,
   minHeight = '200px',
 }: RichTextEditorProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const attachmentInputRef = useRef<HTMLInputElement>(null)
   const [showEmojiPicker, setShowEmojiPicker] = useState(false)
   const [showLinkInput, setShowLinkInput] = useState(false)
   const [linkUrl, setLinkUrl] = useState('')
   const [linkText, setLinkText] = useState('')
   const [uploading, setUploading] = useState(false)
+  const [uploadingAttachment, setUploadingAttachment] = useState(false)
   const toast = useToast()
 
   // 插入文本到光标位置
@@ -117,12 +123,47 @@ export default function RichTextEditor({
 
       if (uploadedUrls.length > 0) {
         onImagesChange([...images, ...uploadedUrls])
+        const md = uploadedUrls.map((url) => `![](${url})`).join('\n')
+        insertText(`\n\n${md}\n\n`)
       }
     } catch (err) {
       toast.error(getApiErrorMessage(err, '上传失败，请稍后重试'))
     } finally {
       setUploading(false)
       // 清空input以允许重复选择同一文件
+      e.target.value = ''
+    }
+  }
+
+  const handleAttachmentUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (!files || !onAttachmentsChange) return
+
+    setUploadingAttachment(true)
+    try {
+      const uploaded: Array<{ name: string; url: string }> = []
+      for (const file of Array.from(files)) {
+        const formData = new FormData()
+        formData.append('file', file)
+        const res = await api.post('/upload/file', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        })
+        const url = res.data?.url
+        const name = res.data?.original_name || file.name
+        if (typeof url === 'string' && url) {
+          uploaded.push({ name: String(name || '附件'), url })
+        }
+      }
+
+      if (uploaded.length > 0) {
+        onAttachmentsChange([...attachments, ...uploaded])
+        const md = uploaded.map((att) => `[${att.name}](${att.url})`).join('\n')
+        insertText(`\n\n${md}\n\n`)
+      }
+    } catch (err) {
+      toast.error(getApiErrorMessage(err, '上传失败，请稍后重试'))
+    } finally {
+      setUploadingAttachment(false)
       e.target.value = ''
     }
   }
@@ -262,6 +303,27 @@ export default function RichTextEditor({
             />
           </>
         )}
+
+        {onAttachmentsChange ? (
+          <>
+            <button
+              type="button"
+              onClick={() => attachmentInputRef.current?.click()}
+              disabled={uploadingAttachment}
+              className="p-2 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-900/5 transition-colors disabled:opacity-60 disabled:cursor-not-allowed dark:text-white/60 dark:hover:text-white dark:hover:bg-white/10"
+              title="上传附件"
+            >
+              <Paperclip className="h-4 w-4" />
+            </button>
+            <input
+              ref={attachmentInputRef}
+              type="file"
+              multiple
+              onChange={handleAttachmentUpload}
+              className="hidden"
+            />
+          </>
+        ) : null}
       </div>
 
       {/* 文本区域 */}
