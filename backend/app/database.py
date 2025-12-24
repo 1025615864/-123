@@ -64,6 +64,53 @@ async def init_db():
 
         if engine.url.get_backend_name() == "sqlite":
             try:
+                news_cols_result = await conn.execute(text("PRAGMA table_info(news)"))
+                news_cols = {row[1] for row in news_cols_result.fetchall()}
+                if "scheduled_publish_at" not in news_cols:
+                    _ = await conn.execute(text("ALTER TABLE news ADD COLUMN scheduled_publish_at DATETIME"))
+                if "scheduled_unpublish_at" not in news_cols:
+                    _ = await conn.execute(text("ALTER TABLE news ADD COLUMN scheduled_unpublish_at DATETIME"))
+
+                tables_result = await conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
+                tables = {row[0] for row in tables_result.fetchall()}
+                if "news_comments" not in tables:
+                    _ = await conn.execute(
+                        text(
+                            "CREATE TABLE IF NOT EXISTS news_comments (id INTEGER PRIMARY KEY AUTOINCREMENT, news_id INTEGER NOT NULL, user_id INTEGER NOT NULL, content TEXT NOT NULL, is_deleted BOOLEAN DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+                        )
+                    )
+                    _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_comments_news_id ON news_comments(news_id)"))
+                    _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_comments_user_id ON news_comments(user_id)"))
+                    _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_comments_created_at ON news_comments(created_at)"))
+
+                if "news_topics" not in tables:
+                    _ = await conn.execute(
+                        text(
+                            "CREATE TABLE IF NOT EXISTS news_topics (id INTEGER PRIMARY KEY AUTOINCREMENT, title VARCHAR(200) NOT NULL, description VARCHAR(500), cover_image VARCHAR(255), is_active BOOLEAN DEFAULT 1, sort_order INTEGER DEFAULT 0, auto_category VARCHAR(50), auto_keyword VARCHAR(100), auto_limit INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+                        )
+                    )
+                    _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_topics_sort_order ON news_topics(sort_order)"))
+                    _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_topics_is_active ON news_topics(is_active)"))
+                else:
+                    topics_cols_result = await conn.execute(text("PRAGMA table_info(news_topics)"))
+                    topics_cols = {row[1] for row in topics_cols_result.fetchall()}
+                    if "auto_category" not in topics_cols:
+                        _ = await conn.execute(text("ALTER TABLE news_topics ADD COLUMN auto_category VARCHAR(50)"))
+                    if "auto_keyword" not in topics_cols:
+                        _ = await conn.execute(text("ALTER TABLE news_topics ADD COLUMN auto_keyword VARCHAR(100)"))
+                    if "auto_limit" not in topics_cols:
+                        _ = await conn.execute(text("ALTER TABLE news_topics ADD COLUMN auto_limit INTEGER DEFAULT 0"))
+
+                if "news_topic_items" not in tables:
+                    _ = await conn.execute(
+                        text(
+                            "CREATE TABLE IF NOT EXISTS news_topic_items (id INTEGER PRIMARY KEY AUTOINCREMENT, topic_id INTEGER NOT NULL, news_id INTEGER NOT NULL, position INTEGER DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP, UNIQUE(topic_id, news_id))"
+                        )
+                    )
+                    _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_topic_items_topic ON news_topic_items(topic_id)"))
+                    _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_topic_items_news ON news_topic_items(news_id)"))
+                    _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_topic_items_position ON news_topic_items(position)"))
+
                 posts_cols_result = await conn.execute(text("PRAGMA table_info(posts)"))
                 posts_cols = {row[1] for row in posts_cols_result.fetchall()}
                 posts_missing: list[str] = []
@@ -200,6 +247,39 @@ async def init_db():
 
         if engine.url.get_backend_name() == "postgresql":
             try:
+                _ = await conn.execute(text("ALTER TABLE news ADD COLUMN IF NOT EXISTS scheduled_publish_at TIMESTAMPTZ"))
+                _ = await conn.execute(text("ALTER TABLE news ADD COLUMN IF NOT EXISTS scheduled_unpublish_at TIMESTAMPTZ"))
+
+                _ = await conn.execute(
+                    text(
+                        "CREATE TABLE IF NOT EXISTS news_comments (id SERIAL PRIMARY KEY, news_id INTEGER NOT NULL, user_id INTEGER NOT NULL, content TEXT NOT NULL, is_deleted BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT NOW())"
+                    )
+                )
+                _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_comments_news_id ON news_comments(news_id)"))
+                _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_comments_user_id ON news_comments(user_id)"))
+                _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_comments_created_at ON news_comments(created_at)"))
+
+                _ = await conn.execute(
+                    text(
+                        "CREATE TABLE IF NOT EXISTS news_topics (id SERIAL PRIMARY KEY, title VARCHAR(200) NOT NULL, description VARCHAR(500), cover_image VARCHAR(255), is_active BOOLEAN DEFAULT TRUE, sort_order INTEGER DEFAULT 0, auto_category VARCHAR(50), auto_keyword VARCHAR(100), auto_limit INTEGER DEFAULT 0, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW())"
+                    )
+                )
+                _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_topics_sort_order ON news_topics(sort_order)"))
+                _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_topics_is_active ON news_topics(is_active)"))
+
+                _ = await conn.execute(text("ALTER TABLE news_topics ADD COLUMN IF NOT EXISTS auto_category VARCHAR(50)"))
+                _ = await conn.execute(text("ALTER TABLE news_topics ADD COLUMN IF NOT EXISTS auto_keyword VARCHAR(100)"))
+                _ = await conn.execute(text("ALTER TABLE news_topics ADD COLUMN IF NOT EXISTS auto_limit INTEGER DEFAULT 0"))
+
+                _ = await conn.execute(
+                    text(
+                        "CREATE TABLE IF NOT EXISTS news_topic_items (id SERIAL PRIMARY KEY, topic_id INTEGER NOT NULL, news_id INTEGER NOT NULL, position INTEGER DEFAULT 0, created_at TIMESTAMPTZ DEFAULT NOW(), CONSTRAINT uq_news_topic_items_topic_news UNIQUE(topic_id, news_id))"
+                    )
+                )
+                _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_topic_items_topic ON news_topic_items(topic_id)"))
+                _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_topic_items_news ON news_topic_items(news_id)"))
+                _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_topic_items_position ON news_topic_items(position)"))
+
                 _ = await conn.execute(
                     text(
                         "ALTER TABLE posts ADD COLUMN IF NOT EXISTS review_status VARCHAR(20)"

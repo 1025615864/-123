@@ -15,6 +15,8 @@ class NewsCreate(BaseModel):
     author: str | None = Field(None, max_length=50, description="作者")
     is_top: bool = Field(default=False, description="是否置顶")
     is_published: bool = Field(default=True, description="是否发布")
+    scheduled_publish_at: datetime | None = Field(None, description="定时发布时间")
+    scheduled_unpublish_at: datetime | None = Field(None, description="定时下线时间")
 
 
 class NewsUpdate(BaseModel):
@@ -28,6 +30,8 @@ class NewsUpdate(BaseModel):
     author: str | None = None
     is_top: bool | None = None
     is_published: bool | None = None
+    scheduled_publish_at: datetime | None = None
+    scheduled_unpublish_at: datetime | None = None
 
 
 class NewsResponse(BaseModel):
@@ -46,6 +50,8 @@ class NewsResponse(BaseModel):
     is_top: bool
     is_published: bool
     published_at: datetime | None = None
+    scheduled_publish_at: datetime | None = None
+    scheduled_unpublish_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     
@@ -93,6 +99,8 @@ class NewsAdminListItem(BaseModel):
     is_top: bool
     is_published: bool
     published_at: datetime | None = None
+    scheduled_publish_at: datetime | None = None
+    scheduled_unpublish_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -133,3 +141,168 @@ class NewsSubscriptionResponse(BaseModel):
     created_at: datetime
 
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
+
+
+class NewsCommentAuthor(BaseModel):
+    id: int
+    username: str
+    nickname: str | None = None
+    avatar: str | None = None
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
+
+
+class NewsCommentCreate(BaseModel):
+    content: str = Field(..., min_length=1, description="评论内容")
+
+
+class NewsCommentResponse(BaseModel):
+    id: int
+    news_id: int
+    user_id: int
+    content: str
+    created_at: datetime
+    author: NewsCommentAuthor | None = None
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
+
+
+class NewsCommentListResponse(BaseModel):
+    items: list[NewsCommentResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class NewsTopicCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    description: str | None = Field(None, max_length=500)
+    cover_image: str | None = None
+    is_active: bool = True
+    sort_order: int = 0
+    auto_category: str | None = Field(None, max_length=50)
+    auto_keyword: str | None = Field(None, max_length=100)
+    auto_limit: int = Field(0, ge=0, le=500)
+
+
+class NewsTopicUpdate(BaseModel):
+    title: str | None = Field(None, max_length=200)
+    description: str | None = Field(None, max_length=500)
+    cover_image: str | None = None
+    is_active: bool | None = None
+    sort_order: int | None = None
+    auto_category: str | None = Field(None, max_length=50)
+    auto_keyword: str | None = Field(None, max_length=100)
+    auto_limit: int | None = Field(None, ge=0, le=500)
+
+
+class NewsTopicResponse(BaseModel):
+    id: int
+    title: str
+    description: str | None = None
+    cover_image: str | None = None
+    is_active: bool
+    sort_order: int
+    auto_category: str | None = None
+    auto_keyword: str | None = None
+    auto_limit: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
+
+
+class NewsTopicListResponse(BaseModel):
+    items: list[NewsTopicResponse]
+
+
+class NewsTopicDetailResponse(BaseModel):
+    topic: NewsTopicResponse
+    items: list[NewsListItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class NewsTopicItemCreate(BaseModel):
+    news_id: int
+    position: int | None = None
+
+
+class NewsTopicItemBulkCreate(BaseModel):
+    news_ids: list[int]
+    position_start: int | None = None
+
+
+class NewsTopicItemBulkResponse(BaseModel):
+    requested: int
+    added: int
+    skipped: int
+
+
+class NewsTopicItemBulkDelete(BaseModel):
+    item_ids: list[int]
+
+
+class NewsTopicItemBulkDeleteResponse(BaseModel):
+    requested: int
+    deleted: int
+    skipped: int
+
+
+class NewsTopicItemsReindexResponse(BaseModel):
+    updated: int
+
+
+class NewsTopicItemsReorderRequest(BaseModel):
+    item_ids: list[int]
+
+
+class NewsTopicAutoCacheRefreshResponse(BaseModel):
+    cached: int
+
+
+class NewsTopicImportRequest(BaseModel):
+    category: str | None = None
+    keyword: str | None = None
+    limit: int = Field(50, ge=1, le=500)
+    include_unpublished: bool = False
+    position_start: int | None = None
+
+
+class NewsTopicImportResponse(BaseModel):
+    requested: int
+    added: int
+    skipped: int
+
+
+class NewsTopicItemUpdate(BaseModel):
+    position: int
+
+
+class NewsTopicItemBrief(BaseModel):
+    id: int
+    news_id: int
+    position: int
+    title: str
+    category: str
+
+
+class NewsTopicAdminDetailResponse(BaseModel):
+    topic: NewsTopicResponse
+    items: list[NewsTopicItemBrief]
+
+
+class NewsTopicReportItem(BaseModel):
+    id: int
+    title: str
+    is_active: bool
+    sort_order: int
+    manual_item_count: int
+    manual_view_count: int
+    manual_favorite_count: int
+    manual_conversion_rate: float
+
+
+class NewsTopicReportResponse(BaseModel):
+    items: list[NewsTopicReportItem]

@@ -1,6 +1,7 @@
 """百姓法律助手 - FastAPI主应用"""
 from contextlib import asynccontextmanager
 import logging
+import asyncio
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import ResponseValidationError
@@ -9,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import get_settings
 from .database import init_db
 from .services.cache_service import cache_service
+from .database import AsyncSessionLocal
 from .routers import api_router, websocket
 from .middleware.logging_middleware import RequestLoggingMiddleware, ErrorLoggingMiddleware
 from .middleware.rate_limit import RateLimitMiddleware
@@ -31,6 +33,24 @@ async def lifespan(app: FastAPI):
     _ = app
     await init_db()
 
+    stop_event = asyncio.Event()
+
+    async def _scheduled_news_loop():
+        while not stop_event.is_set():
+            try:
+                async with AsyncSessionLocal() as session:
+                    from .services.news_service import news_service
+
+                    _ = await news_service.process_scheduled_news(session)
+            except Exception:
+                logger.exception("处理定时新闻任务失败")
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=30.0)
+            except asyncio.TimeoutError:
+                pass
+
+    scheduled_task = asyncio.create_task(_scheduled_news_loop())
+
     if settings.redis_url:
         _ = await cache_service.connect(settings.redis_url)
 
@@ -41,6 +61,13 @@ async def lifespan(app: FastAPI):
         logger.info("AI助手模块未启用")
     
     yield
+
+    stop_event.set()
+    scheduled_task.cancel()
+    try:
+        await scheduled_task
+    except Exception:
+        pass
 
     await cache_service.disconnect()
 

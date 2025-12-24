@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Integer, String, Text, DateTime, Boolean, ForeignKey, UniqueConstraint, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 from ..database import Base
+
+if TYPE_CHECKING:
+    from .user import User
 
 
 class News(Base):
@@ -25,8 +29,71 @@ class News(Base):
     is_top: Mapped[bool] = mapped_column(Boolean, default=False)  # 置顶
     is_published: Mapped[bool] = mapped_column(Boolean, default=True)  # 是否发布
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # 发布时间
+    scheduled_publish_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scheduled_unpublish_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class NewsComment(Base):
+    """新闻评论表"""
+
+    __tablename__: str = "news_comments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    news_id: Mapped[int] = mapped_column(Integer, ForeignKey("news.id"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    news: Mapped[News] = relationship("News")
+    author: Mapped[User] = relationship("User", backref="news_comments")
+
+
+class NewsTopic(Base):
+    """新闻专题/合集"""
+
+    __tablename__: str = "news_topics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    cover_image: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    auto_category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    auto_keyword: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    auto_limit: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    items: Mapped[list["NewsTopicItem"]] = relationship(
+        "NewsTopicItem",
+        back_populates="topic",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+
+
+class NewsTopicItem(Base):
+    """专题-新闻关联"""
+
+    __tablename__: str = "news_topic_items"
+    __table_args__: tuple[object, ...] = (
+        UniqueConstraint("topic_id", "news_id", name="uq_news_topic_items_topic_news"),
+        Index("ix_news_topic_items_topic", "topic_id"),
+        Index("ix_news_topic_items_news", "news_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    topic_id: Mapped[int] = mapped_column(Integer, ForeignKey("news_topics.id"), nullable=False)
+    news_id: Mapped[int] = mapped_column(Integer, ForeignKey("news.id"), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    topic: Mapped[NewsTopic] = relationship("NewsTopic", back_populates="items")
+    news: Mapped[News] = relationship("News")
 
 
 class NewsFavorite(Base):
