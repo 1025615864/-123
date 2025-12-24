@@ -203,8 +203,8 @@ class LogListResponse(BaseModel):
 async def get_admin_logs(
     _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     module: str | None = None,
     action: str | None = None,
     user_id: int | None = None,
@@ -236,7 +236,7 @@ async def get_admin_logs(
         parsed_extra: dict[str, object] | None = None
         if log.extra_data:
             try:
-                value = json.loads(log.extra_data)
+                value = cast(object, json.loads(log.extra_data))
                 if isinstance(value, dict):
                     parsed_extra = cast(dict[str, object], value)
                 else:
@@ -396,7 +396,7 @@ async def get_stats_overview(
 async def get_daily_stats(
     _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    days: int = Query(7, ge=1, le=30),
+    days: Annotated[int, Query(ge=1, le=30)] = 7,
 ):
     """获取每日统计（最近N天）"""
     from datetime import date, timedelta
@@ -567,7 +567,7 @@ async def get_dashboard_overview(
 async def get_dashboard_trends(
     _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    days: int = Query(30, ge=7, le=90, description="统计天数"),
+    days: Annotated[int, Query(ge=7, le=90, description="统计天数")] = 30,
 ):
     """获取近N天的趋势数据"""
     from datetime import timedelta
@@ -665,8 +665,8 @@ async def get_category_stats(
 async def get_dashboard_news_stats(
     _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    days: int = Query(7, ge=1, le=90),
-    limit: int = Query(5, ge=1, le=20),
+    days: Annotated[int, Query(ge=1, le=90)] = 7,
+    limit: Annotated[int, Query(ge=1, le=20)] = 5,
 ):
     from datetime import timedelta
 
@@ -798,7 +798,7 @@ async def get_realtime_stats(
 async def get_hot_content(
     _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    limit: int = Query(10, ge=1, le=50),
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
 ):
     """获取热门内容（帖子 counting by view_count，新闻 counting by view_count）"""
     _ = _current_user
@@ -889,7 +889,7 @@ async def track_activity(
 async def get_page_stats(
     _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    days: int = Query(7, ge=1, le=30),
+    days: Annotated[int, Query(ge=1, le=30)] = 7,
 ):
     """获取页面访问统计"""
     from datetime import timedelta
@@ -929,7 +929,7 @@ async def get_page_stats(
 async def get_user_behavior(
     _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    days: int = Query(7, ge=1, le=30),
+    days: Annotated[int, Query(ge=1, le=30)] = 7,
 ):
     """获取用户行为分析数据"""
     from datetime import timedelta
@@ -991,7 +991,7 @@ async def get_user_behavior(
 async def get_user_journey(
     _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    limit: int = Query(100, ge=10, le=500),
+    limit: Annotated[int, Query(ge=10, le=500)] = 100,
 ):
     """获取用户访问路径（最近N条记录）"""
     result = await db.execute(

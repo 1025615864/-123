@@ -1,7 +1,7 @@
 """搜索服务 - 提供全局搜索功能"""
 import logging
 from typing import Literal, TypedDict, cast
-from sqlalchemy import or_, func
+from sqlalchemy import or_, func, desc, case
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 
@@ -17,6 +17,7 @@ class NewsSearchItem(TypedDict):
     id: int
     title: str
     summary: str | None
+    snippet: str | None
     type: Literal["news"]
 
 
@@ -63,6 +64,28 @@ class HotKeyword(TypedDict):
 
 class SearchService:
     """全局搜索服务"""
+
+    @staticmethod
+    def _make_snippet(source: str | None, keyword: str, max_len: int = 120) -> str | None:
+        text = " ".join(str(source or "").split())
+        if not text:
+            return None
+        kw = str(keyword or "").strip()
+        if not kw:
+            return text[:max_len]
+        low = text.lower()
+        k = kw.lower()
+        idx = low.find(k)
+        if idx < 0:
+            return text[:max_len]
+        start = max(0, idx - 30)
+        end = min(len(text), idx + len(k) + 60)
+        snippet = text[start:end]
+        if start > 0:
+            snippet = "..." + snippet
+        if end < len(text):
+            snippet = snippet + "..."
+        return snippet
     
     async def global_search(
         self, 
@@ -86,23 +109,41 @@ class SearchService:
         if not query or len(query) < 2:
             return results
         
-        search_term = f"%{query}%"
+        q = str(query or "").strip()
+        search_term = f"%{q}%"
         
         # 搜索新闻
-        news_query = select(News).where(
-            or_(
-                News.title.ilike(search_term),
-                News.content.ilike(search_term),
-                News.summary.ilike(search_term)
-            ),
-            News.is_published == True
-        ).limit(limit)
+        title_hit = News.title.ilike(search_term)
+        summary_hit = News.summary.ilike(search_term)
+        content_hit = News.content.ilike(search_term)
+
+        news_query = (
+            select(News)
+            .where(or_(title_hit, summary_hit, content_hit), News.is_published == True)
+            .order_by(
+                desc(
+                    case(
+                        (title_hit, 3),
+                        (summary_hit, 2),
+                        (content_hit, 1),
+                        else_=0,
+                    )
+                ),
+                desc(News.is_top),
+                desc(News.published_at),
+                desc(func.coalesce(News.view_count, 0)),
+                desc(News.created_at),
+            )
+            .limit(limit)
+        )
         news_result = await db.execute(news_query)
         for news in news_result.scalars():
+            snippet = self._make_snippet(news.summary or news.content, q, 120)
             results["news"].append({
                 "id": news.id,
                 "title": news.title,
                 "summary": news.summary,
+                "snippet": snippet,
                 "type": "news"
             })
         
