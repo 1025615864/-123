@@ -125,6 +125,50 @@ class CacheService:
                 count += 1
         return count
 
+    async def acquire_lock(self, key: str, value: str, expire: int = 60) -> bool:
+        if self._connected and self._redis:
+            try:
+                result = await self._redis.set(key, value, ex=int(expire), nx=True)
+                return bool(result)
+            except Exception as e:
+                logger.error(f"Redis acquire_lock error: {e}")
+                return False
+
+        import time
+        now = time.time()
+        existing = _memory_cache.get(key)
+        if existing is not None:
+            _v, expires_at = existing
+            if now < expires_at:
+                return False
+        _memory_cache[key] = (value, now + float(expire))
+        return True
+
+    async def release_lock(self, key: str, value: str) -> bool:
+        if self._connected and self._redis:
+            try:
+                script = """
+                if redis.call('get', KEYS[1]) == ARGV[1] then
+                  return redis.call('del', KEYS[1])
+                else
+                  return 0
+                end
+                """
+                result = await self._redis.eval(script, 1, key, value)
+                return int(result or 0) > 0
+            except Exception as e:
+                logger.error(f"Redis release_lock error: {e}")
+                return False
+
+        existing = _memory_cache.get(key)
+        if existing is None:
+            return True
+        existing_value, _expires_at = existing
+        if existing_value != value:
+            return False
+        del _memory_cache[key]
+        return True
+
 
 # 单例实例
 cache_service = CacheService()

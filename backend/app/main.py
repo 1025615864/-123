@@ -2,6 +2,8 @@
 from contextlib import asynccontextmanager
 import logging
 import asyncio
+import os
+import uuid
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import ResponseValidationError
@@ -35,13 +37,29 @@ async def lifespan(app: FastAPI):
 
     stop_event = asyncio.Event()
 
+    lock_key = "locks:scheduled_news"
+    lock_ttl_seconds = 60
+    lock_value = f"{os.getpid()}-{uuid.uuid4().hex}"
+
+    scheduled_enabled = True
+    redis_connected = False
+
     async def _scheduled_news_loop():
         while not stop_event.is_set():
             try:
-                async with AsyncSessionLocal() as session:
-                    from .services.news_service import news_service
+                acquired = await cache_service.acquire_lock(
+                    lock_key,
+                    value=lock_value,
+                    expire=lock_ttl_seconds,
+                )
+                if acquired:
+                    try:
+                        async with AsyncSessionLocal() as session:
+                            from .services.news_service import news_service
 
-                    _ = await news_service.process_scheduled_news(session)
+                            _ = await news_service.process_scheduled_news(session)
+                    finally:
+                        _ = await cache_service.release_lock(lock_key, value=lock_value)
             except Exception:
                 logger.exception("处理定时新闻任务失败")
             try:
@@ -49,10 +67,16 @@ async def lifespan(app: FastAPI):
             except asyncio.TimeoutError:
                 pass
 
-    scheduled_task = asyncio.create_task(_scheduled_news_loop())
-
     if settings.redis_url:
-        _ = await cache_service.connect(settings.redis_url)
+        redis_connected = bool(await cache_service.connect(settings.redis_url))
+
+    if (not settings.debug) and (not redis_connected):
+        scheduled_enabled = False
+        logger.warning("Redis未连接且DEBUG为False：已禁用定时新闻任务（避免多worker重复执行）")
+
+    scheduled_task = None
+    if scheduled_enabled:
+        scheduled_task = asyncio.create_task(_scheduled_news_loop())
 
     logger.info("数据库初始化完成")
     if ai is not None:
@@ -63,11 +87,12 @@ async def lifespan(app: FastAPI):
     yield
 
     stop_event.set()
-    scheduled_task.cancel()
-    try:
-        await scheduled_task
-    except Exception:
-        pass
+    if scheduled_task is not None:
+        scheduled_task.cancel()
+        try:
+            await scheduled_task
+        except Exception:
+            pass
 
     await cache_service.disconnect()
 
