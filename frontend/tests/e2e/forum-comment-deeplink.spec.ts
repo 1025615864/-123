@@ -1,39 +1,12 @@
 import { test, expect } from '@playwright/test'
 
-const apiBase = process.env.E2E_API_BASE ?? 'http://localhost:5173/api'
-const adminUsername = process.env.E2E_ADMIN_USER ?? '123311'
-const adminPassword = process.env.E2E_ADMIN_PASS ?? '123311'
-
-async function registerAndLoginUser(request: any, now: number) {
-  const username = `e2e_u_${now}`
-  const email = `${username}@example.com`
-  const password = '12345678'
-
-  await request.post(`${apiBase}/user/register`, {
-    data: { username, email, password, nickname: username },
-  })
-
-  const loginRes = await request.post(`${apiBase}/user/login`, {
-    data: { username, password },
-  })
-  expect(loginRes.ok()).toBeTruthy()
-  const loginJson = await loginRes.json()
-  const token = loginJson?.token?.access_token
-  expect(token).toBeTruthy()
-
-  return { username, email, password, token: token as string }
-}
-
-async function loginAdmin(request: any) {
-  const res = await request.post(`${apiBase}/user/login`, {
-    data: { username: adminUsername, password: adminPassword },
-  })
-  expect(res.ok()).toBeTruthy()
-  const json = await res.json()
-  const token = json?.token?.access_token
-  expect(token).toBeTruthy()
-  return token as string
-}
+import {
+  apiBase,
+  adminUsername,
+  adminPassword,
+  loginAdmin,
+  registerAndLoginUser,
+} from './helpers'
 
 async function getPostReviewConfig(request: any, adminToken: string) {
   const res = await request.get(`${apiBase}/forum/admin/post-review-config`, {

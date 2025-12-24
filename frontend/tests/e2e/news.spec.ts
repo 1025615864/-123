@@ -1,87 +1,15 @@
 import { test, expect } from '@playwright/test'
 
-const apiBase = process.env.E2E_API_BASE ?? 'http://localhost:5173/api'
-const adminUsername = process.env.E2E_ADMIN_USER ?? '123311'
-const adminPassword = process.env.E2E_ADMIN_PASS ?? '123311'
-
-type NewUser = { username: string; email: string; password: string; token: string }
-
-async function registerAndLoginUser(request: any, now: number): Promise<NewUser> {
-  const username = `e2e_news_u_${now}`
-  const email = `${username}@example.com`
-  const password = '12345678'
-
-  await request.post(`${apiBase}/user/register`, {
-    data: { username, email, password, nickname: username },
-  })
-
-  const loginRes = await request.post(`${apiBase}/user/login`, {
-    data: { username, password },
-  })
-  expect(loginRes.ok()).toBeTruthy()
-  const loginJson = await loginRes.json()
-  const token = loginJson?.token?.access_token
-  expect(token).toBeTruthy()
-
-  return { username, email, password, token: token as string }
-}
-
-async function loginAdmin(request: any): Promise<string> {
-  const res = await request.post(`${apiBase}/user/login`, {
-    data: { username: adminUsername, password: adminPassword },
-  })
-  expect(res.ok()).toBeTruthy()
-  const json = await res.json()
-  const token = json?.token?.access_token
-  expect(token).toBeTruthy()
-  return token as string
-}
-
-async function createNews(
-  request: any,
-  adminToken: string,
-  payload: {
-    title: string
-    category: string
-    summary?: string | null
-    cover_image?: string | null
-    source?: string | null
-    author?: string | null
-    content: string
-    is_top: boolean
-    is_published: boolean
-  }
-): Promise<number> {
-  const res = await request.post(`${apiBase}/news`, {
-    headers: { Authorization: `Bearer ${adminToken}` },
-    data: payload,
-  })
-  expect(res.ok()).toBeTruthy()
-  const json = await res.json()
-  const id = json?.id
-  expect(id).toBeTruthy()
-  return Number(id)
-}
-
-async function updateNews(
-  request: any,
-  adminToken: string,
-  newsId: number,
-  payload: Record<string, unknown>
-): Promise<void> {
-  const res = await request.put(`${apiBase}/news/${newsId}`, {
-    headers: { Authorization: `Bearer ${adminToken}` },
-    data: payload,
-  })
-  expect(res.ok()).toBeTruthy()
-}
-
-async function deleteNews(request: any, adminToken: string, newsId: number): Promise<void> {
-  const res = await request.delete(`${apiBase}/news/${newsId}`, {
-    headers: { Authorization: `Bearer ${adminToken}` },
-  })
-  expect(res.ok()).toBeTruthy()
-}
+import {
+  apiBase,
+  adminUsername,
+  adminPassword,
+  loginAdmin,
+  registerAndLoginUser,
+  createNews,
+  updateNews,
+  deleteNews,
+} from './helpers'
 
 test('新闻列表：关键词搜索可命中 title/summary/source/author/content', async ({ page, request }) => {
   const now = Date.now()
@@ -227,10 +155,91 @@ test('新闻列表：热门新闻区块可见（按阅读量排序）', async ({
   }
 })
 
+test('新闻接口：热门新闻 hot 缓存命中（TTL 内新增高热新闻不应立即出现）', async ({ request }) => {
+  const now = Date.now()
+  const adminToken = await loginAdmin(request)
+
+  const token = `E2E_NEWS_HOT_CACHE_${now}`
+  const category = `热门缓存-${token}`
+
+  const hotA = await createNews(request, adminToken, {
+    title: `热门缓存新闻A-${token}`,
+    category,
+    summary: `摘要A-${token}`,
+    cover_image: null,
+    source: 'E2E',
+    author: 'E2E',
+    content: `内容A-${token}`,
+    is_top: false,
+    is_published: true,
+  })
+
+  const hotB = await createNews(request, adminToken, {
+    title: `热门缓存新闻B-${token}`,
+    category,
+    summary: `摘要B-${token}`,
+    cover_image: null,
+    source: 'E2E',
+    author: 'E2E',
+    content: `内容B-${token}`,
+    is_top: false,
+    is_published: true,
+  })
+
+  let hotC: number | null = null
+
+  try {
+    for (let i = 0; i < 40; i++) {
+      const res = await request.get(`${apiBase}/news/${hotA}`)
+      expect(res.ok()).toBeTruthy()
+    }
+    const resB = await request.get(`${apiBase}/news/${hotB}`)
+    expect(resB.ok()).toBeTruthy()
+
+    const hotUrl = `${apiBase}/news/hot?days=365&limit=2&category=${encodeURIComponent(category)}`
+    const first = await request.get(hotUrl)
+    expect(first.ok()).toBeTruthy()
+    const firstJson = await first.json()
+    const firstIds = Array.isArray(firstJson) ? firstJson.map((x: any) => Number(x?.id)) : []
+    expect(firstIds).toEqual([hotA, hotB])
+
+    hotC = await createNews(request, adminToken, {
+      title: `热门缓存新闻C-${token}`,
+      category,
+      summary: `摘要C-${token}`,
+      cover_image: null,
+      source: 'E2E',
+      author: 'E2E',
+      content: `内容C-${token}`,
+      is_top: false,
+      is_published: true,
+    })
+    for (let i = 0; i < 80; i++) {
+      const res = await request.get(`${apiBase}/news/${hotC}`)
+      expect(res.ok()).toBeTruthy()
+    }
+
+    const second = await request.get(hotUrl)
+    expect(second.ok()).toBeTruthy()
+    const secondJson = await second.json()
+    const secondIds = Array.isArray(secondJson) ? secondJson.map((x: any) => Number(x?.id)) : []
+
+    // cache hit: TTL 内仍应返回首次缓存的 top2
+    expect(secondIds).toEqual(firstIds)
+    expect(secondIds).not.toContain(hotC)
+  } finally {
+    if (hotC) {
+      await deleteNews(request, adminToken, hotC)
+    }
+    await deleteNews(request, adminToken, hotA)
+    await deleteNews(request, adminToken, hotB)
+  }
+})
+
 test('新闻列表：最近浏览（登录用户访问详情后可在列表中看到）', async ({ page, request }) => {
   const now = Date.now()
   const adminToken = await loginAdmin(request)
-  const user = await registerAndLoginUser(request, now)
+  const user = await registerAndLoginUser(request, now, 'e2e_news_u')
 
   const token = `E2E_NEWS_HISTORY_${now}`
   const newsId = await createNews(request, adminToken, {
@@ -266,7 +275,7 @@ test('新闻列表：最近浏览（登录用户访问详情后可在列表中�
 test('新闻订阅：订阅分类 -> 发布新闻 -> 通知中心可见', async ({ page, request }) => {
   const now = Date.now()
   const adminToken = await loginAdmin(request)
-  const user = await registerAndLoginUser(request, now)
+  const user = await registerAndLoginUser(request, now, 'e2e_news_u')
 
   const token = `E2E_NEWS_SUB_NOTIFY_${now}`
   const category = `订阅分类-${token}`
@@ -299,7 +308,7 @@ test('新闻订阅：订阅分类 -> 发布新闻 -> 通知中心可见', async 
     })
 
     await page.goto('/notifications')
-    await expect(page.getByText(`你订阅的新闻已发布：订阅通知新闻-${token}`).first()).toBeVisible({ timeout: 12_000 })
+    await expect(page.getByText(`订阅命中：订阅通知新闻-${token}`).first()).toBeVisible({ timeout: 20_000 })
 
     await page.getByRole('link', { name: '查看新闻' }).first().click()
     await expect(page.getByRole('heading', { level: 1, name: `订阅通知新闻-${token}` })).toBeVisible({ timeout: 12_000 })
@@ -389,7 +398,7 @@ test('新闻详情：相关推荐可见（同分类新闻优先）', async ({ pa
 test('新闻详情：正文支持 Markdown 渲染；登录用户可收藏并在“我的收藏”中可见', async ({ page, request }) => {
   const now = Date.now()
   const adminToken = await loginAdmin(request)
-  const user = await registerAndLoginUser(request, now)
+  const user = await registerAndLoginUser(request, now, 'e2e_news_u')
 
   const token = `E2E_NEWS_MD_${now}`
   const newsId = await createNews(request, adminToken, {
