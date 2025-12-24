@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
+const pythonCmd = process.platform === 'win32' ? 'py' : 'python'
+
 export default defineConfig({
   testDir: './tests/e2e',
   timeout: 60_000,
@@ -19,7 +21,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: 'python -m uvicorn app.main:app --app-dir ../backend --host 0.0.0.0 --port 8000',
+      command: `${pythonCmd} -m uvicorn app.main:app --app-dir ../backend --host 0.0.0.0 --port 8000`,
       url: 'http://localhost:8000/health',
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
