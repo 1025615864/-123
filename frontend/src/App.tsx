@@ -28,6 +28,8 @@ const ProfilePage = lazy(() => import("./pages/ProfilePage"));
 const PostDetailPage = lazy(() => import("./pages/PostDetailPage"));
 const ChatHistoryPage = lazy(() => import("./pages/ChatHistoryPage"));
 const NewsDetailPage = lazy(() => import("./pages/NewsDetailPage"));
+const NewsTopicsPage = lazy(() => import("./pages/NewsTopicsPage"));
+const NewsTopicDetailPage = lazy(() => import("./pages/NewsTopicDetailPage"));
 const LawFirmDetailPage = lazy(() => import("./pages/LawFirmDetailPage"));
 const FeeCalculatorPage = lazy(() => import("./pages/FeeCalculatorPage"));
 const DocumentGeneratorPage = lazy(
@@ -39,6 +41,9 @@ const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
 const DashboardPage = lazy(() => import("./pages/admin/DashboardPage"));
 const UsersPage = lazy(() => import("./pages/admin/UsersPage"));
 const NewsManagePage = lazy(() => import("./pages/admin/NewsManagePage"));
+const NewsTopicsManagePage = lazy(
+  () => import("./pages/admin/NewsTopicsManagePage")
+);
 const LawFirmsManagePage = lazy(
   () => import("./pages/admin/LawFirmsManagePage")
 );
@@ -77,6 +82,7 @@ function App() {
                 <Route index element={<DashboardPage />} />
                 <Route path="users" element={<UsersPage />} />
                 <Route path="news" element={<NewsManagePage />} />
+                <Route path="news/topics" element={<NewsTopicsManagePage />} />
                 <Route path="forum" element={<ForumManagePage />} />
                 <Route path="lawfirms" element={<LawFirmsManagePage />} />
                 <Route path="knowledge" element={<KnowledgeManagePage />} />
@@ -112,6 +118,8 @@ function App() {
                   path="news/subscriptions"
                   element={<NewsSubscriptionsPage />}
                 />
+                <Route path="news/topics" element={<NewsTopicsPage />} />
+                <Route path="news/topics/:topicId" element={<NewsTopicDetailPage />} />
                 <Route path="news/:newsId" element={<NewsDetailPage />} />
                 <Route path="lawfirm" element={<LawFirmPage />} />
                 <Route path="lawfirm/:firmId" element={<LawFirmDetailPage />} />

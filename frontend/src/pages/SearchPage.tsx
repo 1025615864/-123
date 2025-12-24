@@ -28,6 +28,7 @@ interface NewsResultItem extends SearchResultItemBase {
   type: "news";
   title: string;
   summary?: string | null;
+  snippet?: string | null;
 }
 
 interface PostResultItem extends SearchResultItemBase {
@@ -138,10 +139,18 @@ export default function SearchPage() {
       const data = res.data;
       return {
         news: Array.isArray(data?.news) ? (data.news as NewsResultItem[]) : [],
-        posts: Array.isArray(data?.posts) ? (data.posts as PostResultItem[]) : [],
-        lawfirms: Array.isArray(data?.lawfirms) ? (data.lawfirms as LawFirmResultItem[]) : [],
-        lawyers: Array.isArray(data?.lawyers) ? (data.lawyers as LawyerResultItem[]) : [],
-        knowledge: Array.isArray(data?.knowledge) ? (data.knowledge as KnowledgeResultItem[]) : [],
+        posts: Array.isArray(data?.posts)
+          ? (data.posts as PostResultItem[])
+          : [],
+        lawfirms: Array.isArray(data?.lawfirms)
+          ? (data.lawfirms as LawFirmResultItem[])
+          : [],
+        lawyers: Array.isArray(data?.lawyers)
+          ? (data.lawyers as LawyerResultItem[])
+          : [],
+        knowledge: Array.isArray(data?.knowledge)
+          ? (data.knowledge as KnowledgeResultItem[])
+          : [],
       } as SearchResults;
     },
     enabled: submittedQuery.trim().length >= 2,
@@ -196,7 +205,9 @@ export default function SearchPage() {
       setSuggestionsEnabled(false);
       setSubmittedQuery(query);
       if (isAuthenticated) {
-        queryClient.invalidateQueries({ queryKey: queryKeys.searchHistoryRoot() });
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.searchHistoryRoot(),
+        });
       }
     },
     [isAuthenticated, q, queryClient, toast]
@@ -207,6 +218,32 @@ export default function SearchPage() {
   const history = isAuthenticated ? historyQuery.data ?? [] : [];
   const results = searchQuery.data ?? null;
   const searching = searchQuery.isFetching;
+
+  const escapeRegExp = useCallback((value: string) => {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }, []);
+
+  const highlightText = useCallback(
+    (text: string | null | undefined) => {
+      const source = String(text ?? "");
+      const kw = submittedQuery.trim();
+      if (!source || !kw) return source;
+      const parts = source.split(new RegExp(`(${escapeRegExp(kw)})`, "ig"));
+      return parts.map((p, idx) => {
+        const isHit = p.toLowerCase() === kw.toLowerCase();
+        if (!isHit) return <span key={idx}>{p}</span>;
+        return (
+          <span
+            key={idx}
+            className="rounded px-0.5 bg-amber-200/70 text-slate-900 dark:bg-amber-400/20 dark:text-white"
+          >
+            {p}
+          </span>
+        );
+      });
+    },
+    [escapeRegExp, submittedQuery]
+  );
 
   return (
     <div className="space-y-10">
@@ -375,13 +412,13 @@ export default function SearchPage() {
                       className="block p-4 rounded-xl bg-white border border-slate-200/70 hover:bg-slate-50 transition-colors dark:bg-white/5 dark:border-white/10 dark:hover:bg-white/10"
                     >
                       <div className="text-slate-900 font-medium dark:text-white">
-                        {n.title}
+                        {highlightText(n.title)}
                       </div>
-                      {n.summary && (
+                      {n.snippet || n.summary ? (
                         <div className="text-slate-600 text-sm mt-1 dark:text-white/50">
-                          {n.summary}
+                          {highlightText(n.snippet || n.summary)}
                         </div>
-                      )}
+                      ) : null}
                     </Link>
                   )}
                 />

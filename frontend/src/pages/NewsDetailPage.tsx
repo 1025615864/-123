@@ -1,7 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { ArrowLeft, Calendar, Eye, Share2, Bookmark } from "lucide-react";
-import { Card, Button, Loading, Badge, FadeInImage } from "../components/ui";
+import { ArrowLeft, Calendar, Eye, Share2, Bookmark, MessageSquare, Send, Trash2, User as UserIcon } from "lucide-react";
+import { Card, Button, Loading, Badge, FadeInImage, Textarea, Pagination } from "../components/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import api from "../api/client";
 import { useToast } from "../hooks";
@@ -26,6 +26,29 @@ interface NewsDetail {
   published_at: string | null;
   created_at: string;
   updated_at?: string;
+}
+
+interface CommentAuthor {
+  id: number;
+  username: string;
+  nickname?: string | null;
+  avatar?: string | null;
+}
+
+interface NewsComment {
+  id: number;
+  news_id: number;
+  user_id: number;
+  content: string;
+  created_at: string;
+  author?: CommentAuthor | null;
+}
+
+interface NewsCommentListResponse {
+  items: NewsComment[];
+  total: number;
+  page: number;
+  page_size: number;
 }
 
 interface RelatedNewsItem {
@@ -130,7 +153,7 @@ function upsertLinkRel(rel: string, href: string): () => void {
 
 export default function NewsDetailPage() {
   const { newsId } = useParams<{ newsId: string }>();
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const { actualTheme } = useTheme();
   const toast = useToast();
 
@@ -171,6 +194,80 @@ export default function NewsDetailPage() {
     refetchOnWindowFocus: false,
     placeholderData: (prev) => prev,
   });
+
+  const [commentDraft, setCommentDraft] = useState("");
+  const [commentPage, setCommentPage] = useState(1);
+  const commentPageSize = 20;
+
+  useEffect(() => {
+    setCommentPage(1);
+  }, [newsId]);
+
+  const commentsQuery = useQuery({
+    queryKey: queryKeys.newsComments(newsId, commentPage, commentPageSize),
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      params.set("page", String(commentPage));
+      params.set("page_size", String(commentPageSize));
+      const res = await api.get(`/news/${newsId}/comments?${params.toString()}`);
+      return res.data as NewsCommentListResponse;
+    },
+    enabled: !!newsId,
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  });
+
+  useEffect(() => {
+    if (!commentsQuery.error) return;
+    toast.error(getApiErrorMessage(commentsQuery.error));
+  }, [commentsQuery.error, toast]);
+
+  const comments = commentsQuery.data?.items ?? [];
+  const commentsTotal = commentsQuery.data?.total ?? 0;
+  const commentTotalPages = useMemo(() => {
+    return Math.max(1, Math.ceil(commentsTotal / commentPageSize));
+  }, [commentsTotal, commentPageSize]);
+
+  const submitCommentMutation = useMutation({
+    mutationFn: async (content: string) => {
+      const res = await api.post(`/news/${newsId}/comments`, { content });
+      return res.data as NewsComment;
+    },
+    onSuccess: async () => {
+      setCommentDraft("");
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.newsCommentsRoot(newsId),
+      });
+      toast.success("评论已发布");
+    },
+    onError: (err) => {
+      toast.error(getApiErrorMessage(err, "评论失败"));
+    },
+  });
+
+  const deleteCommentMutation = useMutation({
+    mutationFn: async (commentId: number) => {
+      const res = await api.delete(`/news/comments/${commentId}`);
+      return res.data;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: queryKeys.newsCommentsRoot(newsId),
+      });
+      toast.success("已删除");
+    },
+    onError: (err) => {
+      toast.error(getApiErrorMessage(err, "删除失败"));
+    },
+  });
+
+  const canDeleteComment = (c: NewsComment): boolean => {
+    if (!user) return false;
+    if (user.role === "admin" || user.role === "super_admin" || user.role === "moderator")
+      return true;
+    return Number(user.id) === Number(c.user_id);
+  };
 
   useEffect(() => {
     if (!news) return;
@@ -434,6 +531,113 @@ export default function NewsDetailPage() {
           </Button>
         </div>
       </article>
+
+      <section data-testid="news-comments">
+        <Card variant="surface" padding="md">
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2 dark:text-white">
+              <MessageSquare className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+              评论
+              <span className="text-sm font-normal text-slate-500 dark:text-white/40">
+                ({commentsTotal})
+              </span>
+            </h2>
+          </div>
+
+          <div className="space-y-3">
+            <Textarea
+              value={commentDraft}
+              onChange={(e) => setCommentDraft(e.target.value)}
+              placeholder={isAuthenticated ? "写下你的看法..." : "登录后可发表评论"}
+              rows={4}
+              disabled={!isAuthenticated}
+            />
+            <div className="flex justify-end">
+              <Button
+                icon={Send}
+                onClick={() => {
+                  const content = commentDraft.trim();
+                  if (!isAuthenticated) {
+                    toast.error("请先登录后再评论");
+                    return;
+                  }
+                  if (!content) {
+                    toast.error("请输入评论内容");
+                    return;
+                  }
+                  if (submitCommentMutation.isPending) return;
+                  submitCommentMutation.mutate(content);
+                }}
+                disabled={!isAuthenticated || submitCommentMutation.isPending}
+              >
+                发布评论
+              </Button>
+            </div>
+          </div>
+
+          <div className="mt-6 space-y-4">
+            {commentsQuery.isLoading ? (
+              <p className="text-sm text-slate-600 dark:text-white/50">加载中...</p>
+            ) : comments.length === 0 ? (
+              <p className="text-sm text-slate-600 dark:text-white/50">暂无评论</p>
+            ) : (
+              <div className="space-y-4">
+                {comments.map((c) => {
+                  const name =
+                    (c.author?.nickname ?? "").trim() ||
+                    (c.author?.username ?? "").trim() ||
+                    `用户${c.user_id}`;
+                  return (
+                    <div
+                      key={c.id}
+                      className="rounded-xl border border-slate-200/70 p-4 dark:border-white/10"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 text-sm text-slate-700 dark:text-white/70">
+                            <UserIcon className="h-4 w-4 opacity-70" />
+                            <span className="font-medium text-slate-900 dark:text-white">
+                              {name}
+                            </span>
+                            <span className="text-slate-400 dark:text-white/30">·</span>
+                            <span className="text-slate-500 dark:text-white/40">
+                              {new Date(c.created_at).toLocaleString()}
+                            </span>
+                          </div>
+                          <div className="mt-2 text-slate-800 whitespace-pre-wrap break-words dark:text-white/80">
+                            {c.content}
+                          </div>
+                        </div>
+
+                        {canDeleteComment(c) ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="p-2"
+                            icon={Trash2}
+                            onClick={() => {
+                              if (deleteCommentMutation.isPending) return;
+                              deleteCommentMutation.mutate(c.id);
+                            }}
+                            title="删除"
+                          />
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                <Pagination
+                  currentPage={commentPage}
+                  totalPages={commentTotalPages}
+                  onPageChange={(p) => setCommentPage(p)}
+                  className="pt-2"
+                />
+              </div>
+            )}
+          </div>
+        </Card>
+      </section>
 
       {relatedQuery.isLoading || relatedQuery.isSuccess ? (
         <section data-testid="news-related">

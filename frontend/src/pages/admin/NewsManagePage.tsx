@@ -32,8 +32,18 @@ interface NewsItem {
   is_published: boolean
   view_count: number
   published_at?: string | null
+  scheduled_publish_at?: string | null
+  scheduled_unpublish_at?: string | null
   created_at: string
   updated_at?: string
+}
+
+function toDatetimeLocalValue(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  const v = value.trim()
+  if (!v) return ''
+  const normalized = v.includes(' ') && !v.includes('T') ? v.replace(' ', 'T') : v
+  return normalized.slice(0, 16)
 }
 
 interface NewsAdminListResponse {
@@ -66,6 +76,8 @@ export default function NewsManagePage() {
     content: '',
     is_top: false,
     is_published: true,
+    scheduled_publish_at: '',
+    scheduled_unpublish_at: '',
   })
 
   const [editForm, setEditForm] = useState({
@@ -78,6 +90,8 @@ export default function NewsManagePage() {
     content: '',
     is_top: false,
     is_published: true,
+    scheduled_publish_at: '',
+    scheduled_unpublish_at: '',
   })
 
   const newsQueryKey = useMemo(
@@ -148,6 +162,8 @@ export default function NewsManagePage() {
       content: string
       is_top: boolean
       is_published: boolean
+      scheduled_publish_at?: string | null
+      scheduled_unpublish_at?: string | null
     }
   >({
     mutationFn: async (payload) => {
@@ -169,6 +185,8 @@ export default function NewsManagePage() {
         content: '',
         is_top: false,
         is_published: true,
+        scheduled_publish_at: '',
+        scheduled_unpublish_at: '',
       })
     },
   })
@@ -187,6 +205,8 @@ export default function NewsManagePage() {
         content: string
         is_top: boolean
         is_published: boolean
+        scheduled_publish_at?: string | null
+        scheduled_unpublish_at?: string | null
       }
     }
   >({
@@ -231,6 +251,8 @@ export default function NewsManagePage() {
       content: createForm.content.trim(),
       is_top: !!createForm.is_top,
       is_published: createForm.is_published,
+      scheduled_publish_at: createForm.scheduled_publish_at.trim() ? createForm.scheduled_publish_at.trim() : null,
+      scheduled_unpublish_at: createForm.scheduled_unpublish_at.trim() ? createForm.scheduled_unpublish_at.trim() : null,
     })
   }
 
@@ -250,6 +272,8 @@ export default function NewsManagePage() {
         content: detail.content || '',
         is_top: !!detail.is_top,
         is_published: !!detail.is_published,
+        scheduled_publish_at: toDatetimeLocalValue(detail.scheduled_publish_at),
+        scheduled_unpublish_at: toDatetimeLocalValue(detail.scheduled_unpublish_at),
       })
       setEditImages(extractMarkdownImageUrls(String(detail.content || '')))
     } catch (e) {
@@ -273,6 +297,8 @@ export default function NewsManagePage() {
         content: editForm.content.trim(),
         is_top: !!editForm.is_top,
         is_published: editForm.is_published,
+        scheduled_publish_at: editForm.scheduled_publish_at.trim() ? editForm.scheduled_publish_at.trim() : null,
+        scheduled_unpublish_at: editForm.scheduled_unpublish_at.trim() ? editForm.scheduled_unpublish_at.trim() : null,
       },
     })
   }
@@ -323,6 +349,7 @@ export default function NewsManagePage() {
                 <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">置顶</th>
                 <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">阅读量</th>
                 <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">发布时间</th>
+                <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">定时</th>
                 <th className="text-right py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">操作</th>
               </tr>
             </thead>
@@ -348,6 +375,20 @@ export default function NewsManagePage() {
                   <td className="py-4 px-4 text-slate-700 dark:text-white/70">{item.view_count.toLocaleString()}</td>
                   <td className="py-4 px-4 text-slate-500 text-sm dark:text-white/50">
                     {new Date(item.published_at || item.created_at).toLocaleDateString()}
+                  </td>
+                  <td className="py-4 px-4 text-slate-500 text-sm dark:text-white/50">
+                    {item.scheduled_publish_at ? (
+                      <div className="leading-5">
+                        <div>发：{new Date(item.scheduled_publish_at).toLocaleString()}</div>
+                        {item.scheduled_unpublish_at ? (
+                          <div>下：{new Date(item.scheduled_unpublish_at).toLocaleString()}</div>
+                        ) : null}
+                      </div>
+                    ) : item.scheduled_unpublish_at ? (
+                      <div className="leading-5">下：{new Date(item.scheduled_unpublish_at).toLocaleString()}</div>
+                    ) : (
+                      <span className="text-slate-400 dark:text-white/30">-</span>
+                    )}
                   </td>
                   <td className="py-4 px-4">
                     <div className="flex items-center justify-end gap-2">
@@ -491,6 +532,26 @@ export default function NewsManagePage() {
               <option value="draft">草稿</option>
             </select>
           </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">定时发布（可选）</label>
+              <input
+                type="datetime-local"
+                className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
+                value={createForm.scheduled_publish_at}
+                onChange={(e) => setCreateForm(prev => ({ ...prev, scheduled_publish_at: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">定时下线（可选）</label>
+              <input
+                type="datetime-local"
+                className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
+                value={createForm.scheduled_unpublish_at}
+                onChange={(e) => setCreateForm(prev => ({ ...prev, scheduled_unpublish_at: e.target.value }))}
+              />
+            </div>
+          </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">内容</label>
             <RichTextEditor
@@ -595,6 +656,26 @@ export default function NewsManagePage() {
               <option value="published">发布</option>
               <option value="draft">草稿</option>
             </select>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">定时发布（可选）</label>
+              <input
+                type="datetime-local"
+                className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
+                value={editForm.scheduled_publish_at}
+                onChange={(e) => setEditForm(prev => ({ ...prev, scheduled_publish_at: e.target.value }))}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">定时下线（可选）</label>
+              <input
+                type="datetime-local"
+                className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
+                value={editForm.scheduled_unpublish_at}
+                onChange={(e) => setEditForm(prev => ({ ...prev, scheduled_unpublish_at: e.target.value }))}
+              />
+            </div>
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">内容</label>

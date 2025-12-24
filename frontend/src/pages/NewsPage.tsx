@@ -8,6 +8,7 @@ import {
   Newspaper,
   TrendingUp,
   Bell,
+  Layers,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -67,7 +68,9 @@ export default function NewsPage() {
   const pageSize = 18;
   const [category, setCategory] = useState<string | null>(null);
   const [keyword, setKeyword] = useState("");
-  const [mode, setMode] = useState<"all" | "favorites" | "history">("all");
+  const [mode, setMode] = useState<
+    "all" | "recommended" | "favorites" | "history" | "subscribed"
+  >("all");
 
   const [hotDays, setHotDays] = useState<7 | 30>(7);
   const hotLimit = 6;
@@ -118,7 +121,14 @@ export default function NewsPage() {
 
   const newsQuery = useQuery({
     queryKey:
-      mode === "favorites"
+      mode === "recommended"
+        ? queryKeys.newsRecommendedList(
+            page,
+            pageSize,
+            category,
+            debouncedKeyword.trim()
+          )
+        : mode === "favorites"
         ? queryKeys.newsFavoritesList(
             page,
             pageSize,
@@ -127,6 +137,13 @@ export default function NewsPage() {
           )
         : mode === "history"
         ? queryKeys.newsHistoryList(
+            page,
+            pageSize,
+            category,
+            debouncedKeyword.trim()
+          )
+        : mode === "subscribed"
+        ? queryKeys.newsSubscribedList(
             page,
             pageSize,
             category,
@@ -142,15 +159,22 @@ export default function NewsPage() {
         params.set("keyword", debouncedKeyword.trim());
 
       const endpoint =
-        mode === "favorites"
+        mode === "recommended"
+          ? "/news/recommended"
+          : mode === "favorites"
           ? "/news/favorites"
           : mode === "history"
           ? "/news/history"
+          : mode === "subscribed"
+          ? "/news/subscribed"
           : "/news";
       const res = await api.get(`${endpoint}?${params.toString()}`);
       return res.data as NewsListResponse;
     },
-    enabled: mode === "all" ? true : isAuthenticated,
+    enabled:
+      mode === "favorites" || mode === "history" || mode === "subscribed"
+        ? isAuthenticated
+        : true,
     placeholderData: (prev) => prev,
     retry: 1,
     refetchOnWindowFocus: false,
@@ -215,6 +239,14 @@ export default function NewsPage() {
                   className="py-2.5"
                 />
               </div>
+              <LinkButton
+                to="/news/topics"
+                variant="outline"
+                className="rounded-full px-6 py-3 text-sm"
+                icon={Layers}
+              >
+                专题
+              </LinkButton>
               {isAuthenticated ? (
                 <LinkButton
                   to="/news/subscriptions"
@@ -230,6 +262,16 @@ export default function NewsPage() {
         />
 
         <div className="mt-5 flex flex-wrap gap-2">
+          <Chip
+            key="__recommended"
+            size="sm"
+            active={mode === "recommended"}
+            onClick={() =>
+              setMode((prev) => (prev === "recommended" ? "all" : "recommended"))
+            }
+          >
+            推荐
+          </Chip>
           {isAuthenticated ? (
             <Chip
               key="__favorites"
@@ -252,6 +294,18 @@ export default function NewsPage() {
               }
             >
               最近浏览
+            </Chip>
+          ) : null}
+          {isAuthenticated ? (
+            <Chip
+              key="__subscribed"
+              size="sm"
+              active={mode === "subscribed"}
+              onClick={() =>
+                setMode((prev) => (prev === "subscribed" ? "all" : "subscribed"))
+              }
+            >
+              订阅内容
             </Chip>
           ) : null}
           {displayCategories.map((cat) => {

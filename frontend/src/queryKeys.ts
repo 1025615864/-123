@@ -41,6 +41,18 @@ export const queryKeys = {
     category: string | null,
     keyword: string
   ) => ["news-history", { page, pageSize, category, keyword }] as const,
+  newsSubscribedList: (
+    page: number,
+    pageSize: number,
+    category: string | null,
+    keyword: string
+  ) => ["news-subscribed", { page, pageSize, category, keyword }] as const,
+  newsRecommendedList: (
+    page: number,
+    pageSize: number,
+    category: string | null,
+    keyword: string
+  ) => ["news-recommended", { page, pageSize, category, keyword }] as const,
   newsTop: (limit: number) => ["news-top", { limit }] as const,
   newsRecent: (limit: number) => ["news-recent", { limit }] as const,
   newsHot: (days: number, limit: number, category: string | null = null) =>
@@ -48,7 +60,22 @@ export const queryKeys = {
   newsDetail: (newsId: string | undefined) => ["news", newsId] as const,
   newsRelated: (newsId: string | undefined, limit: number) =>
     ["news-related", { newsId, limit }] as const,
+  newsTopics: () => ["news-topics"] as const,
+  newsTopicDetail: (
+    topicId: string | undefined,
+    page: number,
+    pageSize: number
+  ) =>
+    ["news-topic", topicId, { page, pageSize }] as const,
+  newsCommentsRoot: (newsId: string | undefined) =>
+    ["news-comments", newsId] as const,
+  newsComments: (newsId: string | undefined, page: number, pageSize: number) =>
+    ["news-comments", newsId, { page, pageSize }] as const,
   newsSubscriptions: () => ["news-subscriptions"] as const,
+
+  adminNewsTopics: () => ["admin-news-topics"] as const,
+  adminNewsTopicDetail: (topicId: number | null | undefined) =>
+    ["admin-news-topic", { topicId }] as const,
 
   documentTypes: () => ["document-types"] as const,
 
