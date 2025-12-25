@@ -1,6 +1,6 @@
 {
   "include": ["app"],
-  "exclude": ["scripts"],
+  "exclude": [".venv", "tests", "alembic", "scripts"],
   "pythonVersion": "3.10",
   "executionEnvironments": [
     {
@@ -8,7 +8,6 @@
       "extraPaths": ["./"]
     }
   ],
-  "reportImplicitRelativeImport": "none",
   "reportCallInDefaultInitializer": "none",
   "reportMissingImports": "none",
   "reportMissingModuleSource": "none"

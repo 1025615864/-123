@@ -2,7 +2,9 @@
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Annotated, TypedDict, cast
+from typing import Annotated, cast
+
+from typing_extensions import TypedDict
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update, case, and_, or_, desc
@@ -108,7 +110,7 @@ async def create_post(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """发布新帖子（需登录）"""
-    await forum_service.apply_content_filter_config_from_db(db)
+    _ = await forum_service.apply_content_filter_config_from_db(db)
 
     # 敏感词检测
     passed, error_msg = check_post_content(post_data.title, post_data.content)
@@ -275,7 +277,7 @@ async def get_content_filter_config(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     config = await forum_service.apply_content_filter_config_from_db(db)
-    return cast(ForumContentFilterConfig, config)
+    return ForumContentFilterConfig.model_validate(config)
 
 
 @router.put("/admin/content-filter-config", response_model=ForumContentFilterConfig, summary="更新内容过滤规则配置")
@@ -308,7 +310,7 @@ async def update_content_filter_config(
     )
     await db.commit()
 
-    return cast(ForumContentFilterConfig, config)
+    return ForumContentFilterConfig.model_validate(config)
 
 
 @router.get("/posts", response_model=PostListResponse, summary="获取帖子列表")
@@ -749,7 +751,7 @@ async def create_comment(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """发表评论（需登录）"""
-    await forum_service.apply_content_filter_config_from_db(db)
+    _ = await forum_service.apply_content_filter_config_from_db(db)
 
     # 敏感词检测
     passed, error_msg = check_comment_content(comment_data.content)
@@ -1586,8 +1588,8 @@ async def get_sensitive_words(
     """获取所有敏感词"""
     config = await forum_service.apply_content_filter_config_from_db(db)
     return {
-        "sensitive_words": config.get("sensitive_words") or [],
-        "ad_words": config.get("ad_words") or [],
+        "sensitive_words": cast(list[str], config.get("sensitive_words") or []),
+        "ad_words": cast(list[str], config.get("ad_words") or []),
     }
 
 

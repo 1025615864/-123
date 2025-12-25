@@ -1,6 +1,7 @@
 """邮件服务"""
 import logging
-from typing import TypedDict
+
+from typing_extensions import TypedDict
 import secrets
 from datetime import datetime, timedelta
 
