@@ -7,6 +7,7 @@
       "extraPaths": ["./backend"]
     }
   ],
-  "reportImplicitRelativeImport": "none",
-  "reportCallInDefaultInitializer": "none"
+  "reportCallInDefaultInitializer": "none",
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none"
 }

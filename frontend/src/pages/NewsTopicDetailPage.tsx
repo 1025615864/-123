@@ -80,9 +80,22 @@ interface NewsListItem {
   view_count: number;
   favorite_count: number;
   is_favorited: boolean;
+  ai_risk_level?: string | null;
+  ai_keywords?: string[] | null;
   is_top: boolean;
   published_at: string | null;
   created_at: string;
+}
+
+function getRiskBadge(
+  riskLevel: string | null | undefined
+): { variant: "warning" | "danger"; label: string } | null {
+  const r = String(riskLevel ?? "")
+    .trim()
+    .toLowerCase();
+  if (r === "warning") return { variant: "warning", label: "注意" };
+  if (r === "danger") return { variant: "danger", label: "敏感" };
+  return null;
 }
 
 interface NewsTopic {
@@ -267,15 +280,30 @@ export default function NewsTopicDetailPage() {
                 </div>
 
                 <div className="p-5">
-                  <div className="flex items-center gap-2 mb-3">
+                  <div className="flex flex-wrap items-center gap-2 mb-3">
                     <Badge variant="primary" size="sm" icon={Tag}>
                       {item.category}
                     </Badge>
+                    {getRiskBadge(item.ai_risk_level) ? (
+                      <Badge
+                        variant={getRiskBadge(item.ai_risk_level)!.variant}
+                        size="sm"
+                      >
+                        {getRiskBadge(item.ai_risk_level)!.label}
+                      </Badge>
+                    ) : null}
                     {item.is_top ? (
                       <Badge variant="warning" size="sm">
                         置顶
                       </Badge>
                     ) : null}
+                    {Array.isArray(item.ai_keywords) && item.ai_keywords.length > 0
+                      ? item.ai_keywords.slice(0, 3).map((k, kIdx) => (
+                          <Badge key={`${item.id}-kw-${kIdx}`} variant="info" size="sm">
+                            {k}
+                          </Badge>
+                        ))
+                      : null}
                   </div>
 
                   <h3 className="text-base font-semibold text-slate-900 mb-2 line-clamp-2 leading-snug dark:text-white">

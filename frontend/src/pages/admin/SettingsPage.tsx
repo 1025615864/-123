@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Save, Key, Globe, Bell, Shield } from 'lucide-react'
-import { Card, Input, Button } from '../../components/ui'
+import { Card, Input, Button, Textarea } from '../../components/ui'
 import { useQuery } from '@tanstack/react-query'
 import api from '../../api/client'
 import { useAppMutation, useToast } from '../../hooks'
@@ -14,6 +14,72 @@ interface ConfigItem {
   category: string
 }
 
+interface NewsAiProviderPublic {
+  name: string | null
+  base_url: string
+  model: string | null
+  response_format: string | null
+  auth_type: string | null
+  auth_header_name: string | null
+  auth_prefix: string | null
+  chat_completions_path: string | null
+  weight: number | null
+  api_key_configured: boolean
+}
+
+interface NewsAiRecentError {
+  news_id: number
+  retry_count: number
+  last_error: string | null
+  last_error_at: string | null
+}
+
+interface NewsAiErrorTrendItem {
+  date: string
+  errors: number
+}
+
+interface NewsAiTopError {
+  message: string
+  count: number
+}
+
+interface NewsAiStatusResponse {
+  news_ai_enabled: boolean
+  news_ai_interval_seconds: number
+  summary_llm_enabled: boolean
+  response_format: string | null
+  provider_strategy: string
+  providers: NewsAiProviderPublic[]
+  pending_total: number
+  errors_total: number
+  errors_last_24h: number
+  errors_last_7d: number
+  errors_trend_7d: NewsAiErrorTrendItem[]
+  top_errors: NewsAiTopError[]
+  recent_errors: NewsAiRecentError[]
+  config_overrides: Record<string, string>
+}
+
+function SimpleMiniBarChart({ data, maxValue }: { data: { label: string; value: number }[]; maxValue: number }) {
+  return (
+    <div className="flex items-end justify-between gap-2 h-24">
+      {data.map((item, idx) => (
+        <div key={idx} className="flex-1 flex flex-col items-center gap-2">
+          <div className="w-full flex flex-col" style={{ height: '80px' }}>
+            <div
+              className="w-full bg-gradient-to-t from-amber-500 to-orange-400 rounded-t transition-all"
+              style={{ height: `${(item.value / Math.max(1, maxValue)) * 100}%` }}
+              title={`${item.value}`}
+            />
+          </div>
+          <span className="text-[10px] text-slate-500 dark:text-white/50">{item.label}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export default function SettingsPage() {
   const toast = useToast()
   const [settings, setSettings] = useState({
@@ -23,6 +89,10 @@ export default function SettingsPage() {
     contactPhone: '400-123-4567',
     openaiApiKey: '',
     enableAI: true,
+    newsAiSummaryLlmEnabled: false,
+    newsAiProviderStrategy: 'priority',
+    newsAiResponseFormat: '',
+    newsAiProvidersJson: '',
     enableNotifications: true,
     maintenanceMode: false,
   })
@@ -43,6 +113,22 @@ export default function SettingsPage() {
     toast.error(getApiErrorMessage(configsQuery.error, '配置加载失败'))
   }, [configsQuery.error, toast])
 
+  const newsAiStatusQuery = useQuery({
+    queryKey: queryKeys.newsAiStatus(),
+    queryFn: async () => {
+      const res = await api.get('/system/news-ai/status')
+      return res.data as NewsAiStatusResponse
+    },
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  })
+
+  useEffect(() => {
+    if (!newsAiStatusQuery.error) return
+    toast.error(getApiErrorMessage(newsAiStatusQuery.error, '新闻AI状态加载失败'))
+  }, [newsAiStatusQuery.error, toast])
+
   useEffect(() => {
     const configs = configsQuery.data
     if (!configs || configs.length === 0) return
@@ -60,6 +146,10 @@ export default function SettingsPage() {
       contactPhone: configMap['contact_phone'] || prev.contactPhone,
       openaiApiKey: configMap['openai_api_key'] ? '••••••••••••••••' : '',
       enableAI: configMap['enable_ai'] !== 'false',
+      newsAiSummaryLlmEnabled: configMap['NEWS_AI_SUMMARY_LLM_ENABLED'] ? configMap['NEWS_AI_SUMMARY_LLM_ENABLED'] !== 'false' : prev.newsAiSummaryLlmEnabled,
+      newsAiProviderStrategy: configMap['NEWS_AI_SUMMARY_LLM_PROVIDER_STRATEGY'] || prev.newsAiProviderStrategy,
+      newsAiResponseFormat: configMap['NEWS_AI_SUMMARY_LLM_RESPONSE_FORMAT'] || prev.newsAiResponseFormat,
+      newsAiProvidersJson: configMap['NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON'] ? '••••••••••••••••' : '',
       enableNotifications: configMap['enable_notifications'] !== 'false',
       maintenanceMode: configMap['maintenance_mode'] === 'true',
     }))
@@ -71,7 +161,7 @@ export default function SettingsPage() {
     },
     successMessage: '设置保存成功',
     errorMessageFallback: '保存失败，请稍后重试',
-    invalidateQueryKeys: [queryKeys.systemConfigs()],
+    invalidateQueryKeys: [queryKeys.systemConfigs(), queryKeys.newsAiStatus()],
   })
 
   const handleSave = async () => {
@@ -82,6 +172,9 @@ export default function SettingsPage() {
         { key: 'contact_email', value: settings.contactEmail, category: 'general' },
         { key: 'contact_phone', value: settings.contactPhone, category: 'general' },
         { key: 'enable_ai', value: String(settings.enableAI), category: 'ai' },
+        { key: 'NEWS_AI_SUMMARY_LLM_ENABLED', value: String(settings.newsAiSummaryLlmEnabled), category: 'news_ai' },
+        { key: 'NEWS_AI_SUMMARY_LLM_PROVIDER_STRATEGY', value: settings.newsAiProviderStrategy, category: 'news_ai' },
+        { key: 'NEWS_AI_SUMMARY_LLM_RESPONSE_FORMAT', value: settings.newsAiResponseFormat, category: 'news_ai' },
         { key: 'enable_notifications', value: String(settings.enableNotifications), category: 'notification' },
         { key: 'maintenance_mode', value: String(settings.maintenanceMode), category: 'security' },
       ]
@@ -89,6 +182,10 @@ export default function SettingsPage() {
       const maskedPlaceholder = '••••••••••••••••'
       if (settings.openaiApiKey && settings.openaiApiKey !== maskedPlaceholder) {
         configs.push({ key: 'openai_api_key', value: settings.openaiApiKey, category: 'ai' })
+      }
+
+      if (settings.newsAiProvidersJson && settings.newsAiProvidersJson !== maskedPlaceholder) {
+        configs.push({ key: 'NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON', value: settings.newsAiProvidersJson, category: 'news_ai' })
       }
 
       if (saveMutation.isPending) return
@@ -143,6 +240,172 @@ export default function SettingsPage() {
               value={settings.contactPhone}
               onChange={(e) => setSettings({ ...settings, contactPhone: e.target.value })}
             />
+          </div>
+        </Card>
+
+        {/* 新闻AI配置 */}
+        <Card variant="surface" padding="lg">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center">
+              <Key className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-white">新闻AI配置</h3>
+              <p className="text-slate-600 text-sm dark:text-white/40">摘要/要点/关键词的 LLM 配置（支持多 Provider）</p>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div className="flex items-center justify-between py-3 border-b border-slate-200/70 dark:border-white/5">
+              <div>
+                <p className="text-slate-900 font-medium dark:text-white">启用新闻摘要 LLM</p>
+                <p className="text-slate-600 text-sm dark:text-white/40">关闭后会使用本地兜底规则生成</p>
+              </div>
+              <button
+                onClick={() => setSettings({ ...settings, newsAiSummaryLlmEnabled: !settings.newsAiSummaryLlmEnabled })}
+                className={`w-12 h-6 rounded-full transition-colors ${
+                  settings.newsAiSummaryLlmEnabled ? 'bg-amber-500' : 'bg-slate-200 dark:bg-white/20'
+                }`}
+              >
+                <div className={`w-5 h-5 rounded-full bg-white transition-transform ${
+                  settings.newsAiSummaryLlmEnabled ? 'translate-x-6' : 'translate-x-0.5'
+                }`} />
+              </button>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">Provider 策略</label>
+              <select
+                value={settings.newsAiProviderStrategy}
+                onChange={(e) => setSettings({ ...settings, newsAiProviderStrategy: e.target.value })}
+                className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none transition dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
+              >
+                <option value="priority">priority（按顺序优先）</option>
+                <option value="round_robin">round_robin（轮询）</option>
+                <option value="random">random（随机/权重）</option>
+              </select>
+            </div>
+
+            <Input
+              label="response_format"
+              placeholder="例如 json_object / json_schema / off"
+              value={settings.newsAiResponseFormat}
+              onChange={(e) => setSettings({ ...settings, newsAiResponseFormat: e.target.value })}
+            />
+
+            <Textarea
+              label="Providers JSON（不回显已配置内容）"
+              placeholder='例如：[{"name":"p1","base_url":"https://...","api_key":"...","model":"gpt-4o-mini"}]'
+              value={settings.newsAiProvidersJson}
+              onChange={(e) => setSettings({ ...settings, newsAiProvidersJson: e.target.value })}
+              rows={5}
+            />
+          </div>
+        </Card>
+
+        {/* 新闻AI运维状态 */}
+        <Card variant="surface" padding="lg">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 rounded-xl bg-slate-500/10 flex items-center justify-center">
+              <Shield className="h-5 w-5 text-slate-600 dark:text-white/70" />
+            </div>
+            <div>
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-white">新闻AI运维状态</h3>
+              <p className="text-slate-600 text-sm dark:text-white/40">积压量、错误统计、当前生效 Provider</p>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/60 dark:bg-white/5 dark:border-white/10">
+                <p className="text-xs text-slate-600 dark:text-white/40">待处理积压</p>
+                <p className="text-lg font-semibold text-slate-900 dark:text-white">{newsAiStatusQuery.data?.pending_total ?? '-'}</p>
+              </div>
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/60 dark:bg-white/5 dark:border-white/10">
+                <p className="text-xs text-slate-600 dark:text-white/40">有错误的条目</p>
+                <p className="text-lg font-semibold text-slate-900 dark:text-white">{newsAiStatusQuery.data?.errors_total ?? '-'}</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/60 dark:bg-white/5 dark:border-white/10">
+                <p className="text-xs text-slate-600 dark:text-white/40">近 24h 错误</p>
+                <p className="text-lg font-semibold text-slate-900 dark:text-white">{newsAiStatusQuery.data?.errors_last_24h ?? '-'}</p>
+              </div>
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/60 dark:bg-white/5 dark:border-white/10">
+                <p className="text-xs text-slate-600 dark:text-white/40">近 7d 错误</p>
+                <p className="text-lg font-semibold text-slate-900 dark:text-white">{newsAiStatusQuery.data?.errors_last_7d ?? '-'}</p>
+              </div>
+            </div>
+
+            <div className="text-sm text-slate-700 dark:text-white/70">
+              <p>策略：{newsAiStatusQuery.data?.provider_strategy ?? '-'}</p>
+              <p>response_format：{newsAiStatusQuery.data?.response_format ?? '-'}</p>
+            </div>
+
+            <div>
+              <p className="text-sm font-medium text-slate-900 dark:text-white mb-2">Providers</p>
+              <div className="space-y-2">
+                {(newsAiStatusQuery.data?.providers ?? []).map((p, idx) => (
+                  <div key={idx} className="p-3 rounded-xl border border-slate-200/70 bg-white dark:bg-white/5 dark:border-white/10">
+                    <p className="text-sm text-slate-900 dark:text-white font-medium">{p.name || p.base_url}</p>
+                    <p className="text-xs text-slate-600 dark:text-white/40">{p.base_url}</p>
+                    <p className="text-xs text-slate-600 dark:text-white/40">model：{p.model || '-'}</p>
+                    <p className="text-xs text-slate-600 dark:text-white/40">api_key：{p.api_key_configured ? '已配置' : '未配置'}</p>
+                  </div>
+                ))}
+                {(!newsAiStatusQuery.data || (newsAiStatusQuery.data.providers ?? []).length === 0) && (
+                  <p className="text-sm text-slate-600 dark:text-white/40">暂无 provider 配置</p>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <p className="text-sm font-medium text-slate-900 dark:text-white mb-2">近 7 天错误趋势</p>
+              {(() => {
+                const trend = newsAiStatusQuery.data?.errors_trend_7d ?? []
+                const points = trend.map((t) => {
+                  const d = new Date(t.date)
+                  const label = Number.isNaN(d.getTime()) ? String(t.date).slice(5) : `${d.getMonth() + 1}/${d.getDate()}`
+                  return { label, value: Number(t.errors || 0) }
+                })
+                if (!points || points.length === 0) {
+                  return <p className="text-sm text-slate-600 dark:text-white/40">暂无趋势数据</p>
+                }
+                return <SimpleMiniBarChart data={points} maxValue={Math.max(1, ...points.map((p) => p.value))} />
+              })()}
+            </div>
+
+            <div>
+              <p className="text-sm font-medium text-slate-900 dark:text-white mb-2">Top 错误（最多 10 条）</p>
+              <div className="space-y-2">
+                {(newsAiStatusQuery.data?.top_errors ?? []).map((e, idx) => (
+                  <div key={idx} className="p-3 rounded-xl border border-slate-200/70 bg-white dark:bg-white/5 dark:border-white/10">
+                    <p className="text-sm text-slate-900 dark:text-white">{e.count} 次</p>
+                    <p className="text-xs text-slate-600 dark:text-white/40 break-words">{e.message}</p>
+                  </div>
+                ))}
+                {(!newsAiStatusQuery.data || (newsAiStatusQuery.data.top_errors ?? []).length === 0) && (
+                  <p className="text-sm text-slate-600 dark:text-white/40">暂无错误 Top 统计</p>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <p className="text-sm font-medium text-slate-900 dark:text-white mb-2">最近错误（最多 20 条）</p>
+              <div className="space-y-2">
+                {(newsAiStatusQuery.data?.recent_errors ?? []).map((e) => (
+                  <div key={e.news_id} className="p-3 rounded-xl border border-slate-200/70 bg-white dark:bg-white/5 dark:border-white/10">
+                    <p className="text-sm text-slate-900 dark:text-white">news_id：{e.news_id}（重试 {e.retry_count}）</p>
+                    <p className="text-xs text-slate-600 dark:text-white/40">{e.last_error_at || '-'}</p>
+                    <p className="text-xs text-slate-600 dark:text-white/40">{e.last_error || '-'}</p>
+                  </div>
+                ))}
+                {(!newsAiStatusQuery.data || (newsAiStatusQuery.data.recent_errors ?? []).length === 0) && (
+                  <p className="text-sm text-slate-600 dark:text-white/40">暂无错误记录</p>
+                )}
+              </div>
+            </div>
           </div>
         </Card>
 

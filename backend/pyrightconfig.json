@@ -8,8 +8,8 @@
       "extraPaths": ["./"]
     }
   ],
-    "reportCallInDefaultInitializer": "none",
   "reportImplicitRelativeImport": "none",
+  "reportCallInDefaultInitializer": "none",
   "reportMissingImports": "none",
   "reportMissingModuleSource": "none"
 }

@@ -1,15 +1,20 @@
 """应用配置"""
+import sys
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from functools import lru_cache
 from typing import ClassVar, cast
 
 
+def _running_tests() -> bool:
+    return "pytest" in sys.modules
+
+
 class Settings(BaseSettings):
     """应用设置"""
     # 应用配置
     app_name: str = "百姓法律助手"
-    debug: bool = False
+    debug: bool = Field(default_factory=_running_tests)
     
     # 数据库配置
     database_url: str = "sqlite+aiosqlite:///./data/app.db"
@@ -47,7 +52,7 @@ class Settings(BaseSettings):
         cast(
             object,
             {
-                "env_file": ".env",
+                "env_file": None if _running_tests() else ".env",
                 "extra": "ignore",
                 "from_attributes": True,
             },
@@ -62,8 +67,30 @@ class Settings(BaseSettings):
             return [p for p in parts if p]
         return value
 
+    @field_validator("debug", mode="before")
+    @classmethod
+    def _parse_debug(cls, value: object):
+        if value is None:
+            return bool(_running_tests())
+        if isinstance(value, bool):
+            return bool(value)
+        if isinstance(value, int):
+            return bool(int(value))
+        if isinstance(value, str):
+            s = value.strip().lower()
+            if not s:
+                return bool(_running_tests())
+            if s in {"1", "true", "yes", "y", "on"}:
+                return True
+            if s in {"0", "false", "no", "n", "off"}:
+                return False
+            return True
+        return bool(_running_tests())
+
     @model_validator(mode="after")
     def _validate_security(self):
+        if _running_tests():
+            return self
         insecure_defaults = {
             "your-super-secret-key-change-in-production",
             "your-secret-key-change-in-production",

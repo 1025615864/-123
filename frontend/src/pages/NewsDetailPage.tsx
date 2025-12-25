@@ -1,7 +1,25 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { ArrowLeft, Calendar, Eye, Share2, Bookmark, MessageSquare, Send, Trash2, User as UserIcon } from "lucide-react";
-import { Card, Button, Loading, Badge, FadeInImage, Textarea, Pagination } from "../components/ui";
+import {
+  ArrowLeft,
+  Calendar,
+  Eye,
+  Share2,
+  Bookmark,
+  MessageSquare,
+  Send,
+  Trash2,
+  User as UserIcon,
+} from "lucide-react";
+import {
+  Card,
+  Button,
+  Loading,
+  Badge,
+  FadeInImage,
+  Textarea,
+  Pagination,
+} from "../components/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import api from "../api/client";
 import { useToast } from "../hooks";
@@ -11,10 +29,21 @@ import { getApiErrorMessage } from "../utils";
 import { queryKeys } from "../queryKeys";
 import MarkdownContent from "../components/MarkdownContent";
 
+interface NewsAIAnnotation {
+  summary: string | null;
+  risk_level: string;
+  sensitive_words: string[];
+  highlights?: string[];
+  keywords?: string[];
+  duplicate_of_news_id: number | null;
+  processed_at: string | null;
+}
+
 interface NewsDetail {
   id: number;
   title: string;
   summary: string | null;
+  ai_annotation?: NewsAIAnnotation | null;
   content: string;
   category: string;
   source: string | null;
@@ -40,6 +69,8 @@ interface NewsComment {
   news_id: number;
   user_id: number;
   content: string;
+  review_status?: string | null;
+  review_reason?: string | null;
   created_at: string;
   author?: CommentAuthor | null;
 }
@@ -68,52 +99,56 @@ interface RelatedNewsItem {
 }
 
 function stripMarkdown(input: string): string {
-  return String(input || '')
-    .replace(/!\[[^\]]*\]\([^)]+\)/g, '')
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-    .replace(/```[\s\S]*?```/g, '')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/[#>*_~|-]/g, ' ')
-    .replace(/\s+/g, ' ')
+  return String(input || "")
+    .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/[#>*_~|-]/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
 function upsertMetaTag(
-  attr: 'name' | 'property',
+  attr: "name" | "property",
   key: string,
   content: string
 ): () => void {
   const selector = `meta[${attr}="${key}"]`;
-  const existing = document.head.querySelector(selector) as HTMLMetaElement | null;
+  const existing = document.head.querySelector(
+    selector
+  ) as HTMLMetaElement | null;
   const created = !existing;
-  const el = existing ?? document.createElement('meta');
+  const el = existing ?? document.createElement("meta");
   if (created) {
     el.setAttribute(attr, key);
     document.head.appendChild(el);
   }
-  const prev = el.getAttribute('content');
-  el.setAttribute('content', content);
+  const prev = el.getAttribute("content");
+  el.setAttribute("content", content);
   return () => {
     if (created) {
       el.remove();
       return;
     }
     if (prev == null) {
-      el.removeAttribute('content');
+      el.removeAttribute("content");
     } else {
-      el.setAttribute('content', prev);
+      el.setAttribute("content", prev);
     }
   };
 }
 
 function upsertJsonLd(id: string, json: unknown): () => void {
   const selector = `script#${id}[type="application/ld+json"]`;
-  const existing = document.head.querySelector(selector) as HTMLScriptElement | null;
+  const existing = document.head.querySelector(
+    selector
+  ) as HTMLScriptElement | null;
   const created = !existing;
-  const el = existing ?? document.createElement('script');
+  const el = existing ?? document.createElement("script");
   if (created) {
     el.id = id;
-    el.type = 'application/ld+json';
+    el.type = "application/ld+json";
     document.head.appendChild(el);
   }
   const prev = el.textContent;
@@ -123,30 +158,32 @@ function upsertJsonLd(id: string, json: unknown): () => void {
       el.remove();
       return;
     }
-    el.textContent = prev ?? '';
+    el.textContent = prev ?? "";
   };
 }
 
 function upsertLinkRel(rel: string, href: string): () => void {
   const selector = `link[rel="${rel}"]`;
-  const existing = document.head.querySelector(selector) as HTMLLinkElement | null;
+  const existing = document.head.querySelector(
+    selector
+  ) as HTMLLinkElement | null;
   const created = !existing;
-  const el = existing ?? document.createElement('link');
+  const el = existing ?? document.createElement("link");
   if (created) {
     el.rel = rel;
     document.head.appendChild(el);
   }
-  const prevHref = el.getAttribute('href');
-  el.setAttribute('href', href);
+  const prevHref = el.getAttribute("href");
+  el.setAttribute("href", href);
   return () => {
     if (created) {
       el.remove();
       return;
     }
     if (prevHref == null) {
-      el.removeAttribute('href');
+      el.removeAttribute("href");
     } else {
-      el.setAttribute('href', prevHref);
+      el.setAttribute("href", prevHref);
     }
   };
 }
@@ -181,12 +218,32 @@ export default function NewsDetailPage() {
   const news = newsQuery.data ?? null;
   const bookmarked = !!news?.is_favorited;
   const favoriteCount = Number(news?.favorite_count || 0);
+  const ai = news?.ai_annotation ?? null;
+  const risk = String(ai?.risk_level ?? "").trim().toLowerCase();
+  const riskVariant: "default" | "success" | "warning" | "danger" =
+    risk === "safe"
+      ? "success"
+      : risk === "danger"
+        ? "danger"
+        : risk === "warning"
+          ? "warning"
+          : "default";
+  const riskLabel =
+    risk === "safe"
+      ? "安全"
+      : risk === "danger"
+        ? "敏感"
+        : risk === "warning"
+          ? "注意"
+          : "未知";
 
   const relatedLimit = 6;
   const relatedQuery = useQuery({
     queryKey: queryKeys.newsRelated(newsId, relatedLimit),
     queryFn: async () => {
-      const res = await api.get(`/news/${newsId}/related?limit=${relatedLimit}`);
+      const res = await api.get(
+        `/news/${newsId}/related?limit=${relatedLimit}`
+      );
       return (Array.isArray(res.data) ? res.data : []) as RelatedNewsItem[];
     },
     enabled: !!newsId,
@@ -209,7 +266,9 @@ export default function NewsDetailPage() {
       const params = new URLSearchParams();
       params.set("page", String(commentPage));
       params.set("page_size", String(commentPageSize));
-      const res = await api.get(`/news/${newsId}/comments?${params.toString()}`);
+      const res = await api.get(
+        `/news/${newsId}/comments?${params.toString()}`
+      );
       return res.data as NewsCommentListResponse;
     },
     enabled: !!newsId,
@@ -234,12 +293,13 @@ export default function NewsDetailPage() {
       const res = await api.post(`/news/${newsId}/comments`, { content });
       return res.data as NewsComment;
     },
-    onSuccess: async () => {
+    onSuccess: async (created) => {
       setCommentDraft("");
       await queryClient.invalidateQueries({
         queryKey: queryKeys.newsCommentsRoot(newsId),
       });
-      toast.success("评论已发布");
+      const status = String(created?.review_status ?? "").toLowerCase();
+      toast.success(status === "pending" ? "评论已提交，等待审核" : "评论已发布");
     },
     onError: (err) => {
       toast.error(getApiErrorMessage(err, "评论失败"));
@@ -264,7 +324,11 @@ export default function NewsDetailPage() {
 
   const canDeleteComment = (c: NewsComment): boolean => {
     if (!user) return false;
-    if (user.role === "admin" || user.role === "super_admin" || user.role === "moderator")
+    if (
+      user.role === "admin" ||
+      user.role === "super_admin" ||
+      user.role === "moderator"
+    )
       return true;
     return Number(user.id) === Number(c.user_id);
   };
@@ -273,71 +337,83 @@ export default function NewsDetailPage() {
     if (!news) return;
 
     const prevTitle = document.title;
-    const safeTitle = typeof news.title === 'string' ? news.title : '';
-    const safeSummary = typeof (news as any).summary === 'string' ? (news as any).summary : '';
-    const safeContent = typeof news.content === 'string' ? news.content : '';
+    const safeTitle = typeof news.title === "string" ? news.title : "";
+    const safeSummary =
+      typeof (news as any).summary === "string" ? (news as any).summary : "";
+    const safeContent = typeof news.content === "string" ? news.content : "";
 
     document.title = safeTitle ? `${safeTitle} - 法律资讯` : prevTitle;
 
     const url = window.location.href;
-    const description = (safeSummary.trim() || stripMarkdown(safeContent).slice(0, 140)).trim();
-    const imageUrl = typeof news.cover_image === 'string' && news.cover_image ? news.cover_image : '';
+    const description = (
+      safeSummary.trim() || stripMarkdown(safeContent).slice(0, 140)
+    ).trim();
+    const imageUrl =
+      typeof news.cover_image === "string" && news.cover_image
+        ? news.cover_image
+        : "";
 
     const cleanups: Array<() => void> = [];
 
     if (description) {
-      cleanups.push(upsertMetaTag('name', 'description', description));
-      cleanups.push(upsertMetaTag('property', 'og:description', description));
-      cleanups.push(upsertMetaTag('name', 'twitter:description', description));
+      cleanups.push(upsertMetaTag("name", "description", description));
+      cleanups.push(upsertMetaTag("property", "og:description", description));
+      cleanups.push(upsertMetaTag("name", "twitter:description", description));
     }
 
     if (safeTitle) {
-      cleanups.push(upsertMetaTag('property', 'og:title', safeTitle));
-      cleanups.push(upsertMetaTag('name', 'twitter:title', safeTitle));
+      cleanups.push(upsertMetaTag("property", "og:title", safeTitle));
+      cleanups.push(upsertMetaTag("name", "twitter:title", safeTitle));
     }
 
     if (url) {
-      cleanups.push(upsertMetaTag('property', 'og:url', url));
-      cleanups.push(upsertLinkRel('canonical', url));
+      cleanups.push(upsertMetaTag("property", "og:url", url));
+      cleanups.push(upsertLinkRel("canonical", url));
     }
 
-    const card = imageUrl ? 'summary_large_image' : 'summary';
-    cleanups.push(upsertMetaTag('name', 'twitter:card', card));
+    const card = imageUrl ? "summary_large_image" : "summary";
+    cleanups.push(upsertMetaTag("name", "twitter:card", card));
 
     if (imageUrl) {
-      cleanups.push(upsertMetaTag('property', 'og:image', imageUrl));
-      cleanups.push(upsertMetaTag('name', 'twitter:image', imageUrl));
+      cleanups.push(upsertMetaTag("property", "og:image", imageUrl));
+      cleanups.push(upsertMetaTag("name", "twitter:image", imageUrl));
     }
 
-    cleanups.push(upsertMetaTag('property', 'og:type', 'article'));
+    cleanups.push(upsertMetaTag("property", "og:type", "article"));
 
     try {
       const jsonLd: Record<string, unknown> = {
-        '@context': 'https://schema.org',
-        '@type': 'NewsArticle',
+        "@context": "https://schema.org",
+        "@type": "NewsArticle",
         headline: safeTitle,
-        articleSection: typeof news.category === 'string' ? news.category : undefined,
+        articleSection:
+          typeof news.category === "string" ? news.category : undefined,
         description: description || undefined,
-        datePublished: (news as any).published_at || (news as any).created_at || undefined,
-        dateModified: (news as any).updated_at || (news as any).published_at || (news as any).created_at || undefined,
+        datePublished:
+          (news as any).published_at || (news as any).created_at || undefined,
+        dateModified:
+          (news as any).updated_at ||
+          (news as any).published_at ||
+          (news as any).created_at ||
+          undefined,
         mainEntityOfPage: url || undefined,
         image: imageUrl ? [imageUrl] : undefined,
         author:
-          typeof (news as any).author === 'string' && (news as any).author
-            ? { '@type': 'Person', name: (news as any).author }
+          typeof (news as any).author === "string" && (news as any).author
+            ? { "@type": "Person", name: (news as any).author }
             : undefined,
         publisher: {
-          '@type': 'Organization',
+          "@type": "Organization",
           name:
-            typeof (news as any).source === 'string' && (news as any).source
+            typeof (news as any).source === "string" && (news as any).source
               ? (news as any).source
-              : '法律资讯',
+              : "法律资讯",
         },
       };
       for (const k of Object.keys(jsonLd)) {
         if (jsonLd[k] === undefined) delete jsonLd[k];
       }
-      cleanups.push(upsertJsonLd('news-jsonld', jsonLd));
+      cleanups.push(upsertJsonLd("news-jsonld", jsonLd));
     } catch {
       // ignore
     }
@@ -346,7 +422,19 @@ export default function NewsDetailPage() {
       document.title = prevTitle;
       for (const fn of cleanups.reverse()) fn();
     };
-  }, [newsId, news?.title, (news as any)?.summary, news?.content, news?.cover_image, (news as any)?.author, (news as any)?.category, (news as any)?.source, (news as any)?.published_at, (news as any)?.created_at, (news as any)?.updated_at]);
+  }, [
+    newsId,
+    news?.title,
+    (news as any)?.summary,
+    news?.content,
+    news?.cover_image,
+    (news as any)?.author,
+    (news as any)?.category,
+    (news as any)?.source,
+    (news as any)?.published_at,
+    (news as any)?.created_at,
+    (news as any)?.updated_at,
+  ]);
 
   const bookmarkMutation = useMutation({
     mutationFn: async () => {
@@ -439,7 +527,9 @@ export default function NewsDetailPage() {
     );
   }
 
-  const relatedItems = (relatedQuery.data ?? []).filter((i) => String(i.id) !== String(newsId));
+  const relatedItems = (relatedQuery.data ?? []).filter(
+    (i) => String(i.id) !== String(newsId)
+  );
 
   return (
     <div className="max-w-3xl mx-auto space-y-8">
@@ -508,6 +598,95 @@ export default function NewsDetailPage() {
           </Card>
         )}
 
+        {ai && (
+          <Card variant="surface" padding="md" className="mb-8">
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <h2 className="text-base font-semibold text-slate-900 dark:text-white">
+                AI 标注
+              </h2>
+              <Badge variant={riskVariant} size="sm">
+                {riskLabel}
+              </Badge>
+            </div>
+
+            {ai.summary && !news.summary && (
+              <p className="text-slate-700 leading-relaxed dark:text-white/70">
+                {ai.summary}
+              </p>
+            )}
+
+            {Array.isArray(ai.highlights) && ai.highlights.length > 0 ? (
+              <div className="mt-3">
+                <div className="text-sm font-medium text-slate-700 dark:text-white/70 mb-2">
+                  要点
+                </div>
+                <ul className="list-disc pl-5 space-y-1 text-sm text-slate-700 dark:text-white/70">
+                  {ai.highlights.map((h, idx) => (
+                    <li key={`${idx}-${h}`}>{h}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            {Array.isArray(ai.keywords) && ai.keywords.length > 0 ? (
+              <div className="mt-3">
+                <div className="text-sm font-medium text-slate-700 dark:text-white/70 mb-2">
+                  关键词
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {ai.keywords.map((k) => (
+                    <Badge key={k} variant="info" size="sm">
+                      {k}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            <div className="mt-3 space-y-2 text-sm text-slate-600 dark:text-white/50">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium text-slate-700 dark:text-white/70">
+                  敏感词
+                </span>
+                {Array.isArray(ai.sensitive_words) && ai.sensitive_words.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {ai.sensitive_words.map((w) => (
+                      <Badge key={w} variant="warning" size="sm">
+                        {w}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : (
+                  <span>无</span>
+                )}
+              </div>
+
+              {ai.duplicate_of_news_id != null && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium text-slate-700 dark:text-white/70">
+                    疑似重复
+                  </span>
+                  <Link
+                    to={`/news/${ai.duplicate_of_news_id}`}
+                    className="text-amber-600 hover:underline dark:text-amber-400"
+                  >
+                    查看 #{ai.duplicate_of_news_id}
+                  </Link>
+                </div>
+              )}
+
+              {ai.processed_at && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium text-slate-700 dark:text-white/70">
+                    处理时间
+                  </span>
+                  <span>{new Date(ai.processed_at).toLocaleString()}</span>
+                </div>
+              )}
+            </div>
+          </Card>
+        )}
+
         {/* 正文 */}
         <MarkdownContent content={news.content} className="text-base" />
 
@@ -548,7 +727,9 @@ export default function NewsDetailPage() {
             <Textarea
               value={commentDraft}
               onChange={(e) => setCommentDraft(e.target.value)}
-              placeholder={isAuthenticated ? "写下你的看法..." : "登录后可发表评论"}
+              placeholder={
+                isAuthenticated ? "写下你的看法..." : "登录后可发表评论"
+              }
               rows={4}
               disabled={!isAuthenticated}
             />
@@ -577,9 +758,13 @@ export default function NewsDetailPage() {
 
           <div className="mt-6 space-y-4">
             {commentsQuery.isLoading ? (
-              <p className="text-sm text-slate-600 dark:text-white/50">加载中...</p>
+              <p className="text-sm text-slate-600 dark:text-white/50">
+                加载中...
+              </p>
             ) : comments.length === 0 ? (
-              <p className="text-sm text-slate-600 dark:text-white/50">暂无评论</p>
+              <p className="text-sm text-slate-600 dark:text-white/50">
+                暂无评论
+              </p>
             ) : (
               <div className="space-y-4">
                 {comments.map((c) => {
@@ -599,7 +784,9 @@ export default function NewsDetailPage() {
                             <span className="font-medium text-slate-900 dark:text-white">
                               {name}
                             </span>
-                            <span className="text-slate-400 dark:text-white/30">·</span>
+                            <span className="text-slate-400 dark:text-white/30">
+                              ·
+                            </span>
                             <span className="text-slate-500 dark:text-white/40">
                               {new Date(c.created_at).toLocaleString()}
                             </span>
@@ -643,7 +830,9 @@ export default function NewsDetailPage() {
         <section data-testid="news-related">
           <Card variant="surface" padding="md">
             <div className="flex items-center justify-between gap-3 mb-4">
-              <h2 className="text-lg font-semibold text-slate-900 dark:text-white">相关推荐</h2>
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+                相关推荐
+              </h2>
               <Link
                 to="/news"
                 className="text-sm text-amber-600 hover:underline dark:text-amber-400"
@@ -653,9 +842,13 @@ export default function NewsDetailPage() {
             </div>
 
             {relatedQuery.isLoading ? (
-              <p className="text-sm text-slate-600 dark:text-white/50">加载中...</p>
+              <p className="text-sm text-slate-600 dark:text-white/50">
+                加载中...
+              </p>
             ) : relatedItems.length === 0 ? (
-              <p className="text-sm text-slate-600 dark:text-white/50">暂无相关推荐</p>
+              <p className="text-sm text-slate-600 dark:text-white/50">
+                暂无相关推荐
+              </p>
             ) : (
               <div className="space-y-3">
                 {relatedItems.map((item) => (
@@ -681,7 +874,11 @@ export default function NewsDetailPage() {
                           <Badge variant="primary" size="sm">
                             {item.category}
                           </Badge>
-                          {item.is_top ? <Badge variant="warning" size="sm">置顶</Badge> : null}
+                          {item.is_top ? (
+                            <Badge variant="warning" size="sm">
+                              置顶
+                            </Badge>
+                          ) : null}
                         </div>
 
                         <div className="text-slate-900 font-medium line-clamp-2 leading-snug dark:text-white">

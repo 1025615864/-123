@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 import logging
 import asyncio
 import os
-import uuid
+from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import ResponseValidationError
@@ -16,6 +16,7 @@ from .database import AsyncSessionLocal
 from .routers import api_router, websocket
 from .middleware.logging_middleware import RequestLoggingMiddleware, ErrorLoggingMiddleware
 from .middleware.rate_limit import RateLimitMiddleware
+from .utils.periodic_task_runner import PeriodicLockedRunner
 # from .routers import ai  # AI module disabled - needs langchain dependencies
 
 settings = get_settings()
@@ -37,35 +38,19 @@ async def lifespan(app: FastAPI):
 
     stop_event = asyncio.Event()
 
-    lock_key = "locks:scheduled_news"
-    lock_ttl_seconds = 60
-    lock_value = f"{os.getpid()}-{uuid.uuid4().hex}"
+    runner = PeriodicLockedRunner(stop_event=stop_event, lock_client=cache_service, logger=logger)
 
     scheduled_enabled = True
     redis_connected = False
 
-    async def _scheduled_news_loop():
-        while not stop_event.is_set():
-            try:
-                acquired = await cache_service.acquire_lock(
-                    lock_key,
-                    value=lock_value,
-                    expire=lock_ttl_seconds,
-                )
-                if acquired:
-                    try:
-                        async with AsyncSessionLocal() as session:
-                            from .services.news_service import news_service
+    async def _scheduled_news_job(session: AsyncSession) -> object:
+        from .services.news_service import news_service
 
-                            _ = await news_service.process_scheduled_news(session)
-                    finally:
-                        _ = await cache_service.release_lock(lock_key, value=lock_value)
-            except Exception:
-                logger.exception("处理定时新闻任务失败")
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=30.0)
-            except asyncio.TimeoutError:
-                pass
+        return await news_service.process_scheduled_news(session)
+
+    async def _scheduled_news_job_wrapper() -> object:
+        async with AsyncSessionLocal() as session:
+            return await _scheduled_news_job(session)
 
     if settings.redis_url:
         redis_connected = bool(await cache_service.connect(settings.redis_url))
@@ -74,9 +59,62 @@ async def lifespan(app: FastAPI):
         scheduled_enabled = False
         logger.warning("Redis未连接且DEBUG为False：已禁用定时新闻任务（避免多worker重复执行）")
 
-    scheduled_task = None
+    scheduled_task: asyncio.Task[None] | None = None
     if scheduled_enabled:
-        scheduled_task = asyncio.create_task(_scheduled_news_loop())
+        scheduled_task = asyncio.create_task(
+            runner.run(
+                lock_key="locks:scheduled_news",
+                lock_ttl_seconds=60,
+                interval_seconds=30.0,
+                job=_scheduled_news_job_wrapper,
+            )
+        )
+
+    rss_feeds_raw = os.getenv("RSS_FEEDS", "").strip()
+    rss_enabled = bool(rss_feeds_raw)
+    if (not settings.debug) and (not redis_connected):
+        rss_enabled = False
+
+    async def _rss_ingest_job_wrapper() -> object:
+        async with AsyncSessionLocal() as session:
+            from .services.rss_ingest_service import rss_ingest_service
+
+            return await rss_ingest_service.run_once(session)
+
+    rss_task: asyncio.Task[None] | None = None
+    if rss_enabled:
+        rss_interval_seconds = float(os.getenv("RSS_INGEST_INTERVAL_SECONDS", "300").strip() or "300")
+        rss_task = asyncio.create_task(
+            runner.run(
+                lock_key="locks:rss_ingest",
+                lock_ttl_seconds=60,
+                interval_seconds=rss_interval_seconds,
+                job=_rss_ingest_job_wrapper,
+            )
+        )
+
+    news_ai_enabled_raw = os.getenv("NEWS_AI_ENABLED", "").strip().lower()
+    news_ai_enabled = news_ai_enabled_raw in {"1", "true", "yes", "on"}
+    if (not settings.debug) and (not redis_connected):
+        news_ai_enabled = False
+
+    async def _news_ai_job_wrapper() -> object:
+        async with AsyncSessionLocal() as session:
+            from .services.news_ai_pipeline_service import news_ai_pipeline_service
+
+            return await news_ai_pipeline_service.run_once(session)
+
+    news_ai_task: asyncio.Task[None] | None = None
+    if news_ai_enabled:
+        news_ai_interval_seconds = float(os.getenv("NEWS_AI_INTERVAL_SECONDS", "120").strip() or "120")
+        news_ai_task = asyncio.create_task(
+            runner.run(
+                lock_key="locks:news_ai_pipeline",
+                lock_ttl_seconds=60,
+                interval_seconds=news_ai_interval_seconds,
+                job=_news_ai_job_wrapper,
+            )
+        )
 
     logger.info("数据库初始化完成")
     if ai is not None:
@@ -87,10 +125,14 @@ async def lifespan(app: FastAPI):
     yield
 
     stop_event.set()
-    if scheduled_task is not None:
-        scheduled_task.cancel()
+    for t in (scheduled_task, rss_task, news_ai_task):
+        if t is None:
+            continue
+        t.cancel()
         try:
-            await scheduled_task
+            await t
+        except asyncio.CancelledError:
+            pass
         except Exception:
             pass
 

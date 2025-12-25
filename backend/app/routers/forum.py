@@ -380,9 +380,12 @@ async def get_my_comments(
     current_user: Annotated[User, Depends(get_current_user)],
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
-    status: Annotated[str | None, Query(description="筛选状态：all/pending/approved/rejected")] = None,
+    status_param: Annotated[
+        str | None,
+        Query(alias="status", description="筛选状态：all/pending/approved/rejected"),
+    ] = None,
 ):
-    status_filter = (status or "all").strip().lower()
+    status_filter = (status_param or "all").strip().lower()
     if status_filter not in ("all", "pending", "approved", "rejected"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="status 仅支持 all / pending / approved / rejected")
 

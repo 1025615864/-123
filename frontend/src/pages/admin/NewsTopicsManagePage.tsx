@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { Plus, Trash2, Edit, Layers, ArrowLeft, ArrowDown, ArrowUp, Search, GripVertical } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  Edit,
+  Layers,
+  ArrowLeft,
+  ArrowDown,
+  ArrowUp,
+  Search,
+  GripVertical,
+} from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Card,
@@ -89,8 +99,12 @@ export default function NewsTopicsManagePage() {
   const [newsSearchKeyword, setNewsSearchKeyword] = useState("");
   const [newsSearchPage, setNewsSearchPage] = useState(1);
   const newsSearchPageSize = 10;
-  const [selectedNewsIds, setSelectedNewsIds] = useState<Set<number>>(new Set());
-  const [selectedItemIds, setSelectedItemIds] = useState<Set<number>>(new Set());
+  const [selectedNewsIds, setSelectedNewsIds] = useState<Set<number>>(
+    new Set()
+  );
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<number>>(
+    new Set()
+  );
   const [importCategory, setImportCategory] = useState("");
   const [importLimit, setImportLimit] = useState(50);
   const [manualOrderItemIds, setManualOrderItemIds] = useState<number[]>([]);
@@ -107,11 +121,17 @@ export default function NewsTopicsManagePage() {
     placeholderData: (prev) => prev,
   });
 
-  const reorderMutation = useAppMutation<{ updated: number }, { topicId: number; itemIds: number[] }>({
+  const reorderMutation = useAppMutation<
+    { updated: number },
+    { topicId: number; itemIds: number[] }
+  >({
     mutationFn: async ({ topicId, itemIds }) => {
-      const res = await api.post(`/news/admin/topics/${topicId}/items/reorder`, {
-        item_ids: itemIds,
-      });
+      const res = await api.post(
+        `/news/admin/topics/${topicId}/items/reorder`,
+        {
+          item_ids: itemIds,
+        }
+      );
       return res.data as { updated: number };
     },
     errorMessageFallback: "拖拽排序失败",
@@ -124,9 +144,15 @@ export default function NewsTopicsManagePage() {
     },
   });
 
-  const autoCacheRefreshMutation = useAppMutation<{ cached: number }, { topicId: number }>({
+  const autoCacheRefreshMutation = useAppMutation<
+    { cached: number },
+    { topicId: number }
+  >({
     mutationFn: async ({ topicId }) => {
-      const res = await api.post(`/news/admin/topics/${topicId}/auto-cache/refresh`, {});
+      const res = await api.post(
+        `/news/admin/topics/${topicId}/auto-cache/refresh`,
+        {}
+      );
       return res.data as { cached: number };
     },
     errorMessageFallback: "刷新缓存失败",
@@ -159,10 +185,17 @@ export default function NewsTopicsManagePage() {
     { topicId: number; itemIds: number[] }
   >({
     mutationFn: async ({ topicId, itemIds }) => {
-      const res = await api.post(`/news/admin/topics/${topicId}/items/bulk-delete`, {
-        item_ids: itemIds,
-      });
-      return res.data as { requested: number; deleted: number; skipped: number };
+      const res = await api.post(
+        `/news/admin/topics/${topicId}/items/bulk-delete`,
+        {
+          item_ids: itemIds,
+        }
+      );
+      return res.data as {
+        requested: number;
+        deleted: number;
+        skipped: number;
+      };
     },
     errorMessageFallback: "批量移除失败",
     invalidateQueryKeys: [queryKeys.adminNewsTopicDetail(manageTopicId)],
@@ -172,9 +205,15 @@ export default function NewsTopicsManagePage() {
     },
   });
 
-  const reindexMutation = useAppMutation<{ updated: number }, { topicId: number }>({
+  const reindexMutation = useAppMutation<
+    { updated: number },
+    { topicId: number }
+  >({
     mutationFn: async ({ topicId }) => {
-      const res = await api.post(`/news/admin/topics/${topicId}/items/reindex`, {});
+      const res = await api.post(
+        `/news/admin/topics/${topicId}/items/reindex`,
+        {}
+      );
       return res.data as { updated: number };
     },
     errorMessageFallback: "重排失败",
@@ -200,7 +239,9 @@ export default function NewsTopicsManagePage() {
     errorMessageFallback: "导入失败",
     invalidateQueryKeys: [queryKeys.adminNewsTopicDetail(manageTopicId)],
     onSuccess: (data) => {
-      toast.success(`导入请求 ${data.requested} 条，新增 ${data.added} 条，跳过 ${data.skipped} 条`);
+      toast.success(
+        `导入请求 ${data.requested} 条，新增 ${data.added} 条，跳过 ${data.skipped} 条`
+      );
     },
   });
 
@@ -258,12 +299,20 @@ export default function NewsTopicsManagePage() {
     mutationFn: async (payload) => {
       const res = await api.post("/news/admin/topics", {
         title: payload.title.trim(),
-        description: payload.description.trim() ? payload.description.trim() : null,
-        cover_image: payload.cover_image.trim() ? payload.cover_image.trim() : null,
+        description: payload.description.trim()
+          ? payload.description.trim()
+          : null,
+        cover_image: payload.cover_image.trim()
+          ? payload.cover_image.trim()
+          : null,
         is_active: !!payload.is_active,
         sort_order: Number(payload.sort_order || 0),
-        auto_category: payload.auto_category.trim() ? payload.auto_category.trim() : null,
-        auto_keyword: payload.auto_keyword.trim() ? payload.auto_keyword.trim() : null,
+        auto_category: payload.auto_category.trim()
+          ? payload.auto_category.trim()
+          : null,
+        auto_keyword: payload.auto_keyword.trim()
+          ? payload.auto_keyword.trim()
+          : null,
         auto_limit: Number(payload.auto_limit || 0),
       });
       return res.data as NewsTopic;
@@ -277,16 +326,27 @@ export default function NewsTopicsManagePage() {
     },
   });
 
-  const updateMutation = useAppMutation<NewsTopic, { id: number; payload: typeof form }>({
+  const updateMutation = useAppMutation<
+    NewsTopic,
+    { id: number; payload: typeof form }
+  >({
     mutationFn: async ({ id, payload }) => {
       const res = await api.put(`/news/admin/topics/${id}`, {
         title: payload.title.trim() ? payload.title.trim() : undefined,
-        description: payload.description.trim() ? payload.description.trim() : null,
-        cover_image: payload.cover_image.trim() ? payload.cover_image.trim() : null,
+        description: payload.description.trim()
+          ? payload.description.trim()
+          : null,
+        cover_image: payload.cover_image.trim()
+          ? payload.cover_image.trim()
+          : null,
         is_active: payload.is_active,
         sort_order: Number(payload.sort_order || 0),
-        auto_category: payload.auto_category.trim() ? payload.auto_category.trim() : null,
-        auto_keyword: payload.auto_keyword.trim() ? payload.auto_keyword.trim() : null,
+        auto_category: payload.auto_category.trim()
+          ? payload.auto_category.trim()
+          : null,
+        auto_keyword: payload.auto_keyword.trim()
+          ? payload.auto_keyword.trim()
+          : null,
         auto_limit: Number(payload.auto_limit || 0),
       });
       return res.data as NewsTopic;
@@ -326,6 +386,8 @@ export default function NewsTopicsManagePage() {
     },
     enabled: manageOpen && !!manageTopicId,
     retry: 1,
+    staleTime: 0,
+    refetchOnMount: "always",
     refetchOnWindowFocus: false,
     placeholderData: (prev) => prev,
   });
@@ -353,7 +415,10 @@ export default function NewsTopicsManagePage() {
   }, [items]);
 
   const orderedItems = useMemo(() => {
-    const order = manualOrderItemIds.length > 0 ? manualOrderItemIds : defaultOrderedItemIds;
+    const order =
+      manualOrderItemIds.length > 0
+        ? manualOrderItemIds
+        : defaultOrderedItemIds;
     const result: TopicItemBrief[] = [];
     const seen = new Set<number>();
 
@@ -392,7 +457,9 @@ export default function NewsTopicsManagePage() {
     if (!dragging) return;
     if (Number(dragging) === Number(targetItemId)) return;
 
-    const base = (manualOrderItemIds.length > 0 ? manualOrderItemIds : defaultOrderedItemIds).slice();
+    const base = (
+      manualOrderItemIds.length > 0 ? manualOrderItemIds : defaultOrderedItemIds
+    ).slice();
     const fromIdx = base.findIndex((x) => Number(x) === Number(dragging));
     const toIdx = base.findIndex((x) => Number(x) === Number(targetItemId));
     if (fromIdx < 0 || toIdx < 0) return;
@@ -429,7 +496,11 @@ export default function NewsTopicsManagePage() {
     () =>
       [
         "admin-news-search",
-        { keyword: trimmedNewsSearchKeyword, page: newsSearchPage, pageSize: newsSearchPageSize },
+        {
+          keyword: trimmedNewsSearchKeyword,
+          page: newsSearchPage,
+          pageSize: newsSearchPageSize,
+        },
       ] as const,
     [trimmedNewsSearchKeyword, newsSearchPage, newsSearchPageSize]
   );
@@ -458,7 +529,10 @@ export default function NewsTopicsManagePage() {
 
   const searchResults = newsSearchQuery.data?.items ?? [];
   const searchTotal = newsSearchQuery.data?.total ?? 0;
-  const searchTotalPages = Math.max(1, Math.ceil(searchTotal / newsSearchPageSize));
+  const searchTotalPages = Math.max(
+    1,
+    Math.ceil(searchTotal / newsSearchPageSize)
+  );
 
   const bulkAddMutation = useAppMutation<
     { requested: number; added: number; skipped: number },
@@ -508,9 +582,14 @@ export default function NewsTopicsManagePage() {
     setSelectedNewsIds(new Set());
   };
 
-  const addItemMutation = useAppMutation<{ id: number; message: string }, { topicId: number; newsId: number }>({
+  const addItemMutation = useAppMutation<
+    { id: number; message: string },
+    { topicId: number; newsId: number }
+  >({
     mutationFn: async ({ topicId, newsId }) => {
-      const res = await api.post(`/news/admin/topics/${topicId}/items`, { news_id: newsId });
+      const res = await api.post(`/news/admin/topics/${topicId}/items`, {
+        news_id: newsId,
+      });
       return res.data as { id: number; message: string };
     },
     successMessage: "已添加",
@@ -521,7 +600,10 @@ export default function NewsTopicsManagePage() {
     },
   });
 
-  const removeItemMutation = useAppMutation<void, { topicId: number; itemId: number }>({
+  const removeItemMutation = useAppMutation<
+    void,
+    { topicId: number; itemId: number }
+  >({
     mutationFn: async ({ topicId, itemId }) => {
       await api.delete(`/news/admin/topics/${topicId}/items/${itemId}`);
     },
@@ -530,9 +612,14 @@ export default function NewsTopicsManagePage() {
     invalidateQueryKeys: [queryKeys.adminNewsTopicDetail(manageTopicId)],
   });
 
-  const updatePosMutation = useAppMutation<void, { topicId: number; itemId: number; position: number }>({
+  const updatePosMutation = useAppMutation<
+    void,
+    { topicId: number; itemId: number; position: number }
+  >({
     mutationFn: async ({ topicId, itemId, position }) => {
-      await api.put(`/news/admin/topics/${topicId}/items/${itemId}`, { position });
+      await api.put(`/news/admin/topics/${topicId}/items/${itemId}`, {
+        position,
+      });
     },
     errorMessageFallback: "更新失败",
     invalidateQueryKeys: [queryKeys.adminNewsTopicDetail(manageTopicId)],
@@ -547,8 +634,16 @@ export default function NewsTopicsManagePage() {
     if (updatePosMutation.isPending) return;
 
     // 交换 position
-    updatePosMutation.mutate({ topicId: tId, itemId: cur.id, position: other.position });
-    updatePosMutation.mutate({ topicId: tId, itemId: other.id, position: cur.position });
+    updatePosMutation.mutate({
+      topicId: tId,
+      itemId: cur.id,
+      position: other.position,
+    });
+    updatePosMutation.mutate({
+      topicId: tId,
+      itemId: other.id,
+      position: cur.position,
+    });
   };
 
   return (
@@ -616,11 +711,7 @@ export default function NewsTopicsManagePage() {
               </div>
 
               <div className="mt-4 flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => openEdit(t)}
-                >
+                <Button variant="outline" size="sm" onClick={() => openEdit(t)}>
                   <Edit className="h-4 w-4" />
                   编辑
                 </Button>
@@ -658,7 +749,16 @@ export default function NewsTopicsManagePage() {
 
               {reportById.get(Number(t.id)) ? (
                 <div className="mt-4 text-xs text-slate-500 dark:text-white/45">
-                  条目 {reportById.get(Number(t.id))?.manual_item_count ?? 0} · 浏览 {reportById.get(Number(t.id))?.manual_view_count ?? 0} · 收藏 {reportById.get(Number(t.id))?.manual_favorite_count ?? 0} · 转化 {(((reportById.get(Number(t.id))?.manual_conversion_rate ?? 0) as number) * 100).toFixed(1)}%
+                  条目 {reportById.get(Number(t.id))?.manual_item_count ?? 0} ·
+                  浏览 {reportById.get(Number(t.id))?.manual_view_count ?? 0} ·
+                  收藏{" "}
+                  {reportById.get(Number(t.id))?.manual_favorite_count ?? 0} ·
+                  转化{" "}
+                  {(
+                    ((reportById.get(Number(t.id))?.manual_conversion_rate ??
+                      0) as number) * 100
+                  ).toFixed(1)}
+                  %
                 </div>
               ) : null}
             </Card>
@@ -682,39 +782,55 @@ export default function NewsTopicsManagePage() {
           <Input
             label="简介"
             value={form.description}
-            onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
+            onChange={(e) =>
+              setForm((p) => ({ ...p, description: e.target.value }))
+            }
             placeholder="专题简介（可选）"
           />
           <Input
             label="封面图"
             value={form.cover_image}
-            onChange={(e) => setForm((p) => ({ ...p, cover_image: e.target.value }))}
+            onChange={(e) =>
+              setForm((p) => ({ ...p, cover_image: e.target.value }))
+            }
             placeholder="封面图 URL（可选）"
           />
           <Input
             label="排序"
             value={String(form.sort_order)}
             onChange={(e) =>
-              setForm((p) => ({ ...p, sort_order: Number(e.target.value || 0) }))
+              setForm((p) => ({
+                ...p,
+                sort_order: Number(e.target.value || 0),
+              }))
             }
             placeholder="数字越大越靠前"
           />
           <Input
             label="自动收录分类"
             value={form.auto_category}
-            onChange={(e) => setForm((p) => ({ ...p, auto_category: e.target.value }))}
+            onChange={(e) =>
+              setForm((p) => ({ ...p, auto_category: e.target.value }))
+            }
             placeholder="例如：法律动态（可选）"
           />
           <Input
             label="自动收录关键词"
             value={form.auto_keyword}
-            onChange={(e) => setForm((p) => ({ ...p, auto_keyword: e.target.value }))}
+            onChange={(e) =>
+              setForm((p) => ({ ...p, auto_keyword: e.target.value }))
+            }
             placeholder="例如：劳动（可选）"
           />
           <Input
             label="自动收录数量"
             value={String(form.auto_limit)}
-            onChange={(e) => setForm((p) => ({ ...p, auto_limit: Number(e.target.value || 0) }))}
+            onChange={(e) =>
+              setForm((p) => ({
+                ...p,
+                auto_limit: Number(e.target.value || 0),
+              }))
+            }
             placeholder="0 表示关闭自动收录"
           />
           <div className="flex items-center gap-3">
@@ -770,20 +886,27 @@ export default function NewsTopicsManagePage() {
           <Input
             label="简介"
             value={form.description}
-            onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
+            onChange={(e) =>
+              setForm((p) => ({ ...p, description: e.target.value }))
+            }
             placeholder="专题简介（可选）"
           />
           <Input
             label="封面图"
             value={form.cover_image}
-            onChange={(e) => setForm((p) => ({ ...p, cover_image: e.target.value }))}
+            onChange={(e) =>
+              setForm((p) => ({ ...p, cover_image: e.target.value }))
+            }
             placeholder="封面图 URL（可选）"
           />
           <Input
             label="排序"
             value={String(form.sort_order)}
             onChange={(e) =>
-              setForm((p) => ({ ...p, sort_order: Number(e.target.value || 0) }))
+              setForm((p) => ({
+                ...p,
+                sort_order: Number(e.target.value || 0),
+              }))
             }
             placeholder="数字越大越靠前"
           />
@@ -917,7 +1040,9 @@ export default function NewsTopicsManagePage() {
               </div>
               <div className="flex items-center gap-2">
                 <div className="text-xs text-slate-500 dark:text-white/45">
-                  {newsSearchQuery.isLoading ? "加载中..." : `共 ${searchTotal} 条`}
+                  {newsSearchQuery.isLoading
+                    ? "加载中..."
+                    : `共 ${searchTotal} 条`}
                 </div>
                 {selectedNewsIds.size > 0 ? (
                   <div className="text-xs text-slate-600 dark:text-white/55">
@@ -928,7 +1053,9 @@ export default function NewsTopicsManagePage() {
                   variant="outline"
                   size="sm"
                   data-testid="admin-news-search-select-all"
-                  disabled={searchResults.length === 0 || newsSearchQuery.isLoading}
+                  disabled={
+                    searchResults.length === 0 || newsSearchQuery.isLoading
+                  }
                   onClick={() => selectAllVisible()}
                 >
                   全选
@@ -946,12 +1073,18 @@ export default function NewsTopicsManagePage() {
                   variant="outline"
                   size="sm"
                   data-testid="admin-news-search-bulk-add"
-                  disabled={!manageTopicId || selectedNewsIds.size === 0 || bulkAddMutation.isPending}
+                  disabled={
+                    !manageTopicId ||
+                    selectedNewsIds.size === 0 ||
+                    bulkAddMutation.isPending
+                  }
                   onClick={() => {
                     const tId = manageTopicId;
                     if (!tId) return;
                     if (bulkAddMutation.isPending) return;
-                    const ids = Array.from(selectedNewsIds).map((x) => Number(x));
+                    const ids = Array.from(selectedNewsIds).map((x) =>
+                      Number(x)
+                    );
                     if (ids.length === 0) return;
                     bulkAddMutation.mutate({ topicId: tId, newsIds: ids });
                   }}
@@ -963,13 +1096,19 @@ export default function NewsTopicsManagePage() {
 
             <div className="mt-3 space-y-2">
               {newsSearchQuery.isLoading ? (
-                <div className="text-sm text-slate-600 dark:text-white/50">加载中...</div>
+                <div className="text-sm text-slate-600 dark:text-white/50">
+                  加载中...
+                </div>
               ) : searchResults.length === 0 ? (
-                <div className="text-sm text-slate-600 dark:text-white/50">暂无结果</div>
+                <div className="text-sm text-slate-600 dark:text-white/50">
+                  暂无结果
+                </div>
               ) : (
                 searchResults.map((n) => {
                   const tId = manageTopicId;
-                  const already = items.some((it) => Number(it.news_id) === Number(n.id));
+                  const already = items.some(
+                    (it) => Number(it.news_id) === Number(n.id)
+                  );
                   const selected = selectedNewsIds.has(Number(n.id));
                   return (
                     <div
@@ -1012,7 +1151,10 @@ export default function NewsTopicsManagePage() {
                         data-testid={`admin-news-search-add-${n.id}`}
                         onClick={() => {
                           if (!tId) return;
-                          addItemMutation.mutate({ topicId: tId, newsId: Number(n.id) });
+                          addItemMutation.mutate({
+                            topicId: tId,
+                            newsId: Number(n.id),
+                          });
                         }}
                       >
                         {already ? "已添加" : "添加"}
@@ -1050,15 +1192,24 @@ export default function NewsTopicsManagePage() {
                 </div>
                 <div className="flex items-center gap-2">
                   {selectedItemIds.size > 0 ? (
-                    <div className="text-xs text-slate-600 dark:text-white/55">已选 {selectedItemIds.size}</div>
+                    <div className="text-xs text-slate-600 dark:text-white/55">
+                      已选 {selectedItemIds.size}
+                    </div>
                   ) : null}
-                  <Button variant="outline" size="sm" onClick={() => selectAllItems()} disabled={items.length === 0}>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => selectAllItems()}
+                    disabled={items.length === 0}
+                  >
                     全选
                   </Button>
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={!manageTopicId || autoCacheRefreshMutation.isPending}
+                    disabled={
+                      !manageTopicId || autoCacheRefreshMutation.isPending
+                    }
                     data-testid="admin-topic-auto-cache-refresh"
                     onClick={() => {
                       const tId = manageTopicId;
@@ -1083,15 +1234,26 @@ export default function NewsTopicsManagePage() {
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={!manageTopicId || selectedItemIds.size === 0 || bulkRemoveMutation.isPending}
+                    disabled={
+                      !manageTopicId ||
+                      selectedItemIds.size === 0 ||
+                      bulkRemoveMutation.isPending
+                    }
                     data-testid="admin-topic-items-bulk-remove"
                     onClick={() => {
                       const tId = manageTopicId;
                       if (!tId) return;
-                      if (!confirm(`确定批量移除 ${selectedItemIds.size} 个条目吗？`)) return;
+                      if (
+                        !confirm(
+                          `确定批量移除 ${selectedItemIds.size} 个条目吗？`
+                        )
+                      )
+                        return;
                       bulkRemoveMutation.mutate({
                         topicId: tId,
-                        itemIds: Array.from(selectedItemIds).map((x) => Number(x)),
+                        itemIds: Array.from(selectedItemIds).map((x) =>
+                          Number(x)
+                        ),
                       });
                     }}
                   >
@@ -1101,7 +1263,7 @@ export default function NewsTopicsManagePage() {
               </div>
 
               <div className="space-y-2">
-              {orderedItems.map((it, idx) => (
+                {orderedItems.map((it, idx) => (
                   <Card key={it.id} variant="surface" padding="sm">
                     <div className="flex items-center justify-between gap-3">
                       <div className="flex items-center gap-3 min-w-0">
@@ -1129,17 +1291,17 @@ export default function NewsTopicsManagePage() {
                         />
 
                         <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <Badge variant="primary" size="sm">
-                            {it.category}
-                          </Badge>
-                          <span className="text-xs text-slate-500 dark:text-white/45">
-                            #{it.news_id} / pos {it.position}
-                          </span>
-                        </div>
-                        <div className="mt-1 text-sm font-medium text-slate-900 dark:text-white line-clamp-1">
-                          {it.title}
-                        </div>
+                          <div className="flex items-center gap-2">
+                            <Badge variant="primary" size="sm">
+                              {it.category}
+                            </Badge>
+                            <span className="text-xs text-slate-500 dark:text-white/45">
+                              #{it.news_id} / pos {it.position}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-sm font-medium text-slate-900 dark:text-white line-clamp-1">
+                            {it.title}
+                          </div>
                         </div>
                       </div>
 
@@ -1156,7 +1318,10 @@ export default function NewsTopicsManagePage() {
                           variant="outline"
                           size="sm"
                           onClick={() => move(1, idx)}
-                          disabled={idx === items.length - 1 || updatePosMutation.isPending}
+                          disabled={
+                            idx === items.length - 1 ||
+                            updatePosMutation.isPending
+                          }
                         >
                           <ArrowDown className="h-4 w-4" />
                         </Button>
@@ -1167,7 +1332,10 @@ export default function NewsTopicsManagePage() {
                             const tId = manageTopicId;
                             if (!tId) return;
                             if (!confirm("确定移除该条目吗？")) return;
-                            removeItemMutation.mutate({ topicId: tId, itemId: it.id });
+                            removeItemMutation.mutate({
+                              topicId: tId,
+                              itemId: it.id,
+                            });
                           }}
                         >
                           <Trash2 className="h-4 w-4" />
@@ -1200,7 +1368,10 @@ export default function NewsTopicsManagePage() {
       </Modal>
 
       <div className="text-xs text-slate-500 dark:text-white/40">
-        提示：前台专题入口为 <Link to="/news/topics" className="underline">/news/topics</Link>
+        提示：前台专题入口为{" "}
+        <Link to="/news/topics" className="underline">
+          /news/topics
+        </Link>
       </div>
     </div>
   );

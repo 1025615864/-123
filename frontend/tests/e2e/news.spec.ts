@@ -11,6 +11,52 @@ import {
   deleteNews,
 } from './helpers'
 
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function waitForNewsAiRiskLevel(
+  request: any,
+  newsId: number,
+  expected: string,
+  timeoutMs: number = 30_000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  const exp = String(expected).trim().toLowerCase()
+  while (Date.now() < deadline) {
+    const res = await request.get(`${apiBase}/news/${newsId}`)
+    if (res.ok()) {
+      const json = await res.json()
+      const risk = String(json?.ai_annotation?.risk_level ?? json?.ai_risk_level ?? '').trim().toLowerCase()
+      if (risk && risk === exp) return
+    }
+    await sleep(800)
+  }
+  throw new Error(`waitForNewsAiRiskLevel timeout newsId=${newsId} expected=${expected}`)
+}
+
+async function waitForNewsAiAnnotationReady(
+  request: any,
+  newsId: number,
+  timeoutMs: number = 30_000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const res = await request.get(`${apiBase}/news/${newsId}`)
+    if (res.ok()) {
+      const json = await res.json()
+      const ai = json?.ai_annotation
+      const highlights = ai?.highlights
+      const keywords = ai?.keywords
+      const ready =
+        Array.isArray(highlights) && highlights.length > 0 && Array.isArray(keywords) && keywords.length > 0
+      if (ready) return
+    }
+    await sleep(800)
+  }
+  throw new Error(`waitForNewsAiAnnotationReady timeout newsId=${newsId}`)
+}
+
 test('新闻列表：关键词搜索可命中 title/summary/source/author/content', async ({ page, request }) => {
   const now = Date.now()
   const adminToken = await loginAdmin(request)
@@ -27,7 +73,6 @@ test('新闻列表：关键词搜索可命中 title/summary/source/author/conten
     is_top: false,
     is_published: true,
   })
-
   try {
     await page.goto('/news')
 
@@ -54,6 +99,97 @@ test('新闻列表：关键词搜索可命中 title/summary/source/author/conten
     // negative
     await page.getByPlaceholder('搜索标题或摘要').fill(`NOT_FOUND_${token}`)
     await expect(page.getByText('暂无符合条件的新闻')).toBeVisible({ timeout: 12_000 })
+  } finally {
+    await deleteNews(request, adminToken, newsId)
+  }
+})
+
+test('新闻详情：AI 要点/关键词可见；新闻列表卡片展示 AI keywords Badge', async ({ page, request }) => {
+  const now = Date.now()
+  const adminToken = await loginAdmin(request)
+
+  const token = `E2E_NEWS_AI_HL_KW_${now}`
+  const title = `AI要点关键词新闻-${token}`
+
+  const newsId = await createNews(request, adminToken, {
+    title,
+    category: '法律动态',
+    summary: null,
+    cover_image: null,
+    source: 'E2E',
+    author: 'E2E',
+    content: `要点一。要点二。测试内容：毒品 诈骗 ${token}`,
+    is_top: false,
+    is_published: true,
+  })
+
+  try {
+    await waitForNewsAiRiskLevel(request, newsId, 'danger', 30_000)
+    await waitForNewsAiAnnotationReady(request, newsId, 30_000)
+
+    const detailRes = await request.get(`${apiBase}/news/${newsId}`)
+    expect(detailRes.ok()).toBeTruthy()
+    const detailJson = await detailRes.json()
+    const kw0 = String(detailJson?.ai_annotation?.keywords?.[0] ?? '').trim()
+    expect(kw0).toBeTruthy()
+
+    await page.goto(`/news/${newsId}`)
+    await expect(page.getByRole('heading', { level: 1, name: title })).toBeVisible({ timeout: 12_000 })
+    await expect(page.getByText('要点').first()).toBeVisible({ timeout: 12_000 })
+    await expect(page.getByText('关键词').first()).toBeVisible({ timeout: 12_000 })
+    await expect(page.getByText(kw0).first()).toBeVisible({ timeout: 12_000 })
+
+    await page.goto('/news')
+    await page.getByPlaceholder('搜索标题或摘要').fill(title)
+    const card = page.locator('a', { hasText: title }).first()
+    await expect(card).toBeVisible({ timeout: 12_000 })
+    await expect(card.getByText(kw0).first()).toBeVisible({ timeout: 12_000 })
+  } finally {
+    await deleteNews(request, adminToken, newsId)
+  }
+})
+
+test('管理后台：AI 风险筛选（danger）可用且列表展示 Badge', async ({ page, request }) => {
+  const now = Date.now()
+  const adminToken = await loginAdmin(request)
+
+  const token = `E2E_ADMIN_NEWS_RISK_${now}`
+  const title = `AI风险新闻-${token}`
+
+  const newsId = await createNews(request, adminToken, {
+    title,
+    category: '法律动态',
+    summary: null,
+    cover_image: null,
+    source: 'E2E',
+    author: 'E2E',
+    content: `测试敏感词：毒品`,
+    is_top: false,
+    is_published: true,
+  })
+
+  try {
+    await waitForNewsAiRiskLevel(request, newsId, 'danger', 30_000)
+
+    await page.goto('/login')
+    await page.getByPlaceholder('请输入用户名').fill(adminUsername)
+    await page.getByPlaceholder('请输入密码').fill(adminPassword)
+    await page.getByRole('button', { name: '登录' }).click()
+    await page.waitForURL('**/', { timeout: 12_000 })
+
+    await page.goto('/admin/news')
+
+    await page.getByPlaceholder('搜索新闻标题...').fill(title)
+
+    const row = page.getByTestId(`admin-news-${newsId}`)
+    await expect(row).toBeVisible({ timeout: 12_000 })
+
+    await page.getByTestId('admin-news-risk-filter').selectOption('danger')
+    await expect(row).toBeVisible({ timeout: 12_000 })
+    await expect(row.getByText('敏感').first()).toBeVisible({ timeout: 12_000 })
+
+    await page.getByTestId('admin-news-risk-filter').selectOption('safe')
+    await expect.poll(async () => await row.count()).toBe(0)
   } finally {
     await deleteNews(request, adminToken, newsId)
   }

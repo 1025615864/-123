@@ -4,6 +4,8 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import cast
 
+from _pytest.monkeypatch import MonkeyPatch
+
 
 class TestRootAPI:
     """根路由测试"""
@@ -54,6 +56,83 @@ class TestNewsAPI:
         data = response.json()
         assert "items" in data
         assert "total" in data
+
+    @pytest.mark.asyncio
+    async def test_admin_rerun_news_ai(self, client: AsyncClient, test_session: AsyncSession, monkeypatch: MonkeyPatch):
+        from sqlalchemy import select
+
+        from app.models.news import News
+        from app.models.news_ai import NewsAIAnnotation
+        from app.models.user import User
+        from app.services.news_ai_pipeline_service import NewsAIPipelineService
+        from app.utils.security import create_access_token, hash_password
+
+        admin = User(
+            username="a_news_ai",
+            email="a_news_ai@example.com",
+            nickname="a_news_ai",
+            hashed_password=hash_password("Test123456"),
+            role="admin",
+            is_active=True,
+        )
+        test_session.add(admin)
+        await test_session.commit()
+        await test_session.refresh(admin)
+
+        token = create_access_token({"sub": str(admin.id)})
+
+        news = News(
+            title="单测新闻",
+            summary=None,
+            content="正文内容",
+            category="法律动态",
+            is_top=False,
+            is_published=True,
+            review_status="approved",
+        )
+        test_session.add(news)
+        await test_session.commit()
+        await test_session.refresh(news)
+
+        async def fake_make_summary(
+            self: object,
+            _news: News,
+            *,
+            env_overrides: dict[str, str] | None = None,
+            force_generate: bool = False,
+        ):
+            _ = self
+            _ = env_overrides
+            _ = force_generate
+            return "AI摘要", True, ["要点一"], ["关键词A"]
+
+        def fake_make_risk(self: object, _news: News):
+            _ = self
+            return "safe", None
+
+        async def fake_find_duplicate_of(self: object, _db: object, _news: News):
+            _ = self
+            _ = _db
+            return None
+
+        monkeypatch.setattr(NewsAIPipelineService, "_make_summary", fake_make_summary, raising=True)
+        monkeypatch.setattr(NewsAIPipelineService, "_make_risk", fake_make_risk, raising=True)
+        monkeypatch.setattr(NewsAIPipelineService, "_find_duplicate_of", fake_find_duplicate_of, raising=True)
+
+        res = await client.post(
+            f"/api/news/admin/{int(news.id)}/ai/rerun",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 200
+        assert res.json().get("message") == "ok"
+
+        ann_res = await test_session.execute(
+            select(NewsAIAnnotation).where(NewsAIAnnotation.news_id == int(news.id))
+        )
+        ann = ann_res.scalar_one_or_none()
+        assert ann is not None
+        assert ann.summary == "AI摘要"
+        assert ann.processed_at is not None
 
 
 class TestForumAPI:

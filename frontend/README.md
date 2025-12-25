@@ -126,17 +126,17 @@ npm run test:e2e:ui
   - 默认：`http://localhost:5173/api`
   - 说明：Playwright 通过该地址直连后端 API（通常由 Vite 代理转发到后端）。
 - `E2E_ADMIN_USER`
-  - 默认：`123311`
+  - 默认：`admin`
   - 说明：用于执行管理员审核/驳回接口的账号。
 - `E2E_ADMIN_PASS`
-  - 默认：`123311`
+  - 默认：`admin123`
 
 在 PowerShell 中示例：
 
 ```powershell
 $env:E2E_API_BASE="http://localhost:5173/api"
-$env:E2E_ADMIN_USER="123311"
-$env:E2E_ADMIN_PASS="123311"
+$env:E2E_ADMIN_USER="admin"
+$env:E2E_ADMIN_PASS="admin123"
 npm run test:e2e
 ```
 
@@ -271,6 +271,10 @@ toast.warning("警告信息");
 
 ```css
 .animate-fade-in      /* 淡入动画 */
+/* 淡入动画 */
+/* 淡入动画 */
+/* 淡入动画 */
+/* 淡入动画 */
 /* 淡入动画 */
 /* 淡入动画 */
 /* 淡入动画 */

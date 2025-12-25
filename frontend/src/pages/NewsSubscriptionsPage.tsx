@@ -110,6 +110,14 @@ export default function NewsSubscriptionsPage() {
             <LinkButton to="/news" variant="ghost" className="rounded-full px-6 py-3 text-sm">
               返回新闻
             </LinkButton>
+            <LinkButton
+              to="/news?mode=subscribed"
+              variant="outline"
+              className="rounded-full px-6 py-3 text-sm"
+              data-testid="news-subscriptions-view-feed"
+            >
+              查看订阅内容
+            </LinkButton>
             <LinkButton to="/notifications" variant="outline" className="rounded-full px-6 py-3 text-sm">
               通知中心
             </LinkButton>

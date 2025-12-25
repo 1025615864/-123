@@ -12,9 +12,13 @@ class NewsCreate(BaseModel):
     cover_image: str | None = Field(None, description="封面图URL")
     category: str = Field(default="general", description="分类")
     source: str | None = Field(None, max_length=100, description="来源")
+    source_url: str | None = Field(None, description="来源链接")
+    source_site: str | None = Field(None, max_length=100, description="来源站点")
     author: str | None = Field(None, max_length=50, description="作者")
     is_top: bool = Field(default=False, description="是否置顶")
     is_published: bool = Field(default=True, description="是否发布")
+    review_status: str | None = Field(None, description="审核状态：pending/approved/rejected")
+    review_reason: str | None = Field(None, max_length=200, description="审核原因")
     scheduled_publish_at: datetime | None = Field(None, description="定时发布时间")
     scheduled_unpublish_at: datetime | None = Field(None, description="定时下线时间")
 
@@ -27,11 +31,26 @@ class NewsUpdate(BaseModel):
     cover_image: str | None = None
     category: str | None = None
     source: str | None = None
+    source_url: str | None = None
+    source_site: str | None = None
     author: str | None = None
     is_top: bool | None = None
     is_published: bool | None = None
+    review_status: str | None = None
+    review_reason: str | None = Field(None, max_length=200)
+    reviewed_at: datetime | None = None
     scheduled_publish_at: datetime | None = None
     scheduled_unpublish_at: datetime | None = None
+
+
+class NewsAIAnnotationResponse(BaseModel):
+    summary: str | None = None
+    risk_level: str
+    sensitive_words: list[str] = []
+    highlights: list[str] = []
+    keywords: list[str] = []
+    duplicate_of_news_id: int | None = None
+    processed_at: datetime | None = None
 
 
 class NewsResponse(BaseModel):
@@ -39,16 +58,23 @@ class NewsResponse(BaseModel):
     id: int
     title: str
     summary: str | None = None
+    ai_annotation: NewsAIAnnotationResponse | None = None
     content: str
     cover_image: str | None = None
     category: str
     source: str | None = None
+    source_url: str | None = None
+    source_site: str | None = None
     author: str | None = None
     view_count: int
     favorite_count: int = 0
     is_favorited: bool = False
+    ai_risk_level: str | None = None
     is_top: bool
     is_published: bool
+    review_status: str | None = None
+    review_reason: str | None = None
+    reviewed_at: datetime | None = None
     published_at: datetime | None = None
     scheduled_publish_at: datetime | None = None
     scheduled_unpublish_at: datetime | None = None
@@ -66,10 +92,14 @@ class NewsListItem(BaseModel):
     cover_image: str | None = None
     category: str
     source: str | None = None
+    source_url: str | None = None
+    source_site: str | None = None
     author: str | None = None
     view_count: int
     favorite_count: int = 0
     is_favorited: bool = False
+    ai_risk_level: str | None = None
+    ai_keywords: list[str] = []
     is_top: bool
     published_at: datetime | None = None
     created_at: datetime
@@ -94,10 +124,16 @@ class NewsAdminListItem(BaseModel):
     cover_image: str | None = None
     category: str
     source: str | None = None
+    source_url: str | None = None
+    source_site: str | None = None
     author: str | None = None
     view_count: int
+    ai_risk_level: str | None = None
     is_top: bool
     is_published: bool
+    review_status: str | None = None
+    review_reason: str | None = None
+    reviewed_at: datetime | None = None
     published_at: datetime | None = None
     scheduled_publish_at: datetime | None = None
     scheduled_unpublish_at: datetime | None = None
@@ -161,6 +197,8 @@ class NewsCommentResponse(BaseModel):
     news_id: int
     user_id: int
     content: str
+    review_status: str | None = None
+    review_reason: str | None = None
     created_at: datetime
     author: NewsCommentAuthor | None = None
 
@@ -172,6 +210,46 @@ class NewsCommentListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class NewsCommentAdminNewsBrief(BaseModel):
+    id: int
+    title: str
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
+
+
+class NewsCommentAdminItem(BaseModel):
+    id: int
+    news_id: int
+    user_id: int
+    content: str
+    is_deleted: bool
+    review_status: str | None = None
+    review_reason: str | None = None
+    reviewed_at: datetime | None = None
+    created_at: datetime
+    author: NewsCommentAuthor | None = None
+    news: NewsCommentAdminNewsBrief | None = None
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
+
+
+class NewsCommentAdminListResponse(BaseModel):
+    items: list[NewsCommentAdminItem]
+    total: int
+    page: int
+    page_size: int
+
+
+class NewsCommentReviewAction(BaseModel):
+    action: str = Field(..., description="approve/reject/delete")
+    reason: str | None = Field(None, max_length=200)
+
+
+class NewsReviewAction(BaseModel):
+    action: str = Field(..., description="approve/reject/pending")
+    reason: str | None = Field(None, max_length=200)
 
 
 class NewsTopicCreate(BaseModel):

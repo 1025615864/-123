@@ -65,8 +65,7 @@ export const queryKeys = {
     topicId: string | undefined,
     page: number,
     pageSize: number
-  ) =>
-    ["news-topic", topicId, { page, pageSize }] as const,
+  ) => ["news-topic", topicId, { page, pageSize }] as const,
   newsCommentsRoot: (newsId: string | undefined) =>
     ["news-comments", newsId] as const,
   newsComments: (newsId: string | undefined, page: number, pageSize: number) =>
@@ -77,9 +76,23 @@ export const queryKeys = {
   adminNewsTopicDetail: (topicId: number | null | undefined) =>
     ["admin-news-topic", { topicId }] as const,
 
+  adminNewsComments: (
+    page: number,
+    pageSize: number,
+    review_status: string,
+    keyword: string,
+    include_deleted: boolean
+  ) =>
+    [
+      "admin-news-comments",
+      { page, pageSize, review_status, keyword, include_deleted },
+    ] as const,
+
   documentTypes: () => ["document-types"] as const,
 
   systemConfigs: () => ["system-configs"] as const,
+
+  newsAiStatus: () => ["news-ai-status"] as const,
 
   forumPost: (postId: string | undefined) => ["forum-post", postId] as const,
   forumPostComments: (postId: string | undefined) =>

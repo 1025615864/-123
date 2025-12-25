@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Integer, String, Text, DateTime, Boolean, ForeignKey
+from sqlalchemy import Integer, String, Text, DateTime, Boolean, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 from ..database import Base
@@ -16,6 +16,9 @@ if TYPE_CHECKING:
 class Notification(Base):
     """用户通知表"""
     __tablename__: str = "notifications"
+    __table_args__: tuple[UniqueConstraint, ...] = (
+        UniqueConstraint("user_id", "type", "dedupe_key", name="uq_notifications_user_type_dedupe_key"),
+    )
     
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
@@ -23,6 +26,7 @@ class Notification(Base):
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     content: Mapped[str | None] = mapped_column(Text, nullable=True)
     link: Mapped[str | None] = mapped_column(String(500), nullable=True)  # 跳转链接
+    dedupe_key: Mapped[str | None] = mapped_column(String(200), nullable=True)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
     
     # 关联信息
@@ -39,10 +43,10 @@ class Notification(Base):
 
 # 通知类型常量
 class NotificationType:
-    COMMENT_REPLY = "comment_reply"  # 评论回复
-    POST_LIKE = "post_like"  # 帖子被点赞
-    POST_FAVORITE = "post_favorite"  # 帖子被收藏
-    POST_COMMENT = "post_comment"  # 帖子被评论
-    SYSTEM = "system"  # 系统通知
-    CONSULTATION = "consultation"  # 咨询相关
-    NEWS = "news"  # 新闻订阅
+    COMMENT_REPLY: str = "comment_reply"  # 评论回复
+    POST_LIKE: str = "post_like"  # 帖子被点赞
+    POST_FAVORITE: str = "post_favorite"  # 帖子被收藏
+    POST_COMMENT: str = "post_comment"  # 帖子被评论
+    SYSTEM: str = "system"  # 系统通知
+    CONSULTATION: str = "consultation"  # 咨询相关
+    NEWS: str = "news"  # 新闻订阅

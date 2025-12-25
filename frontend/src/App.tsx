@@ -44,6 +44,9 @@ const NewsManagePage = lazy(() => import("./pages/admin/NewsManagePage"));
 const NewsTopicsManagePage = lazy(
   () => import("./pages/admin/NewsTopicsManagePage")
 );
+const NewsCommentsManagePage = lazy(
+  () => import("./pages/admin/NewsCommentsManagePage")
+);
 const LawFirmsManagePage = lazy(
   () => import("./pages/admin/LawFirmsManagePage")
 );
@@ -83,6 +86,7 @@ function App() {
                 <Route path="users" element={<UsersPage />} />
                 <Route path="news" element={<NewsManagePage />} />
                 <Route path="news/topics" element={<NewsTopicsManagePage />} />
+                <Route path="news/comments" element={<NewsCommentsManagePage />} />
                 <Route path="forum" element={<ForumManagePage />} />
                 <Route path="lawfirms" element={<LawFirmsManagePage />} />
                 <Route path="knowledge" element={<KnowledgeManagePage />} />

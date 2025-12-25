@@ -1,7 +1,7 @@
 import { Outlet, Link, useLocation, Navigate } from 'react-router-dom'
 import { 
   LayoutDashboard, Users, Newspaper, Building2, 
-  Settings, LogOut, Scale, ChevronRight, Database, FileQuestion, Flame, FileText, Bell, Layers 
+  Settings, LogOut, Scale, ChevronRight, Database, FileQuestion, Flame, FileText, Bell, Layers, MessageSquare 
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -10,6 +10,7 @@ const sidebarItems = [
   { icon: Users, label: '用户管理', path: '/admin/users' },
   { icon: Newspaper, label: '新闻管理', path: '/admin/news' },
   { icon: Layers, label: '新闻专题', path: '/admin/news/topics' },
+  { icon: MessageSquare, label: '新闻评论', path: '/admin/news/comments' },
   { icon: Flame, label: '论坛管理', path: '/admin/forum' },
   { icon: Building2, label: '律所管理', path: '/admin/lawfirms' },
   { icon: Database, label: '知识库管理', path: '/admin/knowledge' },
@@ -22,6 +23,16 @@ const sidebarItems = [
 export default function AdminLayout() {
   const location = useLocation()
   const { user, logout, isAuthenticated } = useAuth()
+
+  const activePath = (
+    sidebarItems
+      .filter(
+        (i) =>
+          location.pathname === i.path ||
+          (i.path !== '/admin' && location.pathname.startsWith(i.path + '/'))
+      )
+      .sort((a, b) => b.path.length - a.path.length)[0]?.path ?? '/admin'
+  )
 
   // 权限检查：必须登录且为管理员
   if (!isAuthenticated) {
@@ -65,8 +76,7 @@ export default function AdminLayout() {
         {/* 导航菜单 */}
         <nav className="flex-1 p-4 space-y-1">
           {sidebarItems.map(({ icon: Icon, label, path }) => {
-            const isActive = location.pathname === path || 
-              (path !== '/admin' && location.pathname.startsWith(path))
+            const isActive = activePath === path
             
             return (
               <Link

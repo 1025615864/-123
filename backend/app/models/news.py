@@ -24,15 +24,25 @@ class News(Base):
     cover_image: Mapped[str | None] = mapped_column(String(255), nullable=True)  # 封面图
     category: Mapped[str] = mapped_column(String(50), default="general")  # 分类：general/policy/case/interpret
     source: Mapped[str | None] = mapped_column(String(100), nullable=True)  # 来源
+    source_url: Mapped[str | None] = mapped_column(String(500), nullable=True)  # 来源链接
+    source_site: Mapped[str | None] = mapped_column(String(100), nullable=True)  # 来源站点
     author: Mapped[str | None] = mapped_column(String(50), nullable=True)  # 作者
     view_count: Mapped[int] = mapped_column(Integer, default=0)
     is_top: Mapped[bool] = mapped_column(Boolean, default=False)  # 置顶
     is_published: Mapped[bool] = mapped_column(Boolean, default=True)  # 是否发布
+    review_status: Mapped[str] = mapped_column(String(20), default="approved")
+    review_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # 发布时间
     scheduled_publish_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     scheduled_unpublish_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__: tuple[object, ...] = (
+        Index("ix_news_published_review", "is_published", "review_status"),
+        Index("ix_news_review_status", "review_status"),
+    )
 
 
 class NewsComment(Base):
@@ -45,6 +55,9 @@ class NewsComment(Base):
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+    review_status: Mapped[str] = mapped_column(String(20), default="approved")
+    review_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
     news: Mapped[News] = relationship("News")

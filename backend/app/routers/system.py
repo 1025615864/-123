@@ -1,12 +1,14 @@
 """系统配置和日志API路由"""
 from typing import Annotated, ClassVar, cast
 import json
+import os
+import re
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, and_
+from sqlalchemy import select, func, desc, and_, or_
 from pydantic import BaseModel, ConfigDict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from ..database import get_db
 from ..models.system import SystemConfig, AdminLog, LogAction, LogModule
@@ -40,6 +42,17 @@ class ConfigBatchUpdate(BaseModel):
     configs: list[ConfigItem]
 
 
+def _mask_config_value(key_name: str, value: str | None) -> str | None:
+    if value is None:
+        return None
+    k = key_name.lower()
+    if any(token in k for token in ("secret", "password", "token", "api_key", "apikey", "providers", "private_key", "secret_key")):
+        return "***"
+    if re.search(r"(^|_)key($|_)", k):
+        return "***"
+    return value
+
+
 @router.get("/configs", response_model=list[ConfigResponse])
 async def get_all_configs(
     _current_user: Annotated[User, Depends(require_admin)],
@@ -57,7 +70,7 @@ async def get_all_configs(
     
     return [ConfigResponse(
         key=c.key,
-        value=c.value,
+        value=_mask_config_value(str(c.key), c.value),
         description=c.description,
         category=c.category,
         updated_at=c.updated_at
@@ -79,7 +92,262 @@ async def get_config(
     if not config:
         return {"key": key, "value": None}
     
-    return {"key": config.key, "value": config.value}
+    return {"key": config.key, "value": _mask_config_value(str(config.key), config.value)}
+
+
+class NewsAiProviderPublic(BaseModel):
+    name: str | None = None
+    base_url: str
+    model: str | None = None
+    response_format: str | None = None
+    auth_type: str | None = None
+    auth_header_name: str | None = None
+    auth_prefix: str | None = None
+    chat_completions_path: str | None = None
+    weight: int | None = None
+    api_key_configured: bool = False
+
+
+class NewsAiRecentError(BaseModel):
+    news_id: int
+    retry_count: int
+    last_error: str | None
+    last_error_at: datetime | None
+
+
+class NewsAiErrorTrendItem(BaseModel):
+    date: str
+    errors: int
+
+
+class NewsAiTopError(BaseModel):
+    message: str
+    count: int
+
+
+class NewsAiStatusResponse(BaseModel):
+    news_ai_enabled: bool
+    news_ai_interval_seconds: float
+    summary_llm_enabled: bool
+    response_format: str | None
+    provider_strategy: str
+    providers: list[NewsAiProviderPublic]
+    pending_total: int
+    errors_total: int
+    errors_last_24h: int
+    errors_last_7d: int
+    errors_trend_7d: list[NewsAiErrorTrendItem]
+    top_errors: list[NewsAiTopError]
+    recent_errors: list[NewsAiRecentError]
+    config_overrides: dict[str, str]
+
+
+@router.get("/news-ai/status", response_model=NewsAiStatusResponse)
+async def get_news_ai_status(
+    _current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    from ..config import get_settings
+    from ..models.news import News
+    from ..models.news_ai import NewsAIAnnotation
+    from ..services.news_ai_pipeline_service import news_ai_pipeline_service
+
+    cfg_overrides = await news_ai_pipeline_service.load_system_config_overrides(db)
+
+    def _env(name: str, default: str = "") -> str:
+        v = cfg_overrides.get(name)
+        if v is not None and str(v).strip():
+            return str(v).strip()
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        return str(raw)
+
+    def _bool(name: str, default: bool = False) -> bool:
+        raw = _env(name, "")
+        if not raw.strip():
+            return bool(default)
+        return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    settings = get_settings()
+    providers_raw = news_ai_pipeline_service.get_summary_llm_providers(settings, env_overrides=cfg_overrides)
+    providers: list[NewsAiProviderPublic] = []
+    for p in providers_raw:
+        api_key = str(p.get("api_key", "") or "").strip()
+        providers.append(
+            NewsAiProviderPublic(
+                name=str(p.get("name", "") or "").strip() or None,
+                base_url=str(p.get("base_url", "") or "").strip(),
+                model=str(p.get("model", "") or "").strip() or None,
+                response_format=str(p.get("response_format", "") or "").strip() or None,
+                auth_type=str(p.get("auth_type", "") or "").strip() or None,
+                auth_header_name=str(p.get("auth_header_name", "") or "").strip() or None,
+                auth_prefix=str(p.get("auth_prefix", "") or "") if p.get("auth_prefix") is not None else None,
+                chat_completions_path=str(p.get("chat_completions_path", "") or "").strip() or None,
+                weight=int(p.get("weight", 0) or 0) if p.get("weight") is not None else None,
+                api_key_configured=bool(api_key),
+            )
+        )
+
+    where_clause = or_(
+        NewsAIAnnotation.id.is_(None),
+        NewsAIAnnotation.processed_at.is_(None),
+        NewsAIAnnotation.highlights.is_(None),
+        NewsAIAnnotation.keywords.is_(None),
+    )
+
+    pending_total_res = await db.execute(
+        select(func.count(News.id))
+        .select_from(News)
+        .outerjoin(NewsAIAnnotation, NewsAIAnnotation.news_id == News.id)
+        .where(where_clause)
+    )
+    pending_total = int(pending_total_res.scalar() or 0)
+
+    errors_total_res = await db.execute(select(func.count(NewsAIAnnotation.id)).where(NewsAIAnnotation.last_error.is_not(None)))
+    errors_total = int(errors_total_res.scalar() or 0)
+
+    now_dt = datetime.now()
+    since_24h = now_dt - timedelta(hours=24)
+    since_7d = now_dt - timedelta(days=7)
+
+    errors_last_24h_res = await db.execute(
+        select(func.count(NewsAIAnnotation.id)).where(
+            and_(
+                NewsAIAnnotation.last_error.is_not(None),
+                NewsAIAnnotation.last_error_at.is_not(None),
+                NewsAIAnnotation.last_error_at >= since_24h,
+            )
+        )
+    )
+    errors_last_24h = int(errors_last_24h_res.scalar() or 0)
+
+    errors_last_7d_res = await db.execute(
+        select(func.count(NewsAIAnnotation.id)).where(
+            and_(
+                NewsAIAnnotation.last_error.is_not(None),
+                NewsAIAnnotation.last_error_at.is_not(None),
+                NewsAIAnnotation.last_error_at >= since_7d,
+            )
+        )
+    )
+    errors_last_7d = int(errors_last_7d_res.scalar() or 0)
+
+    today = now_dt.date()
+    errors_trend_7d: list[NewsAiErrorTrendItem] = []
+    for i in range(6, -1, -1):
+        day = today - timedelta(days=int(i))
+        day_cnt_res = await db.execute(
+            select(func.count(NewsAIAnnotation.id)).where(
+                and_(
+                    NewsAIAnnotation.last_error.is_not(None),
+                    NewsAIAnnotation.last_error_at.is_not(None),
+                    func.date(NewsAIAnnotation.last_error_at) == day,
+                )
+            )
+        )
+        errors_trend_7d.append(NewsAiErrorTrendItem(date=day.isoformat(), errors=int(day_cnt_res.scalar() or 0)))
+
+    cnt = func.count(NewsAIAnnotation.id).label("cnt")
+    top_res = await db.execute(
+        select(NewsAIAnnotation.last_error, cnt)
+        .where(NewsAIAnnotation.last_error.is_not(None))
+        .group_by(NewsAIAnnotation.last_error)
+        .order_by(desc(cnt))
+        .limit(10)
+    )
+    top_any = cast(list[tuple[object, object]], list(top_res.all()))
+    top_errors: list[NewsAiTopError] = []
+    for msg_obj, cnt_obj in top_any:
+        msg = str(msg_obj or "").strip()
+        if not msg:
+            continue
+        c_int = 0
+        if isinstance(cnt_obj, int):
+            c_int = int(cnt_obj)
+        elif isinstance(cnt_obj, float):
+            c_int = int(cnt_obj)
+        elif isinstance(cnt_obj, str):
+            s = cnt_obj.strip()
+            if s.isdigit():
+                c_int = int(s)
+        top_errors.append(NewsAiTopError(message=msg, count=int(c_int)))
+
+    recent_res = await db.execute(
+        select(
+            NewsAIAnnotation.news_id,
+            NewsAIAnnotation.retry_count,
+            NewsAIAnnotation.last_error,
+            NewsAIAnnotation.last_error_at,
+        )
+        .where(NewsAIAnnotation.last_error.is_not(None))
+        .order_by(desc(NewsAIAnnotation.last_error_at), desc(NewsAIAnnotation.id))
+        .limit(20)
+    )
+
+    recent_any = cast(list[tuple[object, object, object, object]], list(recent_res.all()))
+    recent_rows: list[tuple[int, int, str | None, datetime | None]] = []
+    for nid, rc, le, lea in recent_any:
+        nid_int = 0
+        if isinstance(nid, int):
+            nid_int = int(nid)
+        elif isinstance(nid, float):
+            nid_int = int(nid)
+        elif isinstance(nid, str):
+            s = nid.strip()
+            if s and re.fullmatch(r"-?\d+", s):
+                nid_int = int(s)
+
+        rc_int = 0
+        if isinstance(rc, int):
+            rc_int = int(rc)
+        elif isinstance(rc, float):
+            rc_int = int(rc)
+        elif isinstance(rc, str):
+            s = rc.strip()
+            if s and re.fullmatch(r"-?\d+", s):
+                rc_int = int(s)
+
+        recent_rows.append(
+            (
+                int(nid_int),
+                int(rc_int),
+                (str(le) if le is not None else None),
+                cast(datetime | None, lea),
+            )
+        )
+    recent_errors = [
+        NewsAiRecentError(
+            news_id=int(nid),
+            retry_count=int(rc or 0),
+            last_error=le,
+            last_error_at=lea,
+        )
+        for nid, rc, le, lea in recent_rows
+    ]
+
+    news_ai_enabled = str(os.getenv("NEWS_AI_ENABLED", "") or "").strip().lower() in {"1", "true", "yes", "on"}
+    news_ai_interval_seconds = float(os.getenv("NEWS_AI_INTERVAL_SECONDS", "120").strip() or "120")
+
+    provider_strategy = _env("NEWS_AI_SUMMARY_LLM_PROVIDER_STRATEGY", "priority").strip() or "priority"
+    response_format = _env("NEWS_AI_SUMMARY_LLM_RESPONSE_FORMAT", "").strip() or None
+
+    return NewsAiStatusResponse(
+        news_ai_enabled=bool(news_ai_enabled),
+        news_ai_interval_seconds=float(news_ai_interval_seconds),
+        summary_llm_enabled=bool(_bool("NEWS_AI_SUMMARY_LLM_ENABLED", False)),
+        response_format=response_format,
+        provider_strategy=str(provider_strategy),
+        providers=providers,
+        pending_total=int(pending_total),
+        errors_total=int(errors_total),
+        errors_last_24h=int(errors_last_24h),
+        errors_last_7d=int(errors_last_7d),
+        errors_trend_7d=errors_trend_7d,
+        top_errors=top_errors,
+        recent_errors=recent_errors,
+        config_overrides={k: (_mask_config_value(k, v) or "") for k, v in cfg_overrides.items()},
+    )
 
 
 @router.put("/configs/{key}")
@@ -115,10 +383,7 @@ async def update_config(
     def _mask_value(key_name: str, value: str | None) -> str | None:
         if value is None:
             return None
-        k = key_name.lower()
-        if any(token in k for token in ("secret", "password", "token", "api_key", "apikey", "key")):
-            return "***"
-        return value
+        return _mask_config_value(key_name, value)
 
     masked_old = _mask_value(key, old_value)
     masked_new = _mask_value(key, data.value)

@@ -38,14 +38,36 @@ export async function registerAndLoginUser(request: any, now: number, prefix: st
 }
 
 export async function loginAdmin(request: any): Promise<string> {
-  const res = await request.post(`${apiBase}/user/login`, {
-    data: { username: adminUsername, password: adminPassword },
-  })
-  await assertOk(res, 'admin login')
-  const json = await res.json()
-  const token = json?.token?.access_token
-  expect(token).toBeTruthy()
-  return token as string
+  async function tryLogin(username: string, password: string): Promise<string | null> {
+    const res = await request.post(`${apiBase}/user/login`, {
+      data: { username, password },
+    })
+    if (!res.ok()) return null
+    const json = await res.json()
+    const token = json?.token?.access_token
+    if (!token) return null
+    return String(token)
+  }
+
+  const candidates: Array<[string, string]> = [
+    [adminUsername, adminPassword],
+    ['admin', 'admin123'],
+    ['123311', '123311'],
+  ]
+
+  const tried = new Set<string>()
+  for (const [u, p] of candidates) {
+    const key = `${u}::${p}`
+    if (tried.has(key)) continue
+    tried.add(key)
+    const token = await tryLogin(String(u), String(p))
+    if (token) {
+      expect(token).toBeTruthy()
+      return token
+    }
+  }
+
+  throw new Error(`admin login failed. tried=${Array.from(tried).join(', ')}`)
 }
 
 export async function createNews(
@@ -57,10 +79,14 @@ export async function createNews(
     summary?: string | null
     cover_image?: string | null
     source?: string | null
+    source_url?: string | null
+    source_site?: string | null
     author?: string | null
     content: string
     is_top: boolean
     is_published: boolean
+    review_status?: string | null
+    review_reason?: string | null
   }
 ): Promise<number> {
   const res = await request.post(`${apiBase}/news`, {

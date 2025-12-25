@@ -1,4 +1,6 @@
 """Pytest配置文件"""
+import importlib
+import inspect
 import pytest
 import pytest_asyncio
 from collections.abc import AsyncGenerator
@@ -7,7 +9,6 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sess
 
 from app.main import app
 from app.database import Base, get_db
-
 
 # 使用内存数据库进行测试
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
@@ -19,6 +20,20 @@ pytest_plugins = ('pytest_asyncio',)
 @pytest_asyncio.fixture(scope="session")
 async def test_engine():
     """创建测试数据库引擎"""
+    for module_name in (
+        "app.models.user",
+        "app.models.consultation",
+        "app.models.forum",
+        "app.models.news",
+        "app.models.news_ai",
+        "app.models.lawfirm",
+        "app.models.knowledge",
+        "app.models.notification",
+        "app.models.payment",
+        "app.models.system",
+    ):
+        _ = importlib.import_module(module_name)
+
     engine = create_async_engine(TEST_DATABASE_URL, echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
@@ -46,7 +61,10 @@ async def client(test_session: AsyncSession) -> AsyncGenerator[AsyncClient, None
     
     app.dependency_overrides[get_db] = override_get_db
     
-    transport = ASGITransport(app=app)
+    transport_kwargs = {"app": app}
+    if "lifespan" in inspect.signature(ASGITransport.__init__).parameters:
+        transport_kwargs["lifespan"] = "off"
+    transport = ASGITransport(**transport_kwargs)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
     

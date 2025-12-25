@@ -1,4 +1,5 @@
 """服务层单元测试"""
+import json
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -6,34 +7,37 @@ from unittest.mock import AsyncMock, MagicMock, patch
 class TestEmailService:
     """邮件服务测试"""
     
-    def test_generate_reset_token(self):
+    @pytest.mark.asyncio
+    async def test_generate_reset_token(self):
         """测试生成重置令牌"""
         from app.services.email_service import EmailService
         
         service = EmailService()
-        token = service.generate_reset_token(user_id=1, email="test@example.com")
+        token = await service.generate_reset_token(user_id=1, email="test@example.com")
         
         assert token is not None
         assert len(token) > 0
     
-    def test_verify_reset_token_valid(self):
+    @pytest.mark.asyncio
+    async def test_verify_reset_token_valid(self):
         """测试验证有效令牌"""
         from app.services.email_service import EmailService
         
         service = EmailService()
         email = "test@example.com"
-        token = service.generate_reset_token(user_id=1, email=email)
+        token = await service.generate_reset_token(user_id=1, email=email)
         
-        result = service.verify_reset_token(token)
+        result = await service.verify_reset_token(token)
         assert result is not None
         assert result.get("email") == email
     
-    def test_verify_reset_token_invalid(self):
+    @pytest.mark.asyncio
+    async def test_verify_reset_token_invalid(self):
         """测试验证无效令牌"""
         from app.services.email_service import EmailService
         
         service = EmailService()
-        result = service.verify_reset_token("invalid_token")
+        result = await service.verify_reset_token("invalid_token")
         assert result is None
 
 
@@ -199,3 +203,212 @@ class TestSecurity:
         
         result = decode_token("invalid.token.here")
         assert result is None
+
+
+class TestNewsAIPipelineService:
+    def test_extract_structured_output_limits(self):
+        from app.services.news_ai_pipeline_service import NewsAIPipelineService
+
+        text = json.dumps(
+            {
+                "summary": "  这是一个摘要  ",
+                "highlights": ["  第一条要点很长很长  ", "第二条", "第三条"],
+                "keywords": ["关键词A", "  关键词B  ", "关键词C", "关键词D"],
+            },
+            ensure_ascii=False,
+        )
+
+        summary, highlights, keywords = NewsAIPipelineService._extract_structured_output(
+            text,
+            highlights_max=2,
+            keywords_max=3,
+            item_max_chars=5,
+        )
+        assert summary == "这是一个摘要"
+        assert highlights == ["第一条要点", "第二条"]
+        assert keywords == ["关键词A", "关键词B", "关键词C"]
+
+    @pytest.mark.asyncio
+    async def test_llm_summarize_response_format_fallback(self, monkeypatch):
+        import httpx
+
+        from app.services.news_ai_pipeline_service import NewsAIPipelineService
+
+        monkeypatch.setenv("NEWS_AI_SUMMARY_LLM_RESPONSE_FORMAT", "json_object")
+
+        calls: list[dict] = []
+
+        class FakeResponse:
+            def __init__(self, status_code: int, payload: dict, *, text: str = ""):
+                self.status_code = int(status_code)
+                self._payload = payload
+                self.text = text
+
+            def json(self):
+                return self._payload
+
+            def raise_for_status(self):
+                if int(self.status_code) >= 400:
+                    raise httpx.HTTPStatusError("error", request=None, response=None)
+
+        class FakeAsyncClient:
+            def __init__(self, *args, **kwargs):
+                _ = args
+                _ = kwargs
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                _ = exc_type
+                _ = exc
+                _ = tb
+                return False
+
+            async def post(self, url, headers=None, json=None):
+                _ = url
+                _ = headers
+                calls.append(json or {})
+                if len(calls) == 1:
+                    return FakeResponse(400, {"error": {"message": "response_format unsupported"}})
+                return FakeResponse(
+                    200,
+                    {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": '{"summary":"S","highlights":["H1"],"keywords":["K1"]}'
+                                }
+                            }
+                        ]
+                    },
+                )
+
+        monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient, raising=True)
+
+        svc = NewsAIPipelineService()
+        out = await svc._llm_summarize(
+            api_key="k",
+            base_url="http://example.com",
+            model="m",
+            title="t",
+            content="c",
+            timeout_seconds=1.0,
+            summary_max_chars=120,
+            highlights_max=3,
+            keywords_max=5,
+        )
+
+        assert isinstance(out, str)
+        assert out.strip().startswith("{")
+        assert len(calls) == 2
+        assert "response_format" in calls[0]
+        assert "response_format" not in calls[1]
+
+    @pytest.mark.asyncio
+    async def test_run_once_persists_highlights_keywords(self, test_session, monkeypatch):
+        from sqlalchemy import select
+
+        from app.models.news import News
+        from app.models.news_ai import NewsAIAnnotation
+        from app.services.news_ai_pipeline_service import NewsAIPipelineService
+
+        monkeypatch.setenv("NEWS_AI_SUMMARY_WRITEBACK_ENABLED", "0")
+
+        news = News(
+            title="单测新闻",
+            summary=None,
+            content="正文内容",
+            category="法律动态",
+            is_top=False,
+            is_published=True,
+            review_status="approved",
+        )
+        test_session.add(news)
+        await test_session.commit()
+        await test_session.refresh(news)
+
+        async def fake_make_summary(self, _news: News, *, env_overrides=None):
+            _ = self
+            _ = env_overrides
+            return "AI摘要", True, ["要点一", "要点二"], ["关键词A", "关键词B"]
+
+        def fake_make_risk(self, _news: News):
+            return "safe", None
+
+        async def fake_find_duplicate_of(self, _db, _news: News):
+            return None
+
+        monkeypatch.setattr(NewsAIPipelineService, "_make_summary", fake_make_summary, raising=True)
+        monkeypatch.setattr(NewsAIPipelineService, "_make_risk", fake_make_risk, raising=True)
+        monkeypatch.setattr(NewsAIPipelineService, "_find_duplicate_of", fake_find_duplicate_of, raising=True)
+
+        svc = NewsAIPipelineService()
+        res = await svc.run_once(test_session)
+
+        assert int(res.get("processed", 0)) == 1
+        assert int(res.get("created", 0)) == 1
+        assert int(res.get("errors", 0)) == 0
+
+        ann_res = await test_session.execute(
+            select(NewsAIAnnotation).where(NewsAIAnnotation.news_id == int(news.id))
+        )
+        ann = ann_res.scalar_one_or_none()
+        assert ann is not None
+        assert ann.summary == "AI摘要"
+        assert ann.highlights is not None
+        assert ann.keywords is not None
+        assert json.loads(ann.highlights) == ["要点一", "要点二"]
+        assert json.loads(ann.keywords) == ["关键词A", "关键词B"]
+        assert ann.processed_at is not None
+
+    @pytest.mark.asyncio
+    async def test_make_summary_provider_failover(self, test_session, monkeypatch):
+        from app.models.news import News
+        from app.services.news_ai_pipeline_service import NewsAIPipelineService
+
+        monkeypatch.setenv("NEWS_AI_SUMMARY_LLM_ENABLED", "1")
+        monkeypatch.setenv(
+            "NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON",
+            json.dumps(
+                [
+                    {"name": "bad", "base_url": "http://bad", "api_key": "k1", "model": "m1"},
+                    {"name": "good", "base_url": "http://good", "api_key": "k2", "model": "m2"},
+                ],
+                ensure_ascii=False,
+            ),
+        )
+
+        calls: list[str] = []
+
+        async def fake_llm_summarize(self, *, base_url: str, **kwargs):
+            _ = self
+            _ = kwargs
+            calls.append(str(base_url))
+            if str(base_url).startswith("http://bad"):
+                raise RuntimeError("provider down")
+            return '{"summary":"S","highlights":["H1"],"keywords":["K1"]}'
+
+        monkeypatch.setattr(NewsAIPipelineService, "_llm_summarize", fake_llm_summarize, raising=True)
+
+        news = News(
+            title="单测新闻",
+            summary=None,
+            content="正文内容",
+            category="法律动态",
+            is_top=False,
+            is_published=True,
+            review_status="approved",
+        )
+        test_session.add(news)
+        await test_session.commit()
+        await test_session.refresh(news)
+
+        svc = NewsAIPipelineService()
+        summary, is_llm, highlights, keywords = await svc._make_summary(news)
+
+        assert is_llm is True
+        assert summary == "S"
+        assert highlights == ["H1"]
+        assert keywords == ["K1"]
+        assert calls == ["http://bad", "http://good"]

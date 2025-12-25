@@ -52,6 +52,7 @@ async def init_db():
         "app.models.consultation",
         "app.models.forum",
         "app.models.news",
+        "app.models.news_ai",
         "app.models.lawfirm",
         "app.models.knowledge",
         "app.models.notification",
@@ -70,18 +71,56 @@ async def init_db():
                     _ = await conn.execute(text("ALTER TABLE news ADD COLUMN scheduled_publish_at DATETIME"))
                 if "scheduled_unpublish_at" not in news_cols:
                     _ = await conn.execute(text("ALTER TABLE news ADD COLUMN scheduled_unpublish_at DATETIME"))
+                if "source_url" not in news_cols:
+                    _ = await conn.execute(text("ALTER TABLE news ADD COLUMN source_url VARCHAR(500)"))
+                if "source_site" not in news_cols:
+                    _ = await conn.execute(text("ALTER TABLE news ADD COLUMN source_site VARCHAR(100)"))
+                if "review_status" not in news_cols:
+                    _ = await conn.execute(text("ALTER TABLE news ADD COLUMN review_status VARCHAR(20) DEFAULT 'approved'"))
+                if "review_reason" not in news_cols:
+                    _ = await conn.execute(text("ALTER TABLE news ADD COLUMN review_reason VARCHAR(200)"))
+                if "reviewed_at" not in news_cols:
+                    _ = await conn.execute(text("ALTER TABLE news ADD COLUMN reviewed_at DATETIME"))
 
                 tables_result = await conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
                 tables = {row[0] for row in tables_result.fetchall()}
+
+                if "news_ai_annotations" in tables:
+                    ann_cols_result = await conn.execute(text("PRAGMA table_info(news_ai_annotations)"))
+                    ann_cols = {row[1] for row in ann_cols_result.fetchall()}
+                    if "highlights" not in ann_cols:
+                        _ = await conn.execute(text("ALTER TABLE news_ai_annotations ADD COLUMN highlights TEXT"))
+                    if "keywords" not in ann_cols:
+                        _ = await conn.execute(text("ALTER TABLE news_ai_annotations ADD COLUMN keywords TEXT"))
+                    if "retry_count" not in ann_cols:
+                        _ = await conn.execute(
+                            text("ALTER TABLE news_ai_annotations ADD COLUMN retry_count INTEGER DEFAULT 0")
+                        )
+                    if "last_error" not in ann_cols:
+                        _ = await conn.execute(text("ALTER TABLE news_ai_annotations ADD COLUMN last_error TEXT"))
+                    if "last_error_at" not in ann_cols:
+                        _ = await conn.execute(text("ALTER TABLE news_ai_annotations ADD COLUMN last_error_at DATETIME"))
+
                 if "news_comments" not in tables:
                     _ = await conn.execute(
                         text(
-                            "CREATE TABLE IF NOT EXISTS news_comments (id INTEGER PRIMARY KEY AUTOINCREMENT, news_id INTEGER NOT NULL, user_id INTEGER NOT NULL, content TEXT NOT NULL, is_deleted BOOLEAN DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+                            "CREATE TABLE IF NOT EXISTS news_comments (id INTEGER PRIMARY KEY AUTOINCREMENT, news_id INTEGER NOT NULL, user_id INTEGER NOT NULL, content TEXT NOT NULL, is_deleted BOOLEAN DEFAULT 0, review_status VARCHAR(20) DEFAULT 'approved', review_reason VARCHAR(200), reviewed_at DATETIME, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
                         )
                     )
                     _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_comments_news_id ON news_comments(news_id)"))
                     _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_comments_user_id ON news_comments(user_id)"))
                     _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_comments_created_at ON news_comments(created_at)"))
+                else:
+                    comments_cols_result = await conn.execute(text("PRAGMA table_info(news_comments)"))
+                    comments_cols = {row[1] for row in comments_cols_result.fetchall()}
+                    if "is_deleted" not in comments_cols:
+                        _ = await conn.execute(text("ALTER TABLE news_comments ADD COLUMN is_deleted BOOLEAN DEFAULT 0"))
+                    if "review_status" not in comments_cols:
+                        _ = await conn.execute(text("ALTER TABLE news_comments ADD COLUMN review_status VARCHAR(20) DEFAULT 'approved'"))
+                    if "review_reason" not in comments_cols:
+                        _ = await conn.execute(text("ALTER TABLE news_comments ADD COLUMN review_reason VARCHAR(200)"))
+                    if "reviewed_at" not in comments_cols:
+                        _ = await conn.execute(text("ALTER TABLE news_comments ADD COLUMN reviewed_at DATETIME"))
 
                 if "news_topics" not in tables:
                     _ = await conn.execute(
@@ -110,6 +149,34 @@ async def init_db():
                     _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_topic_items_topic ON news_topic_items(topic_id)"))
                     _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_topic_items_news ON news_topic_items(news_id)"))
                     _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_topic_items_position ON news_topic_items(position)"))
+
+                if "notifications" in tables:
+                    notifications_cols_result = await conn.execute(text("PRAGMA table_info(notifications)"))
+                    notifications_cols = {row[1] for row in notifications_cols_result.fetchall()}
+                    if "dedupe_key" not in notifications_cols:
+                        _ = await conn.execute(text("ALTER TABLE notifications ADD COLUMN dedupe_key VARCHAR(200)"))
+                    if "related_user_id" not in notifications_cols:
+                        _ = await conn.execute(text("ALTER TABLE notifications ADD COLUMN related_user_id INTEGER"))
+                    if "related_post_id" not in notifications_cols:
+                        _ = await conn.execute(text("ALTER TABLE notifications ADD COLUMN related_post_id INTEGER"))
+                    if "related_comment_id" not in notifications_cols:
+                        _ = await conn.execute(text("ALTER TABLE notifications ADD COLUMN related_comment_id INTEGER"))
+                    try:
+                        _ = await conn.execute(
+                            text(
+                                "DELETE FROM notifications WHERE dedupe_key IS NOT NULL AND id NOT IN (SELECT MIN(id) FROM notifications WHERE dedupe_key IS NOT NULL GROUP BY user_id, type, dedupe_key)"
+                            )
+                        )
+                    except Exception:
+                        logger.exception("notifications去重失败")
+                    try:
+                        _ = await conn.execute(
+                            text(
+                                "CREATE UNIQUE INDEX IF NOT EXISTS uq_notifications_user_type_dedupe_key ON notifications (user_id, type, dedupe_key)"
+                            )
+                        )
+                    except Exception:
+                        logger.exception("创建notifications唯一索引失败（可能存在历史重复数据）")
 
                 posts_cols_result = await conn.execute(text("PRAGMA table_info(posts)"))
                 posts_cols = {row[1] for row in posts_cols_result.fetchall()}
@@ -249,23 +316,54 @@ async def init_db():
             try:
                 _ = await conn.execute(text("ALTER TABLE news ADD COLUMN IF NOT EXISTS scheduled_publish_at TIMESTAMPTZ"))
                 _ = await conn.execute(text("ALTER TABLE news ADD COLUMN IF NOT EXISTS scheduled_unpublish_at TIMESTAMPTZ"))
+                _ = await conn.execute(text("ALTER TABLE news ADD COLUMN IF NOT EXISTS source_url VARCHAR(500)"))
+                _ = await conn.execute(text("ALTER TABLE news ADD COLUMN IF NOT EXISTS source_site VARCHAR(100)"))
+                _ = await conn.execute(text("ALTER TABLE news ADD COLUMN IF NOT EXISTS review_status VARCHAR(20) DEFAULT 'approved'"))
+                _ = await conn.execute(text("ALTER TABLE news ADD COLUMN IF NOT EXISTS review_reason VARCHAR(200)"))
+                _ = await conn.execute(text("ALTER TABLE news ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ"))
+
+                _ = await conn.execute(text("ALTER TABLE news_ai_annotations ADD COLUMN IF NOT EXISTS highlights TEXT"))
+                _ = await conn.execute(text("ALTER TABLE news_ai_annotations ADD COLUMN IF NOT EXISTS keywords TEXT"))
+                _ = await conn.execute(
+                    text("ALTER TABLE news_ai_annotations ADD COLUMN IF NOT EXISTS retry_count INTEGER DEFAULT 0")
+                )
+                _ = await conn.execute(text("ALTER TABLE news_ai_annotations ADD COLUMN IF NOT EXISTS last_error TEXT"))
+                _ = await conn.execute(text("ALTER TABLE news_ai_annotations ADD COLUMN IF NOT EXISTS last_error_at TIMESTAMPTZ"))
 
                 _ = await conn.execute(
                     text(
-                        "CREATE TABLE IF NOT EXISTS news_comments (id SERIAL PRIMARY KEY, news_id INTEGER NOT NULL, user_id INTEGER NOT NULL, content TEXT NOT NULL, is_deleted BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT NOW())"
+                        "CREATE TABLE IF NOT EXISTS news_comments (id SERIAL PRIMARY KEY, news_id INTEGER NOT NULL, user_id INTEGER NOT NULL, content TEXT NOT NULL, is_deleted BOOLEAN DEFAULT FALSE, review_status VARCHAR(20) DEFAULT 'approved', review_reason VARCHAR(200), reviewed_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT NOW())"
                     )
                 )
                 _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_comments_news_id ON news_comments(news_id)"))
                 _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_comments_user_id ON news_comments(user_id)"))
                 _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_comments_created_at ON news_comments(created_at)"))
 
-                _ = await conn.execute(
-                    text(
-                        "CREATE TABLE IF NOT EXISTS news_topics (id SERIAL PRIMARY KEY, title VARCHAR(200) NOT NULL, description VARCHAR(500), cover_image VARCHAR(255), is_active BOOLEAN DEFAULT TRUE, sort_order INTEGER DEFAULT 0, auto_category VARCHAR(50), auto_keyword VARCHAR(100), auto_limit INTEGER DEFAULT 0, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW())"
+                _ = await conn.execute(text("ALTER TABLE news_comments ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE"))
+                _ = await conn.execute(text("ALTER TABLE news_comments ADD COLUMN IF NOT EXISTS review_status VARCHAR(20)"))
+                _ = await conn.execute(text("ALTER TABLE news_comments ADD COLUMN IF NOT EXISTS review_reason VARCHAR(200)"))
+                _ = await conn.execute(text("ALTER TABLE news_comments ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ"))
+
+                _ = await conn.execute(text("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS dedupe_key VARCHAR(200)"))
+                _ = await conn.execute(text("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS related_user_id INTEGER"))
+                _ = await conn.execute(text("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS related_post_id INTEGER"))
+                _ = await conn.execute(text("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS related_comment_id INTEGER"))
+                try:
+                    _ = await conn.execute(
+                        text(
+                            "DELETE FROM notifications WHERE dedupe_key IS NOT NULL AND id NOT IN (SELECT MIN(id) FROM notifications WHERE dedupe_key IS NOT NULL GROUP BY user_id, type, dedupe_key)"
+                        )
                     )
-                )
-                _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_topics_sort_order ON news_topics(sort_order)"))
-                _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_topics_is_active ON news_topics(is_active)"))
+                except Exception:
+                    logger.exception("notifications去重失败")
+                try:
+                    _ = await conn.execute(
+                        text(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS uq_notifications_user_type_dedupe_key ON notifications (user_id, type, dedupe_key)"
+                        )
+                    )
+                except Exception:
+                    logger.exception("创建notifications唯一索引失败（可能存在历史重复数据）")
 
                 _ = await conn.execute(text("ALTER TABLE news_topics ADD COLUMN IF NOT EXISTS auto_category VARCHAR(50)"))
                 _ = await conn.execute(text("ALTER TABLE news_topics ADD COLUMN IF NOT EXISTS auto_keyword VARCHAR(100)"))

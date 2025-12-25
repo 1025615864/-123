@@ -257,7 +257,13 @@ class ForumService:
             updated_by=updated_by,
         )
 
-        next_threshold = int(current.get("ad_words_threshold") or DEFAULT_AD_WORDS_THRESHOLD)
+        raw_threshold = current.get("ad_words_threshold")
+        next_threshold = DEFAULT_AD_WORDS_THRESHOLD
+        if isinstance(raw_threshold, (int, float, str)):
+            try:
+                next_threshold = int(raw_threshold)
+            except (TypeError, ValueError):
+                next_threshold = DEFAULT_AD_WORDS_THRESHOLD
         if ad_words_threshold is not None:
             next_threshold = ad_words_threshold if int(ad_words_threshold) > 0 else DEFAULT_AD_WORDS_THRESHOLD
 

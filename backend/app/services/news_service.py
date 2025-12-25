@@ -1,11 +1,12 @@
 """新闻服务层"""
+import logging
 import math
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 import time
 from typing import cast
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, update, and_, or_, case, delete
+from sqlalchemy import select, func, desc, update, and_, or_, case, delete, true
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
@@ -21,8 +22,12 @@ from ..models.news import (
     NewsTopic,
     NewsTopicItem,
 )
+from ..models.news_ai import NewsAIAnnotation
 from ..models.notification import Notification, NotificationType
 from ..schemas.news import NewsCreate, NewsUpdate
+
+
+logger = logging.getLogger(__name__)
 
 
 class NewsService:
@@ -38,6 +43,28 @@ class NewsService:
     _recommended_cache_ttl_seconds: int = 60
 
     @staticmethod
+    def _prune_cache(
+        cache: dict[object, tuple[float, list[int]]],
+        ttl_seconds: int,
+        now_ts: float,
+        max_size: int = 2048,
+    ) -> None:
+        if len(cache) <= int(max_size):
+            return
+
+        keys = list(cache.keys())
+        for k in keys:
+            v = cache.get(k)
+            if v is None:
+                continue
+            cached_at = float(v[0])
+            if (now_ts - cached_at) > float(ttl_seconds):
+                _ = cache.pop(k, None)
+
+        if len(cache) > int(max_size):
+            cache.clear()
+
+    @staticmethod
     def invalidate_hot_cache() -> None:
         NewsService._hot_cache.clear()
 
@@ -45,13 +72,17 @@ class NewsService:
     def invalidate_recommended_cache(user_id: int | None) -> None:
         keys = [k for k in NewsService._recommended_cache.keys() if k[0] == (int(user_id) if user_id is not None else None)]
         for k in keys:
-            NewsService._recommended_cache.pop(k, None)
+            _ = NewsService._recommended_cache.pop(k, None)
 
     @staticmethod
     def invalidate_topic_auto_cache(topic_id: int) -> None:
         keys = [k for k in NewsService._topic_auto_cache.keys() if int(k[0]) == int(topic_id)]
         for k in keys:
-            NewsService._topic_auto_cache.pop(k, None)
+            _ = NewsService._topic_auto_cache.pop(k, None)
+
+    @staticmethod
+    def _public_news_conditions() -> list[ColumnElement[bool]]:
+        return [News.is_published == True, News.review_status == "approved"]
 
     @staticmethod
     async def _compute_topic_auto_ids(
@@ -68,7 +99,7 @@ class NewsService:
 
         auto_conditions: list[ColumnElement[bool]] = []
         if published_only:
-            auto_conditions.append(News.is_published == True)
+            auto_conditions.extend(NewsService._public_news_conditions())
         if auto_category:
             auto_conditions.append(News.category == auto_category)
         if auto_keyword:
@@ -92,7 +123,8 @@ class NewsService:
             .limit(int(effective_auto_limit))
         )
         res = await db.execute(q)
-        return [int(r[0]) for r in res.all()]
+        rows = cast(list[tuple[int]], res.all())
+        return [int(nid) for (nid,) in rows]
 
     @staticmethod
     async def get_topic_auto_ids_cached(
@@ -103,15 +135,34 @@ class NewsService:
     ) -> list[int]:
         key = (int(topic.id), bool(published_only))
         now_ts = time.time()
+        NewsService._prune_cache(
+            cast(dict[object, tuple[float, list[int]]], NewsService._topic_auto_cache),
+            int(NewsService._topic_auto_cache_ttl_seconds),
+            float(now_ts),
+        )
         if not force_refresh:
             cached = NewsService._topic_auto_cache.get(key)
             if cached is not None:
                 cached_at, cached_ids = cached
                 if (now_ts - float(cached_at)) <= float(NewsService._topic_auto_cache_ttl_seconds):
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(
+                            "news.topic_auto cache_hit topic_id=%s published_only=%s size=%s",
+                            int(topic.id),
+                            int(bool(published_only)),
+                            len(cached_ids),
+                        )
                     return list(cached_ids)
 
         ids = await NewsService._compute_topic_auto_ids(db, topic, bool(published_only))
         NewsService._topic_auto_cache[key] = (now_ts, list(ids))
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "news.topic_auto cache_miss topic_id=%s published_only=%s cached_size=%s",
+                int(topic.id),
+                int(bool(published_only)),
+                len(ids),
+            )
         return list(ids)
 
     @staticmethod
@@ -135,13 +186,30 @@ class NewsService:
         is_published = bool(news_data.is_published)
         published_at = now if is_published else None
 
+        review_status_raw: object | None = getattr(news_data, "review_status", None)
+        review_status = str(review_status_raw or "approved").strip().lower()
+        review_reason_raw: object | None = getattr(news_data, "review_reason", None)
+        review_reason = str(review_reason_raw).strip() if review_reason_raw is not None else None
+
+        reviewed_at: datetime | None = None
+        if review_status in {"approved", "rejected"}:
+            reviewed_at = now
+
+        if review_status != "approved":
+            is_published = False
+            published_at = None
+
         if scheduled_publish_at is not None:
             if scheduled_publish_at > now:
                 is_published = False
                 published_at = None
             else:
-                is_published = True
-                published_at = now
+                if review_status == "approved":
+                    is_published = True
+                    published_at = now
+                else:
+                    is_published = False
+                    published_at = None
 
         if scheduled_unpublish_at is not None and scheduled_unpublish_at <= now:
             is_published = False
@@ -153,9 +221,14 @@ class NewsService:
             cover_image=news_data.cover_image,
             category=news_data.category,
             source=news_data.source,
+            source_url=getattr(news_data, "source_url", None),
+            source_site=getattr(news_data, "source_site", None),
             author=news_data.author,
             is_top=news_data.is_top,
             is_published=is_published,
+            review_status=review_status,
+            review_reason=review_reason,
+            reviewed_at=reviewed_at,
             published_at=published_at,
             scheduled_publish_at=scheduled_publish_at,
             scheduled_unpublish_at=scheduled_unpublish_at,
@@ -177,7 +250,12 @@ class NewsService:
     async def get_published(db: AsyncSession, news_id: int) -> News | None:
         """获取已发布的新闻"""
         result = await db.execute(
-            select(News).where(News.id == news_id, News.is_published == True)
+            select(News).where(
+                and_(
+                    News.id == news_id,
+                    *NewsService._public_news_conditions(),
+                )
+            )
         )
         return result.scalar_one_or_none()
     
@@ -188,15 +266,22 @@ class NewsService:
         page_size: int = 20,
         category: str | None = None,
         keyword: str | None = None,
-        published_only: bool = True
+        published_only: bool = True,
+        review_status: str | None = None,
+        ai_risk_level: str | None = None,
     ) -> tuple[list[News], int]:
         """获取新闻列表"""
         query = select(News)
         count_query = select(func.count(News.id))
         
         if published_only:
-            query = query.where(News.is_published == True)
-            count_query = count_query.where(News.is_published == True)
+            query = query.where(and_(*NewsService._public_news_conditions()))
+            count_query = count_query.where(and_(*NewsService._public_news_conditions()))
+
+        rs = str(review_status or "").strip().lower()
+        if rs:
+            query = query.where(News.review_status == rs)
+            count_query = count_query.where(News.review_status == rs)
         
         if category:
             query = query.where(News.category == category)
@@ -213,6 +298,23 @@ class NewsService:
             )
             query = query.where(search_filter)
             count_query = count_query.where(search_filter)
+
+        rl = str(ai_risk_level or "").strip().lower()
+        if rl and rl != "all":
+            if rl == "unknown":
+                query = query.outerjoin(NewsAIAnnotation, NewsAIAnnotation.news_id == News.id).where(
+                    or_(NewsAIAnnotation.risk_level == "unknown", NewsAIAnnotation.id.is_(None))
+                )
+                count_query = count_query.outerjoin(NewsAIAnnotation, NewsAIAnnotation.news_id == News.id).where(
+                    or_(NewsAIAnnotation.risk_level == "unknown", NewsAIAnnotation.id.is_(None))
+                )
+            else:
+                query = query.join(NewsAIAnnotation, NewsAIAnnotation.news_id == News.id).where(
+                    NewsAIAnnotation.risk_level == rl
+                )
+                count_query = count_query.join(NewsAIAnnotation, NewsAIAnnotation.news_id == News.id).where(
+                    NewsAIAnnotation.risk_level == rl
+                )
         
         # 置顶优先，然后按发布时间倒序
         query = query.order_by(desc(News.is_top), desc(News.published_at), desc(News.created_at))
@@ -225,6 +327,52 @@ class NewsService:
         total = count_result.scalar() or 0
         
         return list(news_list), int(total)
+
+    @staticmethod
+    async def review_news_admin(
+        db: AsyncSession,
+        news_id: int,
+        action: str,
+        reason: str | None = None,
+    ) -> News | None:
+        news = await NewsService.get_by_id(db, int(news_id))
+        if news is None:
+            return None
+
+        now = datetime.now()
+        act = str(action or "").strip().lower()
+        rsn = str(reason).strip() if reason is not None else None
+
+        if act == "approve":
+            news.review_status = "approved"
+            news.review_reason = rsn
+            news.reviewed_at = now
+
+            sp = getattr(news, "scheduled_publish_at", None)
+            su = getattr(news, "scheduled_unpublish_at", None)
+            if isinstance(sp, datetime) and sp <= now and (su is None or (isinstance(su, datetime) and su > now)):
+                news.is_published = True
+                news.published_at = now
+
+        elif act == "reject":
+            news.review_status = "rejected"
+            news.review_reason = rsn
+            news.reviewed_at = now
+            news.is_published = False
+            news.published_at = None
+
+        elif act == "pending":
+            news.review_status = "pending"
+            news.review_reason = rsn
+            news.reviewed_at = None
+            news.is_published = False
+            news.published_at = None
+        else:
+            raise ValueError("invalid action")
+
+        await db.commit()
+        await db.refresh(news)
+        return news
     
     @staticmethod
     async def update(db: AsyncSession, news: News, news_data: NewsUpdate) -> News:
@@ -233,13 +381,29 @@ class NewsService:
 
         now = datetime.now()
 
+        review_status_value = update_data.get("review_status")
+        if isinstance(review_status_value, str):
+            rs = review_status_value.strip().lower()
+            update_data["review_status"] = rs
+            if rs in {"approved", "rejected"}:
+                _ = update_data.setdefault("reviewed_at", now)
+
+        review_status = str(update_data.get("review_status") or getattr(news, "review_status", "approved") or "approved").strip().lower()
+        if review_status != "approved":
+            update_data["is_published"] = False
+            update_data["published_at"] = None
+
         scheduled_publish_at = update_data.get("scheduled_publish_at")
         if isinstance(scheduled_publish_at, datetime):
             if scheduled_publish_at > now:
                 update_data["is_published"] = False
             else:
-                update_data["is_published"] = True
-                _ = update_data.setdefault("published_at", now)
+                if review_status == "approved":
+                    update_data["is_published"] = True
+                    _ = update_data.setdefault("published_at", now)
+                else:
+                    update_data["is_published"] = False
+                    update_data["published_at"] = None
 
         scheduled_unpublish_at = update_data.get("scheduled_unpublish_at")
         if isinstance(scheduled_unpublish_at, datetime) and scheduled_unpublish_at <= now:
@@ -267,6 +431,7 @@ class NewsService:
                     News.is_published == False,
                     News.scheduled_publish_at.is_not(None),
                     News.scheduled_publish_at <= now,
+                    News.review_status == "approved",
                 )
             )
             .order_by(News.scheduled_publish_at.asc())
@@ -309,6 +474,14 @@ class NewsService:
     @staticmethod
     async def delete(db: AsyncSession, news: News) -> None:
         """删除新闻"""
+        _ = await db.execute(
+            delete(NewsAIAnnotation).where(
+                or_(
+                    NewsAIAnnotation.news_id == news.id,
+                    NewsAIAnnotation.duplicate_of_news_id == news.id,
+                )
+            )
+        )
         await db.delete(news)
         await db.commit()
         NewsService.invalidate_hot_cache()
@@ -357,7 +530,7 @@ class NewsService:
             .where(
                 and_(
                     NewsViewHistory.user_id == user_id,
-                    News.is_published == True,
+                    *NewsService._public_news_conditions(),
                 )
             )
             .order_by(desc(NewsViewHistory.viewed_at))
@@ -369,7 +542,7 @@ class NewsService:
             .where(
                 and_(
                     NewsViewHistory.user_id == user_id,
-                    News.is_published == True,
+                    *NewsService._public_news_conditions(),
                 )
             )
         )
@@ -405,7 +578,7 @@ class NewsService:
         """获取分类及其新闻数量"""
         result = await db.execute(
             select(News.category, func.count(News.id).label("count"))
-            .where(News.is_published == True)
+            .where(and_(*NewsService._public_news_conditions()))
             .group_by(News.category)
         )
         rows = result.all()
@@ -426,6 +599,11 @@ class NewsService:
             kw if kw else None,
         )
         now_ts = time.time()
+        NewsService._prune_cache(
+            cast(dict[object, tuple[float, list[int]]], NewsService._hot_cache),
+            int(NewsService._hot_cache_ttl_seconds),
+            float(now_ts),
+        )
         cached = NewsService._hot_cache.get(cache_key)
         if cached is not None:
             cached_at, cached_ids = cached
@@ -436,12 +614,21 @@ class NewsService:
                 res = await db.execute(select(News).where(News.id.in_(ids)))
                 rows = list(res.scalars().all())
                 by_id = {int(n.id): n for n in rows}
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "news.hot cache_hit days=%s category=%s kw=%s limit=%s returned=%s",
+                        int(days),
+                        str(category) if category is not None else None,
+                        kw if kw else None,
+                        int(limit),
+                        len(ids),
+                    )
                 return [by_id[i] for i in ids if i in by_id]
 
         since = datetime.now() - timedelta(days=days)
 
         conditions: list[ColumnElement[bool]] = [
-            News.is_published == True,
+            *NewsService._public_news_conditions(),
             or_(
                 and_(News.published_at.is_not(None), News.published_at >= since),
                 and_(News.published_at.is_(None), News.created_at >= since),
@@ -472,11 +659,17 @@ class NewsService:
             .cte("hot_candidates")
         )
 
+        fav_counts = (
+            select(NewsFavorite.news_id, func.count(NewsFavorite.id).label("fav_count"))
+            .where(NewsFavorite.news_id.in_(select(candidate_ids.c.id)))
+            .group_by(NewsFavorite.news_id)
+            .subquery("hot_fav_counts")
+        )
+
         result = await db.execute(
-            select(News, func.count(NewsFavorite.id))
+            select(News, func.coalesce(fav_counts.c.fav_count, 0))
             .join(candidate_ids, candidate_ids.c.id == News.id)
-            .outerjoin(NewsFavorite, NewsFavorite.news_id == News.id)
-            .group_by(News.id)
+            .outerjoin(fav_counts, fav_counts.c.news_id == News.id)
         )
 
         rows = cast(list[tuple[News, int]], result.all())
@@ -515,6 +708,15 @@ class NewsService:
 
         top = candidates[: int(limit)]
         NewsService._hot_cache[cache_key] = (now_ts, [int(n.id) for n in top])
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "news.hot cache_miss days=%s category=%s kw=%s limit=%s cached=%s",
+                int(days),
+                str(category) if category is not None else None,
+                kw if kw else None,
+                int(limit),
+                len(top),
+            )
         return top
 
     @staticmethod
@@ -611,7 +813,7 @@ class NewsService:
         if not sub_conditions:
             return [], 0
 
-        conditions: list[ColumnElement[bool]] = [News.is_published == True, or_(*sub_conditions)]
+        conditions: list[ColumnElement[bool]] = [*NewsService._public_news_conditions(), or_(*sub_conditions)]
 
         if category:
             conditions.append(News.category == category)
@@ -651,7 +853,11 @@ class NewsService:
         if not getattr(news, "is_published", False):
             return 0
 
+        if str(getattr(news, "review_status", "approved") or "approved") != "approved":
+            return 0
+
         link = f"/news/{int(news.id)}"
+        dedupe_key = f"news:{int(news.id)}"
 
         reasons_by_user: dict[int, set[str]] = {}
 
@@ -699,21 +905,7 @@ class NewsService:
         if not user_ids:
             return 0
 
-        existing_result = await db.execute(
-            select(Notification.user_id).where(
-                and_(
-                    Notification.type == NotificationType.NEWS,
-                    Notification.link == link,
-                    Notification.user_id.in_(list(user_ids)),
-                )
-            )
-        )
-        existing_rows = cast(list[tuple[int]], existing_result.fetchall())
-        already_notified = {int(uid) for (uid,) in existing_rows}
-
-        to_create = [uid for uid in user_ids if uid not in already_notified]
-        if not to_create:
-            return 0
+        to_create = list(user_ids)
 
         title = f"订阅命中：{str(news.title)}"
         preview_source = str(getattr(news, "summary", None) or "").strip() or str(
@@ -721,7 +913,7 @@ class NewsService:
         ).strip()
         preview = " ".join(preview_source.split())[:120]
 
-        notifications: list[Notification] = []
+        values: list[dict[str, object]] = []
         for uid in to_create:
             content_lines: list[str] = [f"分类：{str(news.category)}"]
             reasons = sorted(list(reasons_by_user.get(int(uid), set())))
@@ -729,20 +921,32 @@ class NewsService:
             if preview:
                 content_lines.append(f"摘要：{preview}")
             content = "\n".join(content_lines) if content_lines else None
-            notifications.append(
-                Notification(
-                    user_id=int(uid),
-                    type=NotificationType.NEWS,
-                    title=title,
-                    content=content,
-                    link=link,
-                    is_read=False,
-                )
+            values.append(
+                {
+                    "user_id": int(uid),
+                    "type": NotificationType.NEWS,
+                    "title": title,
+                    "content": content,
+                    "link": link,
+                    "dedupe_key": dedupe_key,
+                    "is_read": False,
+                }
             )
 
-        db.add_all(notifications)
+        bind = db.get_bind()
+        dialect_name = str(getattr(getattr(bind, "dialect", None), "name", "") or "")
+        if dialect_name == "postgresql":
+            stmt = pg_insert(Notification).values(values).on_conflict_do_nothing(
+                index_elements=["user_id", "type", "dedupe_key"]
+            )
+        else:
+            stmt = sqlite_insert(Notification).values(values).on_conflict_do_nothing(
+                index_elements=["user_id", "type", "dedupe_key"]
+            )
+
+        result = await db.execute(stmt)
         await db.commit()
-        return len(notifications)
+        return int(getattr(result, "rowcount", 0) or 0)
 
     @staticmethod
     async def toggle_favorite(db: AsyncSession, news_id: int, user_id: int) -> tuple[bool, int]:
@@ -814,35 +1018,28 @@ class NewsService:
         if not ids:
             return {}
 
-        cols: list[object] = [
-            NewsFavorite.news_id,
-            func.count(NewsFavorite.id),
-        ]
-        if user_id is not None:
-            cols.append(
-                func.max(
-                    case(
-                        (NewsFavorite.user_id == int(user_id), 1),
-                        else_=0,
-                    )
-                )
-            )
-
-        result = await db.execute(
-            select(*cols)
-            .where(NewsFavorite.news_id.in_(ids))
-            .group_by(NewsFavorite.news_id)
-        )
-
         if user_id is None:
+            result = await db.execute(
+                select(NewsFavorite.news_id, func.count(NewsFavorite.id))
+                .where(NewsFavorite.news_id.in_(ids))
+                .group_by(NewsFavorite.news_id)
+            )
             rows = cast(list[tuple[int, int]], result.all())
             return {int(news_id): (int(count or 0), False) for news_id, count in rows}
 
-        rows2 = cast(list[tuple[int, int, int]], result.all())
-        return {
-            int(news_id): (int(count or 0), bool(is_fav))
-            for news_id, count, is_fav in rows2
-        }
+        is_fav_expr = func.max(
+            case(
+                (NewsFavorite.user_id == int(user_id), 1),
+                else_=0,
+            )
+        )
+        result2 = await db.execute(
+            select(NewsFavorite.news_id, func.count(NewsFavorite.id), is_fav_expr)
+            .where(NewsFavorite.news_id.in_(ids))
+            .group_by(NewsFavorite.news_id)
+        )
+        rows2 = cast(list[tuple[int, int, int]], result2.all())
+        return {int(news_id): (int(count or 0), bool(is_fav)) for news_id, count, is_fav in rows2}
 
     @staticmethod
     async def get_favorited_news_ids(
@@ -880,7 +1077,7 @@ class NewsService:
             .where(
                 and_(
                     NewsFavorite.user_id == user_id,
-                    News.is_published == True,
+                    *NewsService._public_news_conditions(),
                 )
             )
             .order_by(desc(NewsFavorite.created_at))
@@ -903,7 +1100,7 @@ class NewsService:
             .where(
                 and_(
                     NewsFavorite.user_id == user_id,
-                    News.is_published == True,
+                    *NewsService._public_news_conditions(),
                 )
             )
         )
@@ -936,7 +1133,7 @@ class NewsService:
             select(News)
             .where(
                 and_(
-                    News.is_published == True,
+                    *NewsService._public_news_conditions(),
                     News.id != news_id,
                 )
             )
@@ -950,7 +1147,7 @@ class NewsService:
         """获取置顶新闻"""
         result = await db.execute(
             select(News)
-            .where(News.is_published == True, News.is_top == True)
+            .where(and_(*NewsService._public_news_conditions()), News.is_top == True)
             .order_by(desc(News.published_at))
             .limit(limit)
         )
@@ -961,7 +1158,7 @@ class NewsService:
         """获取最新新闻"""
         result = await db.execute(
             select(News)
-            .where(News.is_published == True)
+            .where(and_(*NewsService._public_news_conditions()))
             .order_by(desc(News.published_at), desc(News.created_at))
             .limit(limit)
         )
@@ -975,7 +1172,7 @@ class NewsService:
         keyword: str | None = None,
     ) -> list[News]:
         """获取最新新闻（支持分类/关键词过滤）"""
-        conditions: list[ColumnElement[bool]] = [News.is_published == True]
+        conditions: list[ColumnElement[bool]] = [*NewsService._public_news_conditions()]
         if category:
             conditions.append(News.category == category)
 
@@ -1022,10 +1219,23 @@ class NewsService:
         )
 
         now_ts = time.time()
+        NewsService._prune_cache(
+            cast(dict[object, tuple[float, list[int]]], NewsService._recommended_cache),
+            int(NewsService._recommended_cache_ttl_seconds),
+            float(now_ts),
+        )
         cached = NewsService._recommended_cache.get(cache_key)
         if cached is not None:
             cached_at, cached_ids = cached
             if (now_ts - float(cached_at)) <= float(NewsService._recommended_cache_ttl_seconds):
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(
+                        "news.recommended cache_hit user_id=%s category=%s kw=%s total=%s",
+                        int(user_id) if user_id is not None else None,
+                        cat,
+                        kw_key,
+                        len(cached_ids),
+                    )
                 all_ids = list(cached_ids)
             else:
                 all_ids = []
@@ -1076,6 +1286,14 @@ class NewsService:
 
             all_ids = list(ordered_ids)
             NewsService._recommended_cache[cache_key] = (now_ts, list(all_ids))
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "news.recommended cache_miss user_id=%s category=%s kw=%s total=%s",
+                    int(user_id) if user_id is not None else None,
+                    cat,
+                    kw_key,
+                    len(all_ids),
+                )
 
         total = len(all_ids)
         start = max(0, (int(page) - 1) * int(page_size))
@@ -1106,15 +1324,31 @@ class NewsService:
 
     @staticmethod
     async def create_topic(db: AsyncSession, data: dict[str, object]) -> NewsTopic:
+        raw_sort_order = data.get("sort_order")
+        sort_order = 0
+        if isinstance(raw_sort_order, (int, float, str)):
+            try:
+                sort_order = int(raw_sort_order)
+            except (TypeError, ValueError):
+                sort_order = 0
+
+        raw_auto_limit = data.get("auto_limit")
+        auto_limit = 0
+        if isinstance(raw_auto_limit, (int, float, str)):
+            try:
+                auto_limit = int(raw_auto_limit)
+            except (TypeError, ValueError):
+                auto_limit = 0
+
         topic = NewsTopic(
             title=str(data.get("title") or ""),
             description=(str(data.get("description")) if data.get("description") is not None else None),
             cover_image=(str(data.get("cover_image")) if data.get("cover_image") is not None else None),
             is_active=bool(data.get("is_active", True)),
-            sort_order=int(data.get("sort_order", 0) or 0),
+            sort_order=int(sort_order),
             auto_category=(str(data.get("auto_category")) if data.get("auto_category") is not None else None),
             auto_keyword=(str(data.get("auto_keyword")) if data.get("auto_keyword") is not None else None),
-            auto_limit=int(data.get("auto_limit", 0) or 0),
+            auto_limit=int(auto_limit),
         )
         db.add(topic)
         await db.commit()
@@ -1193,7 +1427,9 @@ class NewsService:
                     NewsTopicItem.topic_id == int(topic_id)
                 )
             )
-            pos = int(max_result.scalar() or 0) + 1
+            raw_max = max_result.scalar()
+            max_pos = int(raw_max) if isinstance(raw_max, (int, float, str)) else 0
+            pos = int(max_pos) + 1
 
         item = NewsTopicItem(topic_id=int(topic_id), news_id=int(news_id), position=int(pos))
         db.add(item)
@@ -1209,7 +1445,7 @@ class NewsService:
         news_ids: Sequence[int],
         position_start: int | None = None,
     ) -> tuple[int, int, int]:
-        ids_raw = [int(i) for i in news_ids if i is not None]
+        ids_raw = [int(i) for i in news_ids]
         seen: set[int] = set()
         ids: list[int] = []
         for i in ids_raw:
@@ -1229,7 +1465,8 @@ class NewsService:
                 and_(NewsTopicItem.topic_id == int(topic_id), NewsTopicItem.news_id.in_(ids))
             )
         )
-        existing_ids = {int(row[0]) for row in existing_result.all()}
+        existing_rows = cast(list[tuple[int]], existing_result.all())
+        existing_ids = {int(v) for (v,) in existing_rows}
         to_add = [i for i in ids if i not in existing_ids]
 
         if not to_add:
@@ -1240,7 +1477,8 @@ class NewsService:
                 NewsTopicItem.topic_id == int(topic_id)
             )
         )
-        max_pos = int(max_result.scalar() or 0)
+        raw_max = max_result.scalar()
+        max_pos = int(raw_max) if isinstance(raw_max, (int, float, str)) else 0
         start_pos = int(position_start) if position_start is not None else max_pos + 1
 
         values = [
@@ -1301,7 +1539,7 @@ class NewsService:
         topic_id: int,
         item_ids: Sequence[int],
     ) -> tuple[int, int, int]:
-        ids_raw = [int(i) for i in item_ids if i is not None]
+        ids_raw = [int(i) for i in item_ids]
         seen: set[int] = set()
         ids: list[int] = []
         for i in ids_raw:
@@ -1336,7 +1574,8 @@ class NewsService:
             .where(NewsTopicItem.topic_id == t_id)
             .order_by(NewsTopicItem.position.asc(), NewsTopicItem.id.asc())
         )
-        ids = [int(r[0]) for r in res.all()]
+        rows = cast(list[tuple[int]], res.all())
+        ids = [int(v) for (v,) in rows]
         if not ids:
             return 0
 
@@ -1355,7 +1594,7 @@ class NewsService:
     @staticmethod
     async def reorder_topic_items(db: AsyncSession, topic_id: int, item_ids: Sequence[int]) -> int:
         t_id = int(topic_id)
-        ids_raw = [int(i) for i in item_ids if i is not None]
+        ids_raw = [int(i) for i in item_ids]
         seen: set[int] = set()
         ids: list[int] = []
         for i in ids_raw:
@@ -1370,7 +1609,8 @@ class NewsService:
             return 0
 
         exist_res = await db.execute(select(NewsTopicItem.id).where(NewsTopicItem.topic_id == t_id))
-        exist_ids = {int(r[0]) for r in exist_res.all()}
+        exist_rows = cast(list[tuple[int]], exist_res.all())
+        exist_ids = {int(v) for (v,) in exist_rows}
         if exist_ids and set(ids) != exist_ids:
             return 0
 
@@ -1454,7 +1694,7 @@ class NewsService:
 
         manual_conditions: list[ColumnElement[bool]] = [NewsTopicItem.topic_id == t_id]
         if published_only:
-            manual_conditions.append(News.is_published == True)
+            manual_conditions.extend(NewsService._public_news_conditions())
 
         manual_where = and_(*manual_conditions)
 
@@ -1522,8 +1762,26 @@ class NewsService:
         return manual_items + auto_items, int(total)
 
     @staticmethod
-    async def create_comment(db: AsyncSession, news_id: int, user_id: int, content: str) -> NewsComment:
-        comment = NewsComment(news_id=int(news_id), user_id=int(user_id), content=str(content))
+    async def create_comment(
+        db: AsyncSession,
+        news_id: int,
+        user_id: int,
+        content: str,
+        review_status: str = "approved",
+        review_reason: str | None = None,
+    ) -> NewsComment:
+        now = datetime.now()
+        reviewed_at: datetime | None = None
+        if str(review_status) in {"approved", "rejected"}:
+            reviewed_at = now
+        comment = NewsComment(
+            news_id=int(news_id),
+            user_id=int(user_id),
+            content=str(content),
+            review_status=str(review_status),
+            review_reason=str(review_reason) if review_reason is not None else None,
+            reviewed_at=reviewed_at,
+        )
         db.add(comment)
         await db.commit()
         await db.refresh(comment)
@@ -1533,7 +1791,7 @@ class NewsService:
     async def get_comment(db: AsyncSession, comment_id: int) -> NewsComment | None:
         result = await db.execute(
             select(NewsComment)
-            .options(joinedload(NewsComment.author))
+            .options(joinedload(NewsComment.author), joinedload(NewsComment.news))
             .where(NewsComment.id == int(comment_id))
         )
         return result.scalar_one_or_none()
@@ -1550,7 +1808,11 @@ class NewsService:
         page: int = 1,
         page_size: int = 20,
     ) -> tuple[list[NewsComment], int]:
-        base_filter = and_(NewsComment.news_id == int(news_id), NewsComment.is_deleted == False)
+        base_filter = and_(
+            NewsComment.news_id == int(news_id),
+            NewsComment.is_deleted == False,
+            NewsComment.review_status == "approved",
+        )
 
         total_result = await db.execute(select(func.count(NewsComment.id)).where(base_filter))
         total = int(total_result.scalar() or 0)
@@ -1567,6 +1829,115 @@ class NewsService:
         result = await db.execute(query)
         items = list(result.scalars().all())
         return items, total
+
+    @staticmethod
+    async def list_comments_admin(
+        db: AsyncSession,
+        page: int = 1,
+        page_size: int = 20,
+        review_status: str | None = None,
+        news_id: int | None = None,
+        user_id: int | None = None,
+        keyword: str | None = None,
+        include_deleted: bool = False,
+    ) -> tuple[list[NewsComment], int]:
+        p = max(1, int(page))
+        ps = max(1, int(page_size))
+
+        conditions: list[ColumnElement[bool]] = []
+        if not include_deleted:
+            conditions.append(NewsComment.is_deleted == False)
+
+        rs = str(review_status or "").strip().lower()
+        if rs:
+            conditions.append(NewsComment.review_status == rs)
+
+        if news_id is not None:
+            conditions.append(NewsComment.news_id == int(news_id))
+        if user_id is not None:
+            conditions.append(NewsComment.user_id == int(user_id))
+
+        kw = str(keyword or "").strip()
+        if kw:
+            pattern = f"%{kw}%"
+            conditions.append(NewsComment.content.ilike(pattern))
+
+        where_clause: ColumnElement[bool]
+        where_clause = and_(*conditions) if conditions else true()
+
+        total_result = await db.execute(select(func.count(NewsComment.id)).where(where_clause))
+        total = int(total_result.scalar() or 0)
+
+        query = (
+            select(NewsComment)
+            .options(joinedload(NewsComment.author), joinedload(NewsComment.news))
+            .where(where_clause)
+            .order_by(desc(NewsComment.created_at), desc(NewsComment.id))
+            .offset((p - 1) * ps)
+            .limit(ps)
+        )
+        result = await db.execute(query)
+        items = list(result.scalars().all())
+        return items, total
+
+    @staticmethod
+    async def review_comment_admin(
+        db: AsyncSession,
+        comment_id: int,
+        action: str,
+        reason: str | None = None,
+        admin_user_id: int | None = None,
+    ) -> NewsComment | None:
+        comment = await NewsService.get_comment(db, int(comment_id))
+        if comment is None:
+            return None
+
+        act = str(action or "").strip().lower()
+        rsn = str(reason).strip() if reason is not None else None
+        now = datetime.now()
+
+        if act == "approve":
+            comment.is_deleted = False
+            comment.review_status = "approved"
+            comment.review_reason = rsn
+            comment.reviewed_at = now
+            title = "你的新闻评论已通过审核"
+        elif act in {"reject", "delete"}:
+            comment.is_deleted = True
+            comment.review_status = "rejected"
+            comment.review_reason = rsn
+            comment.reviewed_at = now
+            title = "你的新闻评论未通过审核" if act == "reject" else "你的新闻评论已被删除"
+        else:
+            raise ValueError("invalid action")
+
+        await db.commit()
+        await db.refresh(comment)
+
+        content_lines: list[str] = [f"评论ID：{int(comment.id)}", f"新闻ID：{int(comment.news_id)}"]
+        if rsn:
+            content_lines.append(f"原因：{rsn}")
+        link = f"/news/{int(comment.news_id)}"
+
+        dedupe_key = f"news_comment:{int(comment.id)}:{act}"
+
+        try:
+            db.add(
+                Notification(
+                    user_id=int(comment.user_id),
+                    type=NotificationType.SYSTEM,
+                    title=title,
+                    content="\n".join(content_lines) if content_lines else None,
+                    link=link,
+                    dedupe_key=dedupe_key,
+                    related_user_id=int(admin_user_id) if admin_user_id is not None else None,
+                    related_comment_id=int(comment.id),
+                )
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+        return comment
 
 
 news_service = NewsService()
