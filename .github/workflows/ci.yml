@@ -134,12 +134,21 @@ jobs:
 
       - name: Install ESLint
         working-directory: ./frontend
-        run: npm ci
+        run: |
+          if node -e "const p=require('./package.json'); const deps={...(p.dependencies||{}),...(p.devDependencies||{})}; process.exit(deps.eslint?0:1)"; then
+            npm ci
+          else
+            echo "eslint not configured; skipping npm ci"
+          fi
 
       - name: Run ESLint
         working-directory: ./frontend
         run: |
-          npx eslint src --ext .ts,.tsx --max-warnings 50 || echo "eslint failed (ignored)"
+          if node -e "const p=require('./package.json'); const deps={...(p.dependencies||{}),...(p.devDependencies||{})}; process.exit(deps.eslint?0:1)"; then
+            npx eslint src --ext .ts,.tsx --max-warnings 50 || echo "eslint failed (ignored)"
+          else
+            echo "eslint not configured; skipping eslint"
+          fi
         continue-on-error: true
 
   # 安全扫描
