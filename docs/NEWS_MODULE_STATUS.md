@@ -79,7 +79,7 @@
   - 结构化输出解析与限长（`_extract_structured_output`）。
   - `run_once()` 写入 highlights/keywords。
   - `response_format` 不支持时自动回退重试。
-- 最新状态：`py -m pytest` 全绿（35 passed）。
+- 最新状态：`py -m pytest` 全绿（36 passed）。
 
 ### 2.2 前端 Playwright E2E
 
@@ -87,6 +87,19 @@
   - 新闻详情：AI 要点/关键词可见；列表卡片展示 AI keywords badge。
   - 管理后台：AI 风险筛选可用且列表展示 badge。
 - 最新状态：`npm run test:e2e` 全绿（50 passed）。
+
+### 2.3 GitHub Actions（主线 main）
+
+- **工作流**：
+  - `CI/CD Pipeline`：backend-test / frontend-build / docker-build / code-quality / security-scan
+  - `Type Check`：pyright
+- **触发方式**：
+  - push 到 `main`（以及 `develop`）
+  - PR 指向 `main`
+  - Actions 页面手动触发（`workflow_dispatch` -> Run workflow）
+- **备注**：
+  - `code-quality` 为非阻塞项：ruff/eslint 失败不会阻断主流程
+  - 若前端未配置 `eslint`（无依赖/无配置文件），CI 会自动跳过 eslint 步骤
 
 ## 3. 当前新闻模块“功能清单”视角（你可以用来汇报/对齐）
 

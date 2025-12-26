@@ -277,3 +277,11 @@ curl -sS \
 - `NEWS_AI_SUMMARY_LLM_HIGHLIGHTS_MAX=3`
 - `NEWS_AI_SUMMARY_LLM_KEYWORDS_MAX=5`
 - `NEWS_AI_SUMMARY_LLM_ITEM_MAX_CHARS=40`
+
+## 7. CI / 主线验证（补充）
+
+- **主线工作流**：
+  - `CI/CD Pipeline` 与 `Type Check` 均支持 `workflow_dispatch`，可在 GitHub Actions 页面手动 Run workflow，并选择分支 `main`。
+- **code-quality 行为**：
+  - `code-quality` 为非阻塞项：ruff/eslint 失败不会阻断主流程。
+  - 若前端未配置 `eslint`（无依赖/无配置文件），CI 会自动跳过 eslint 步骤，避免误报失败。
