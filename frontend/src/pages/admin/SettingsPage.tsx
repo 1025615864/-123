@@ -87,7 +87,6 @@ export default function SettingsPage() {
     siteDescription: '为普通百姓提供专业法律咨询服务',
     contactEmail: 'contact@example.com',
     contactPhone: '400-123-4567',
-    openaiApiKey: '',
     enableAI: true,
     newsAiSummaryLlmEnabled: false,
     newsAiProviderStrategy: 'priority',
@@ -144,7 +143,6 @@ export default function SettingsPage() {
       siteDescription: configMap['site_description'] || prev.siteDescription,
       contactEmail: configMap['contact_email'] || prev.contactEmail,
       contactPhone: configMap['contact_phone'] || prev.contactPhone,
-      openaiApiKey: configMap['openai_api_key'] ? '••••••••••••••••' : '',
       enableAI: configMap['enable_ai'] !== 'false',
       newsAiSummaryLlmEnabled: configMap['NEWS_AI_SUMMARY_LLM_ENABLED'] ? configMap['NEWS_AI_SUMMARY_LLM_ENABLED'] !== 'false' : prev.newsAiSummaryLlmEnabled,
       newsAiProviderStrategy: configMap['NEWS_AI_SUMMARY_LLM_PROVIDER_STRATEGY'] || prev.newsAiProviderStrategy,
@@ -180,10 +178,6 @@ export default function SettingsPage() {
       ]
 
       const maskedPlaceholder = '••••••••••••••••'
-      if (settings.openaiApiKey && settings.openaiApiKey !== maskedPlaceholder) {
-        configs.push({ key: 'openai_api_key', value: settings.openaiApiKey, category: 'ai' })
-      }
-
       if (settings.newsAiProvidersJson && settings.newsAiProvidersJson !== maskedPlaceholder) {
         configs.push({ key: 'NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON', value: settings.newsAiProvidersJson, category: 'news_ai' })
       }
@@ -295,7 +289,7 @@ export default function SettingsPage() {
 
             <Textarea
               label="Providers JSON（不回显已配置内容）"
-              placeholder='例如：[{"name":"p1","base_url":"https://...","api_key":"...","model":"gpt-4o-mini"}]'
+              placeholder='例如：[{"name":"p1","base_url":"https://...","model":"gpt-4o-mini"}]'
               value={settings.newsAiProvidersJson}
               onChange={(e) => setSettings({ ...settings, newsAiProvidersJson: e.target.value })}
               rows={5}
@@ -423,10 +417,11 @@ export default function SettingsPage() {
           
           <div className="space-y-4">
             <Input
-              label="OpenAI API Key"
+              label="OpenAI API Key（通过部署环境变量配置）"
               type="password"
-              value={settings.openaiApiKey}
-              onChange={(e) => setSettings({ ...settings, openaiApiKey: e.target.value })}
+              value={''}
+              placeholder="请在部署环境设置 OPENAI_API_KEY"
+              disabled
             />
             <div className="flex items-center justify-between py-3 border-b border-slate-200/70 dark:border-white/5">
               <div>

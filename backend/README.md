@@ -1,13 +1,14 @@
 # 百姓法律助手 - 后端服务
 
-基于 FastAPI + LangChain 的 AI 法律咨询服务后端。
+基于 FastAPI 的后端服务，提供用户、论坛、新闻、系统管理等 API；并包含新闻 AI 标注（摘要/要点/关键词/风险）能力与运维接口。
 
 ## 功能特性
 
-- 🤖 **AI 法律咨询**: 基于法律知识库的智能问答
-- 📚 **法律知识库**: 向量化存储，支持语义搜索
-- 💬 **多轮对话**: 支持上下文连续对话
-- 📝 **咨询记录**: 保存和管理咨询历史
+- 👤 **用户系统**: 注册、登录、权限与管理员能力
+- 💬 **论坛社区**: 发帖、评论、审核、通知
+- 📰 **新闻资讯**: 新闻 CRUD/审核/发布/置顶、专题/合集、订阅与通知
+- 🧠 **新闻 AI 标注**: 摘要/要点/关键词/风险等级；支持多 Provider、策略与失败切换
+- ⚙️ **系统管理**: SystemConfig 配置、运维状态接口
 
 ## 快速开始
 
@@ -28,9 +29,20 @@ cp env.example .env
 
 **重要配置项：**
 
-- `OPENAI_API_KEY`: OpenAI API 密钥
-- `OPENAI_BASE_URL`: API 地址（可使用国内代理）
 - `DATABASE_URL`: 数据库连接地址
+- `JWT_SECRET_KEY` / `SECRET_KEY`: JWT 密钥（生产必填且必须足够安全）
+- `PAYMENT_WEBHOOK_SECRET`: 支付回调密钥（生产 `DEBUG=false` 必填）
+- `REDIS_URL`: Redis 连接串（生产推荐；`DEBUG=false` 时未连接会禁用定时任务与 News AI pipeline）
+- `OPENAI_API_KEY`: LLM API Key（**必须走环境变量/Secret**，禁止写入 SystemConfig 入库）
+- `OPENAI_BASE_URL`: LLM API Base URL（可切换 OpenAI-compat 供应商）
+
+#### 2.1 生产配置要点（建议先读）
+
+- Secrets（例如 `OPENAI_API_KEY`、`JWT_SECRET_KEY/SECRET_KEY`、`PAYMENT_WEBHOOK_SECRET`）必须通过部署环境变量/Secret Manager 注入。
+- 管理后台 SystemConfig **禁止保存** API Key/secret（后端会硬拦截）。
+- 生产启用 News AI 周期任务时，务必配置可用的 `REDIS_URL`（用于分布式锁，避免多副本重复跑）。
+
+详见：`../docs/PROD_DEPLOY_AND_SMOKE_SOP.md`
 
 ### 3. 初始化法律知识库
 
@@ -73,6 +85,13 @@ curl -X POST http://localhost:8000/api/ai/chat \
   -d '{"message": "劳动合同未签书面合同，我能获得什么赔偿？"}'
 ```
 
+### News AI 运维（管理员）
+
+- `GET /api/system/news-ai/status`
+  - 查看当前生效 providers（脱敏）、策略、response_format、积压与错误趋势。
+- `POST /api/news/admin/{news_id}/ai/rerun`
+  - 手动触发单条新闻 AI 重跑。
+
 ## 项目结构
 
 ```
@@ -97,6 +116,11 @@ backend/
 
 - **Web 框架**: FastAPI
 - **ORM**: SQLAlchemy (async)
-- **AI 框架**: LangChain
+- **AI**: OpenAI-compatible HTTP API（可选；相关能力可通过 env + SystemConfig 配置）
 - **向量数据库**: ChromaDB
-- **LLM**: OpenAI GPT
+- **LLM**: OpenAI / OpenAI-compat 服务
+
+## 相关文档
+
+- `../docs/PROD_DEPLOY_AND_SMOKE_SOP.md`：生产部署参数清单 + 一键冒烟 SOP
+- `../docs/UPDATE_LOG.md`：更新记录（变更点与测试结果）

@@ -1,0 +1,64 @@
+# Example values for enabling optional subcharts (no real secrets)
+# Usage:
+#   helm upgrade --install baixing-assistant ./helm/baixing-assistant -n baixing --create-namespace \
+#     -f ./helm/baixing-assistant/values.subcharts.example.yaml
+#
+# NOTE:
+# - This file enables bitnami/redis and bitnami/postgresql dependencies.
+# - You still need to provide correct DATABASE_URL/REDIS_URL for your app.
+# - Service names depend on your Helm release name and the Bitnami default naming.
+#   If you install with:
+#     helm upgrade --install <release> ./helm/baixing-assistant ...
+#   then the default Service names are typically:
+#     redis:      <release>-redis-master
+#     postgresql: <release>-postgresql
+#   (confirm with: kubectl get svc)
+# - By default, Bitnami charts usually enable auth and store credentials in Secrets.
+#   Typical Secret names are often:
+#     redis:      <release>-redis
+#     postgresql: <release>-postgresql
+#   (confirm with: kubectl get secret)
+#   Typical Secret data keys are often:
+#     redis:      redis-password
+#     postgresql: postgres-password (superuser password)
+#               + password (auth.username password, if you set postgresql.auth.username)
+#   Defaults (if you don't override postgresql.auth.*):
+#     user: postgres
+#     db:   postgres
+
+redis:
+  enabled: true
+
+postgresql:
+  enabled: true
+
+backend:
+  existingSecretName: ""
+
+  # For demo only. In production, prefer ExternalSecrets or existingSecretName.
+  secret:
+    REDIS_URL: "redis://:<redis_password>@<release>-redis-master:6379/0"
+    DATABASE_URL: "postgresql+asyncpg://postgres:<postgres_password>@<release>-postgresql:5432/postgres"
+    JWT_SECRET_KEY: "REPLACE_ME"
+    PAYMENT_WEBHOOK_SECRET: "REPLACE_ME"
+    OPENAI_API_KEY: "REPLACE_ME"
+
+  config:
+    DEBUG: "false"
+    NEWS_AI_ENABLED: "true"
+
+image:
+  backend:
+    repository: your-registry/baixing-backend
+    tag: "1.0.0"
+  frontend:
+    repository: your-registry/baixing-frontend
+    tag: "1.0.0"
+
+ingress:
+  enabled: true
+  className: nginx
+  host: yourdomain.com
+  tls:
+    enabled: true
+    secretName: yourdomain-tls

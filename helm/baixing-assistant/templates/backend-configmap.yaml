@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "baixing-assistant.fullname" . }}-backend-config
+  labels:
+{{ include "baixing-assistant.labels" . | indent 4 }}
+data:
+{{- range $k, $v := .Values.backend.config }}
+  {{ $k }}: {{ $v | quote }}
+{{- end }}

@@ -1,10 +1,11 @@
 """系统配置和日志API路由"""
 from typing import Annotated, ClassVar, cast
+import base64
 import json
 import os
 import re
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, and_, or_
 from pydantic import BaseModel, ConfigDict
@@ -51,6 +52,70 @@ def _mask_config_value(key_name: str, value: str | None) -> str | None:
     if re.search(r"(^|_)key($|_)", k):
         return "***"
     return value
+
+
+def _news_ai_providers_config_contains_api_key(decoded_json: str) -> bool:
+    s = str(decoded_json or "").strip()
+    if not s:
+        return False
+    try:
+        obj: object = json.loads(s)
+        if isinstance(obj, list):
+            for item in obj:
+                if not isinstance(item, dict):
+                    continue
+                for k in item.keys():
+                    kk = str(k or "").strip().lower()
+                    if kk in {"api_key", "apikey"}:
+                        return True
+            return False
+        if isinstance(obj, dict):
+            for k in obj.keys():
+                kk = str(k or "").strip().lower()
+                if kk in {"api_key", "apikey"}:
+                    return True
+            return False
+    except Exception:
+        return bool(re.search(r'"api_key"|\bapi_key\b|"apikey"|\bapikey\b', s, flags=re.IGNORECASE))
+    return False
+
+
+def _validate_system_config_no_secrets(key: str, value: str | None) -> None:
+    k = str(key or "").strip()
+    if value is None or not str(value).strip():
+        return
+
+    k_lower = k.lower()
+    if (
+        any(token in k_lower for token in ("secret", "password", "api_key", "apikey", "private_key"))
+        and k not in {"NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON", "NEWS_AI_SUMMARY_LLM_PROVIDERS_B64"}
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Secret values must not be stored in SystemConfig. Use environment variables / Secret Manager.",
+        )
+
+    if k not in {"NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON", "NEWS_AI_SUMMARY_LLM_PROVIDERS_B64"}:
+        return
+
+    decoded = str(value)
+    if k == "NEWS_AI_SUMMARY_LLM_PROVIDERS_B64":
+        try:
+            decoded = base64.b64decode(str(value).strip()).decode("utf-8")
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail="NEWS_AI_SUMMARY_LLM_PROVIDERS_B64 must be valid base64-encoded JSON",
+            ) from e
+
+    if _news_ai_providers_config_contains_api_key(decoded):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "NEWS_AI providers config must not include api_key in SystemConfig. "
+                "Use OPENAI_API_KEY (Secret/env) and omit api_key from providers JSON (Scheme A)."
+            ),
+        )
 
 
 @router.get("/configs", response_model=list[ConfigResponse])
@@ -359,6 +424,10 @@ async def update_config(
     request: Request,
 ):
     """更新配置项"""
+    new_value = data.value
+    if new_value is not None and (not str(new_value).strip()):
+        new_value = None
+    _validate_system_config_no_secrets(key, new_value)
     result = await db.execute(
         select(SystemConfig).where(SystemConfig.key == key)
     )
@@ -366,13 +435,13 @@ async def update_config(
     
     if config:
         old_value = config.value
-        config.value = data.value
+        config.value = new_value
         config.description = data.description or config.description
         config.updated_by = current_user.id
     else:
         config = SystemConfig(
             key=key,
-            value=data.value,
+            value=new_value,
             description=data.description,
             category=data.category,
             updated_by=current_user.id
@@ -386,7 +455,7 @@ async def update_config(
         return _mask_config_value(key_name, value)
 
     masked_old = _mask_value(key, old_value)
-    masked_new = _mask_value(key, data.value)
+    masked_new = _mask_value(key, new_value)
 
     # 记录日志
     await _log_action(
@@ -396,7 +465,7 @@ async def update_config(
     )
     
     await db.commit()
-    return {"message": "配置已更新", "key": key, "value": data.value}
+    return {"message": "配置已更新", "key": key, "value": _mask_config_value(key, new_value)}
 
 
 @router.post("/configs/batch")
@@ -409,18 +478,22 @@ async def batch_update_configs(
     """批量更新配置"""
     updated: list[str] = []
     for item in data.configs:
+        new_value = item.value
+        if new_value is not None and (not str(new_value).strip()):
+            new_value = None
+        _validate_system_config_no_secrets(item.key, new_value)
         result = await db.execute(
             select(SystemConfig).where(SystemConfig.key == item.key)
         )
         config = result.scalar_one_or_none()
         
         if config:
-            config.value = item.value
+            config.value = new_value
             config.updated_by = current_user.id
         else:
             config = SystemConfig(
                 key=item.key,
-                value=item.value,
+                value=new_value,
                 description=item.description,
                 category=item.category,
                 updated_by=current_user.id

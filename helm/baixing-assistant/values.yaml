@@ -1,0 +1,76 @@
+replicaCount:
+  backend: 2
+  frontend: 2
+
+image:
+  backend:
+    repository: baixing-backend
+    tag: latest
+    pullPolicy: IfNotPresent
+  frontend:
+    repository: baixing-frontend
+    tag: latest
+    pullPolicy: IfNotPresent
+
+service:
+  backend:
+    type: ClusterIP
+    port: 8000
+  frontend:
+    type: ClusterIP
+    port: 3000
+
+resources:
+  backend: {}
+  frontend: {}
+
+backend:
+  existingSecretName: ""
+
+  externalSecret:
+    enabled: false
+    secretStoreRef:
+      name: ""
+      kind: SecretStore
+    refreshInterval: 1h
+    remoteRefs:
+      DATABASE_URL: ""
+      JWT_SECRET_KEY: ""
+      PAYMENT_WEBHOOK_SECRET: ""
+      REDIS_URL: ""
+      OPENAI_API_KEY: ""
+
+  config:
+    DEBUG: "false"
+    CORS_ALLOW_ORIGINS: "https://yourdomain.com"
+    FRONTEND_BASE_URL: "https://yourdomain.com"
+    TRUSTED_PROXIES: "[]"
+    NEWS_AI_ENABLED: "true"
+    NEWS_AI_INTERVAL_SECONDS: "120"
+    OPENAI_BASE_URL: "https://api.openai.com/v1"
+    AI_MODEL: "deepseek-chat"
+
+  secret:
+    DATABASE_URL: ""
+    JWT_SECRET_KEY: ""
+    PAYMENT_WEBHOOK_SECRET: ""
+    REDIS_URL: ""
+    OPENAI_API_KEY: ""
+
+ingress:
+  enabled: true
+  className: nginx
+  host: yourdomain.com
+  tls:
+    enabled: true
+    secretName: yourdomain-tls
+
+redis:
+  enabled: false
+
+postgresql:
+  enabled: false
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

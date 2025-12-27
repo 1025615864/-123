@@ -539,6 +539,9 @@ class NewsAIPipelineService:
                     p_base_url = str(p.get("base_url", "") or "").strip()
                     p_model = str(p.get("model", "") or "").strip() or "gpt-4o-mini"
 
+                    if (not p_base_url) or (not p_api_key):
+                        continue
+
                     auth_type = str(p.get("auth_type", "bearer") or "bearer").strip().lower()
                     auth_header_name: str | None = None
                     auth_prefix: str | None = None
@@ -633,8 +636,17 @@ class NewsAIPipelineService:
         *,
         env_overrides: dict[str, str] | None = None,
     ) -> list[_NewsSummaryLLMProvider]:
-        raw_json = str((env_overrides or {}).get("NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON") or os.getenv("NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON", "") or "").strip()
-        raw_b64 = str((env_overrides or {}).get("NEWS_AI_SUMMARY_LLM_PROVIDERS_B64") or os.getenv("NEWS_AI_SUMMARY_LLM_PROVIDERS_B64", "") or "").strip()
+        override_json = (env_overrides or {}).get("NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON")
+        override_b64 = (env_overrides or {}).get("NEWS_AI_SUMMARY_LLM_PROVIDERS_B64")
+        providers_from_overrides = bool(
+            (override_json is not None and str(override_json).strip())
+            or (override_b64 is not None and str(override_b64).strip())
+        )
+
+        raw_json = str(override_json or os.getenv("NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON", "") or "").strip()
+        raw_b64 = str(override_b64 or os.getenv("NEWS_AI_SUMMARY_LLM_PROVIDERS_B64", "") or "").strip()
+
+        default_api_key = str(getattr(settings, "openai_api_key", "") or "").strip()
 
         providers: list[_NewsSummaryLLMProvider] = []
         decoded = raw_json
@@ -655,7 +667,10 @@ class NewsAIPipelineService:
                         d_obj = cast(dict[object, object], item_obj)
                         d = {str(k): v for k, v in d_obj.items()}
                         base_url = str(d.get("base_url", "") or "").strip()
-                        api_key = str(d.get("api_key", "") or "").strip()
+                        if providers_from_overrides:
+                            api_key = default_api_key
+                        else:
+                            api_key = str(d.get("api_key", "") or "").strip() or default_api_key
                         if not base_url or not api_key:
                             continue
                         p: _NewsSummaryLLMProvider = {
@@ -695,7 +710,7 @@ class NewsAIPipelineService:
         if providers:
             return providers
 
-        api_key = str(getattr(settings, "openai_api_key", "") or "").strip()
+        api_key = default_api_key
         base_url = str(getattr(settings, "openai_base_url", "") or "").strip()
         model = str(getattr(settings, "ai_model", "") or "").strip() or "gpt-4o-mini"
         if api_key and base_url:

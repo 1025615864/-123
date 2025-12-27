@@ -1,0 +1,35 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "baixing-assistant.fullname" . }}-frontend-nginx
+  labels:
+{{ include "baixing-assistant.labels" . | indent 4 }}
+data:
+  default.conf: |
+    server {
+      listen {{ .Values.service.frontend.port }};
+      server_name localhost;
+      root /usr/share/nginx/html;
+      index index.html;
+
+      gzip on;
+      gzip_types text/plain text/css application/json application/javascript text/xml application/xml;
+
+      location / {
+        try_files $uri $uri/ /index.html;
+      }
+
+      location /api {
+        proxy_pass http://{{ include "baixing-assistant.fullname" . }}-backend:{{ .Values.service.backend.port }};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+      }
+
+      location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+      }
+    }

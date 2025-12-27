@@ -1,4 +1,6 @@
 """API接口测试"""
+import base64
+import json
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -133,6 +135,164 @@ class TestNewsAPI:
         assert ann is not None
         assert ann.summary == "AI摘要"
         assert ann.processed_at is not None
+
+
+class TestSystemConfigAPI:
+    @pytest.mark.asyncio
+    async def test_system_config_reject_openai_api_key_single(self, client: AsyncClient, test_session: AsyncSession):
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        admin = User(
+            username="a_sys_cfg",
+            email="a_sys_cfg@example.com",
+            nickname="a_sys_cfg",
+            hashed_password=hash_password("Test123456"),
+            role="admin",
+            is_active=True,
+        )
+        test_session.add(admin)
+        await test_session.commit()
+        await test_session.refresh(admin)
+
+        token = create_access_token({"sub": str(admin.id)})
+
+        res = await client.put(
+            "/api/system/configs/openai_api_key",
+            json={"key": "openai_api_key", "value": "sk-should-not-store", "category": "ai"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 400
+        assert "Secret values must not be stored" in str(res.json().get("detail"))
+
+    @pytest.mark.asyncio
+    async def test_system_config_reject_providers_json_contains_api_key_single(
+        self, client: AsyncClient, test_session: AsyncSession
+    ):
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        admin = User(
+            username="a_sys_cfg2",
+            email="a_sys_cfg2@example.com",
+            nickname="a_sys_cfg2",
+            hashed_password=hash_password("Test123456"),
+            role="admin",
+            is_active=True,
+        )
+        test_session.add(admin)
+        await test_session.commit()
+        await test_session.refresh(admin)
+
+        token = create_access_token({"sub": str(admin.id)})
+
+        providers_json = json.dumps(
+            [{"name": "p1", "base_url": "http://x", "api_key": "k1", "model": "m"}],
+            ensure_ascii=False,
+        )
+        res = await client.put(
+            "/api/system/configs/NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON",
+            json={"key": "NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON", "value": providers_json, "category": "news_ai"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 400
+        assert "providers config must not include api_key" in str(res.json().get("detail")).lower()
+
+    @pytest.mark.asyncio
+    async def test_system_config_reject_providers_b64_invalid_base64_single(
+        self, client: AsyncClient, test_session: AsyncSession
+    ):
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        admin = User(
+            username="a_sys_cfg3",
+            email="a_sys_cfg3@example.com",
+            nickname="a_sys_cfg3",
+            hashed_password=hash_password("Test123456"),
+            role="admin",
+            is_active=True,
+        )
+        test_session.add(admin)
+        await test_session.commit()
+        await test_session.refresh(admin)
+
+        token = create_access_token({"sub": str(admin.id)})
+
+        res = await client.put(
+            "/api/system/configs/NEWS_AI_SUMMARY_LLM_PROVIDERS_B64",
+            json={"key": "NEWS_AI_SUMMARY_LLM_PROVIDERS_B64", "value": "not-base64", "category": "news_ai"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 400
+        assert "must be valid base64" in str(res.json().get("detail")).lower()
+
+    @pytest.mark.asyncio
+    async def test_system_config_reject_providers_b64_contains_api_key_single(
+        self, client: AsyncClient, test_session: AsyncSession
+    ):
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        admin = User(
+            username="a_sys_cfg4",
+            email="a_sys_cfg4@example.com",
+            nickname="a_sys_cfg4",
+            hashed_password=hash_password("Test123456"),
+            role="admin",
+            is_active=True,
+        )
+        test_session.add(admin)
+        await test_session.commit()
+        await test_session.refresh(admin)
+
+        token = create_access_token({"sub": str(admin.id)})
+
+        decoded = json.dumps(
+            [{"name": "p1", "base_url": "http://x", "api_key": "k1", "model": "m"}],
+            ensure_ascii=False,
+        ).encode("utf-8")
+        b64 = base64.b64encode(decoded).decode("utf-8")
+
+        res = await client.put(
+            "/api/system/configs/NEWS_AI_SUMMARY_LLM_PROVIDERS_B64",
+            json={"key": "NEWS_AI_SUMMARY_LLM_PROVIDERS_B64", "value": b64, "category": "news_ai"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 400
+        assert "must not include api_key" in str(res.json().get("detail")).lower()
+
+    @pytest.mark.asyncio
+    async def test_system_config_reject_secrets_in_batch(self, client: AsyncClient, test_session: AsyncSession):
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        admin = User(
+            username="a_sys_cfg5",
+            email="a_sys_cfg5@example.com",
+            nickname="a_sys_cfg5",
+            hashed_password=hash_password("Test123456"),
+            role="admin",
+            is_active=True,
+        )
+        test_session.add(admin)
+        await test_session.commit()
+        await test_session.refresh(admin)
+
+        token = create_access_token({"sub": str(admin.id)})
+
+        res = await client.post(
+            "/api/system/configs/batch",
+            json={
+                "configs": [
+                    {"key": "site_name", "value": "x", "category": "general"},
+                    {"key": "openai_api_key", "value": "sk-should-not-store", "category": "ai"},
+                ]
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 400
+        assert "secret" in str(res.json().get("detail")).lower()
 
 
 class TestForumAPI:

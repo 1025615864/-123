@@ -1,0 +1,37 @@
+name: Post Deploy Smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      strict:
+        description: "STRICT=1: require highlights/keywords non-empty"
+        required: false
+        default: "0"
+      poll_seconds:
+        description: "POLL_SECONDS for smoke script"
+        required: false
+        default: "30"
+      interval_seconds:
+        description: "INTERVAL_SECONDS for smoke script"
+        required: false
+        default: "1"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run smoke script
+        env:
+          BASE_URL: ${{ secrets.BASE_URL }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          STRICT: ${{ inputs.strict }}
+          POLL_SECONDS: ${{ inputs.poll_seconds }}
+          INTERVAL_SECONDS: ${{ inputs.interval_seconds }}
+        run: |
+          set -euo pipefail
+          chmod +x ./scripts/smoke-news-ai.sh
+          ./scripts/smoke-news-ai.sh

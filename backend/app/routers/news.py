@@ -10,6 +10,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, desc
 from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy.orm.exc import StaleDataError
 
 from ..database import get_db
 from ..models.news import News, NewsComment, NewsTopicItem
@@ -1340,7 +1341,31 @@ async def update_news(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="新闻不存在")
 
     was_published = bool(news.is_published)
-    updated_news = await news_service.update(db, news, news_data)
+    updated_news = None
+    target = news
+    for attempt in range(2):
+        try:
+            updated_news = await news_service.update(db, target, news_data)
+            break
+        except StaleDataError:
+            await db.rollback()
+            fresh = await news_service.get_by_id(db, news_id)
+            if fresh is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="新闻不存在")
+            if attempt == 0:
+                was_published = bool(fresh.is_published)
+                target = fresh
+                continue
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="新闻已被其他操作修改，请刷新后重试",
+            )
+
+    if updated_news is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="新闻已被其他操作修改，请刷新后重试",
+        )
     if (not was_published) and bool(updated_news.is_published):
         _ = await news_service.notify_subscribers_on_publish(db, updated_news)
     return NewsResponse.model_validate(updated_news)

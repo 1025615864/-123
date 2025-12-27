@@ -363,6 +363,64 @@ class TestNewsAIPipelineService:
         assert ann.processed_at is not None
 
     @pytest.mark.asyncio
+    async def test_make_summary_provider_api_key_fallback(self, test_session, monkeypatch):
+        import json
+
+        from app.config import get_settings
+        from app.models.news import News
+        from app.services.news_ai_pipeline_service import NewsAIPipelineService
+
+        monkeypatch.setenv("OPENAI_API_KEY", "k_fallback")
+        monkeypatch.setenv("OPENAI_BASE_URL", "http://unused")
+        monkeypatch.setenv("AI_MODEL", "m_fallback")
+        get_settings.cache_clear()
+
+        monkeypatch.setenv("NEWS_AI_SUMMARY_LLM_ENABLED", "1")
+        monkeypatch.setenv(
+            "NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON",
+            json.dumps(
+                [
+                    {"name": "p1", "base_url": "http://good", "model": "m1"},
+                ],
+                ensure_ascii=False,
+            ),
+        )
+
+        received: dict[str, str] = {}
+
+        async def fake_llm_summarize(self, *, api_key: str, base_url: str, **kwargs):
+            _ = self
+            _ = kwargs
+            received["api_key"] = str(api_key)
+            received["base_url"] = str(base_url)
+            return '{"summary":"S","highlights":["H1"],"keywords":["K1"]}'
+
+        monkeypatch.setattr(NewsAIPipelineService, "_llm_summarize", fake_llm_summarize, raising=True)
+
+        news = News(
+            title="单测新闻",
+            summary=None,
+            content="正文内容",
+            category="法律动态",
+            is_top=False,
+            is_published=True,
+            review_status="approved",
+        )
+        test_session.add(news)
+        await test_session.commit()
+        await test_session.refresh(news)
+
+        svc = NewsAIPipelineService()
+        summary, is_llm, highlights, keywords = await svc._make_summary(news)
+
+        assert is_llm is True
+        assert summary == "S"
+        assert highlights == ["H1"]
+        assert keywords == ["K1"]
+        assert received.get("api_key") == "k_fallback"
+        assert received.get("base_url") == "http://good"
+
+    @pytest.mark.asyncio
     async def test_make_summary_provider_failover(self, test_session, monkeypatch):
         from app.models.news import News
         from app.services.news_ai_pipeline_service import NewsAIPipelineService

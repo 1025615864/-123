@@ -24,3 +24,6 @@ Thumbs.db
 
 frontend/playwright-report/
 frontend/test-results/
+
+helm/baixing-assistant/charts/
+helm/baixing-assistant/Chart.lock
