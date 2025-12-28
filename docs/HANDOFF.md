@@ -1,16 +1,23 @@
-# 项目交接文档（百姓助手 / 新闻模块 + News AI）
+# 项目交接文档（百姓法律助手）
 
-> 目标：把当前项目的关键模块、运行方式、生产配置、News AI 工作机制、测试与运维手段一次性交接给下一位同事。
+> 目标：把当前项目的关键模块、运行方式、生产配置、关键运维与排障手段一次性交接给下一位同事。
 >
 > 适用范围：本仓库（`backend/` + `frontend/`）。
+
+建议阅读顺序：
+
+- `DEV_GUIDE.md`：本地从零启动（含 Windows 常见坑与测试命令）
+- `ARCHITECTURE.md`：整体架构与各模块数据流
+- `API_QUICK_REFERENCE.md`：常用 API 速查（按模块分类）
+- `PROD_DEPLOY_AND_SMOKE_SOP.md`：生产部署参数清单 + 一键冒烟 SOP
 
 ---
 
 ## 1. 当前项目状态（结论）
 
-- **新闻模块 + News AI 已完成并达到“可生产运行”的工程状态**。
+- **核心功能已具备可生产运行的工程基础，其中新闻模块 + News AI 已完成并达到“可生产运行”的工程状态**。
 
-发布信息：
+发布信息（News 模块）：
 
 - Tag：`news-module-20251229`
 - GitHub Release：`https://github.com/1025615864/-123/releases/tag/news-module-20251229`
@@ -212,6 +219,8 @@ E2E 历史不稳定问题（已修复）：
 
 ## 11. 快速索引
 
+- 开发指南（从零启动/测试）：`DEV_GUIDE.md`
+- 架构说明（模块/数据流/安全策略）：`ARCHITECTURE.md`
 - 生产部署与冒烟：`PROD_DEPLOY_AND_SMOKE_SOP.md`
 - 更新记录：`UPDATE_LOG.md`
 - 交接附录：API 速查：`API_QUICK_REFERENCE.md`

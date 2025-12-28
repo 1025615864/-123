@@ -85,3 +85,10 @@
 - 根目录 `README.md`：精简重复内容，收敛为“文档入口 + 快速启动 + 配置与部署指引”，并链接到运维 SOP / Helm / env 示例。
 - `backend/env.example`：补齐与实际配置项一致的示例（`PAYMENT_WEBHOOK_SECRET/REDIS_URL/FRONTEND_BASE_URL/TRUSTED_PROXIES/AI_MODEL` 等）。
 - `backend/README.md`：修正 AI 咨询接口速查（补充 `chat/stream`，并将 consultations 路径参数对齐为 `session_id`）。
+
+### 5. 文档完善：开发/架构/API 速查扩展
+
+- `docs/API_QUICK_REFERENCE.md`：从 News/News AI/SystemConfig 扩展为“核心模块 API 速查”，覆盖用户/AI/论坛/知识库/律所/支付/文书/上传/通知/搜索/管理后台等。
+- 新增：`docs/DEV_GUIDE.md`（从零本地启动、Windows 常见坑、测试/E2E 命令）
+- 新增：`docs/ARCHITECTURE.md`（整体架构、路由结构、数据流与安全策略）
+- `docs/HANDOFF.md` / 根目录 `README.md`：补充上述新文档索引入口。

@@ -10,8 +10,10 @@
 ## 文档入口（建议先看）
 
 - `docs/HANDOFF.md`：项目交接（架构/配置/关键入口/排障）
+- `docs/DEV_GUIDE.md`：开发指南（从零启动/Windows 常见坑/测试命令）
+- `docs/ARCHITECTURE.md`：架构说明（模块划分/数据流/安全策略）
 - `docs/PROD_DEPLOY_AND_SMOKE_SOP.md`：生产部署参数清单 + 冒烟 SOP
-- `docs/API_QUICK_REFERENCE.md`：News/News AI/SystemConfig 常用 API 速查
+- `docs/API_QUICK_REFERENCE.md`：常用 API 速查（按模块分类）
 - `docs/UPDATE_LOG.md`：更新记录（变更点与测试结果）
 - `helm/baixing-assistant/README.md`：Helm Chart 部署说明（K8s + Ingress）
 
