@@ -71,12 +71,15 @@ python -m app.main
 
 ### AI 咨询
 
-| 方法   | 路径                         | 说明         |
-| ------ | ---------------------------- | ------------ |
-| POST   | `/api/ai/chat`               | 发送咨询消息 |
-| GET    | `/api/ai/consultations`      | 获取咨询列表 |
-| GET    | `/api/ai/consultations/{id}` | 获取咨询详情 |
-| DELETE | `/api/ai/consultations/{id}` | 删除咨询记录 |
+| 方法   | 路径                                        | 说明                       |
+| ------ | ------------------------------------------- | -------------------------- |
+| POST   | `/api/ai/chat`                              | 发送咨询消息               |
+| POST   | `/api/ai/chat/stream`                       | 流式对话（SSE）            |
+| GET    | `/api/ai/consultations`                     | 获取咨询列表               |
+| GET    | `/api/ai/consultations/{session_id}`        | 获取咨询详情               |
+| DELETE | `/api/ai/consultations/{session_id}`        | 删除咨询记录               |
+| GET    | `/api/ai/consultations/{session_id}/export` | 导出咨询记录（结构化数据） |
+| POST   | `/api/ai/messages/rate`                     | 评价 AI 回复               |
 
 ### 请求示例
 

@@ -79,3 +79,9 @@
 ### 3. 管理员登录 token 字段说明
 
 - `POST /api/user/login` 返回的 JWT 位于：`token.access_token`（不是顶层 `access_token`）。
+
+### 4. 文档整理与口径统一
+
+- 根目录 `README.md`：精简重复内容，收敛为“文档入口 + 快速启动 + 配置与部署指引”，并链接到运维 SOP / Helm / env 示例。
+- `backend/env.example`：补齐与实际配置项一致的示例（`PAYMENT_WEBHOOK_SECRET/REDIS_URL/FRONTEND_BASE_URL/TRUSTED_PROXIES/AI_MODEL` 等）。
+- `backend/README.md`：修正 AI 咨询接口速查（补充 `chat/stream`，并将 consultations 路径参数对齐为 `session_id`）。

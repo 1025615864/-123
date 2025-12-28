@@ -26,6 +26,8 @@ cd backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+# Windows 上如果 `pip`/`python` 指向 WindowsApps 的 stub，可改用：
+# py -m pip install -r requirements.txt
 # Windows 上如果 `python` 指向 WindowsApps 的 stub，可改用：
 # py -m uvicorn app.main:app --reload --port 8000
 python -m uvicorn app.main:app --reload --port 8000
@@ -43,6 +45,14 @@ npm run dev
 
 ```bash
 docker compose up -d --build
+```
+
+生产（可选，使用独立 compose 文件）：
+
+> `docker-compose.prod.yml` 依赖仓库根目录的 `.env` 环境变量；建议从 `env.example.txt` 复制一份到 `.env` 再执行。
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
 ```
 
 ## 环境要求
@@ -112,88 +122,20 @@ docker compose up -d --build
 - **移动端适配** - 响应式设计
 - **API 限流** - 精细化限流保护
 
-## 环境配置
+## 配置与部署
 
-### 后端配置
+### 本地开发配置
 
-在 `backend/` 目录下创建 `.env` 文件（运行后端服务时会读取该文件）：
+- 后端：在 `backend/` 下复制 `env.example` 为 `.env` 并按需修改。
+- 前端：在 `frontend/` 下创建 `.env`，最小配置通常为 `VITE_API_BASE_URL=/api`。
 
-```env
-# 应用配置
-APP_NAME=百姓法律助手
-DEBUG=true
+### 生产配置与运维
 
-# 数据库 (SQLite默认)
-DATABASE_URL=sqlite+aiosqlite:///./data/app.db
+- 生产部署参数清单 + 一键冒烟 SOP：`docs/PROD_DEPLOY_AND_SMOKE_SOP.md`
+- Helm（Kubernetes）部署：`helm/baixing-assistant/README.md`
+- Docker Compose 生产示例：`docker-compose.prod.yml` + 仓库根目录 `env.example.txt`
 
-# JWT密钥
-JWT_SECRET_KEY=your-secret-key-here
-
-# AI配置 (可选)
-OPENAI_API_KEY=your-openai-key
-OPENAI_BASE_URL=https://api.openai.com/v1
-```
-
-### 前端配置
-
-创建 `frontend/.env` 文件：
-
-```env
-VITE_API_BASE_URL=/api
-```
-
-## 手动启动
-
-### 后端
-
-```bash
-cd backend
-
-# 创建虚拟环境
-python -m venv .venv
-
-# 激活虚拟环境
-# Windows:
-.venv\Scripts\activate
-# Linux/Mac:
-source .venv/bin/activate
-
-# 安装依赖
-pip install -r requirements.txt
-
-# 启动服务
-python -m uvicorn app.main:app --reload --port 8000
-```
-
-### 前端
-
-```bash
-cd frontend
-
-# 安装依赖
-npm install
-
-# 启动开发服务器
-npm run dev
-```
-
-## 生产部署
-
-### 后端
-
-```bash
-# 使用gunicorn
-gunicorn app.main:app -w 4 -k uvicorn.workers.UvicornWorker -b 0.0.0.0:8000
-```
-
-### 前端
-
-```bash
-# 构建生产版本
-npm run build
-
-# 使用nginx托管dist目录
-```
+**重要**：Secrets（例如 `OPENAI_API_KEY`、`JWT_SECRET_KEY/SECRET_KEY`、`PAYMENT_WEBHOOK_SECRET` 等）必须通过环境变量/Secret Manager 注入，禁止写入管理后台 SystemConfig（后端会返回 400）。
 
 ## 技术栈
 
