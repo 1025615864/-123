@@ -25,8 +25,8 @@ class NewsCreate(BaseModel):
 
 class NewsUpdate(BaseModel):
     """更新新闻"""
-    title: str | None = Field(None, max_length=200)
-    summary: str | None = Field(None, max_length=500)
+    title: str | None = Field(default=None, max_length=200)
+    summary: str | None = Field(default=None, max_length=500)
     content: str | None = None
     cover_image: str | None = None
     category: str | None = None
@@ -37,7 +37,7 @@ class NewsUpdate(BaseModel):
     is_top: bool | None = None
     is_published: bool | None = None
     review_status: str | None = None
-    review_reason: str | None = Field(None, max_length=200)
+    review_reason: str | None = Field(default=None, max_length=200)
     reviewed_at: datetime | None = None
     published_at: datetime | None = None
     scheduled_publish_at: datetime | None = None

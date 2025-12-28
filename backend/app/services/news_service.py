@@ -5,7 +5,7 @@ import math
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 import time
-from typing import cast
+from typing import Any, cast
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, update, and_, or_, case, delete, true
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
@@ -571,7 +571,7 @@ class NewsService:
                     return None
             return None
 
-        update_payload: dict[str, object] = {}
+        update_payload: dict[str, Any] = {}
         for k in (
             "title",
             "summary",
