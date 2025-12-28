@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Integer, String, Text, DateTime, Boolean, ForeignKey, UniqueConstraint, Index
+from sqlalchemy import Integer, String, Text, DateTime, Boolean, ForeignKey, UniqueConstraint, Index, Float
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 from ..database import Base
@@ -25,6 +25,7 @@ class News(Base):
     category: Mapped[str] = mapped_column(String(50), default="general")  # 分类：general/policy/case/interpret
     source: Mapped[str | None] = mapped_column(String(100), nullable=True)  # 来源
     source_url: Mapped[str | None] = mapped_column(String(500), nullable=True)  # 来源链接
+    dedupe_hash: Mapped[str | None] = mapped_column(String(40), nullable=True)
     source_site: Mapped[str | None] = mapped_column(String(100), nullable=True)  # 来源站点
     author: Mapped[str | None] = mapped_column(String(50), nullable=True)  # 作者
     view_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -42,6 +43,7 @@ class News(Base):
     __table_args__: tuple[object, ...] = (
         Index("ix_news_published_review", "is_published", "review_status"),
         Index("ix_news_review_status", "review_status"),
+        Index("ix_news_dedupe_hash", "dedupe_hash"),
     )
 
 
@@ -152,3 +154,62 @@ class NewsSubscription(Base):
     sub_type: Mapped[str] = mapped_column(String(20), nullable=False)
     value: Mapped[str] = mapped_column(String(100), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class NewsSource(Base):
+    __tablename__: str = "news_sources"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(20), default="rss")
+
+    feed_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    site: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    fetch_timeout_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_items_per_feed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__: tuple[object, ...] = (
+        UniqueConstraint("feed_url", name="uq_news_sources_feed_url"),
+        Index("ix_news_sources_enabled", "is_enabled"),
+        Index("ix_news_sources_type", "source_type"),
+    )
+
+
+class NewsIngestRun(Base):
+    __tablename__: str = "news_ingest_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("news_sources.id"), nullable=True, index=True)
+    source_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    feed_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    status: Mapped[str] = mapped_column(String(20), default="running")
+    fetched: Mapped[int] = mapped_column(Integer, default=0)
+    inserted: Mapped[int] = mapped_column(Integer, default=0)
+    skipped: Mapped[int] = mapped_column(Integer, default=0)
+    errors: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    source: Mapped[NewsSource | None] = relationship("NewsSource", lazy="joined")
+
+    __table_args__: tuple[object, ...] = (
+        Index("ix_news_ingest_runs_source_created", "source_id", "created_at"),
+        Index("ix_news_ingest_runs_status_created", "status", "created_at"),
+    )

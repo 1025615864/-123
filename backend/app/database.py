@@ -45,7 +45,7 @@ async def get_db():
             await session.close()
 
 
-async def init_db():
+async def init_db() -> None:
     """初始化数据库表"""
     for module_name in (
         "app.models.user",
@@ -53,6 +53,7 @@ async def init_db():
         "app.models.forum",
         "app.models.news",
         "app.models.news_ai",
+        "app.models.news_workbench",
         "app.models.lawfirm",
         "app.models.knowledge",
         "app.models.notification",
@@ -73,6 +74,12 @@ async def init_db():
                     _ = await conn.execute(text("ALTER TABLE news ADD COLUMN scheduled_unpublish_at DATETIME"))
                 if "source_url" not in news_cols:
                     _ = await conn.execute(text("ALTER TABLE news ADD COLUMN source_url VARCHAR(500)"))
+                if "dedupe_hash" not in news_cols:
+                    _ = await conn.execute(text("ALTER TABLE news ADD COLUMN dedupe_hash VARCHAR(40)"))
+                    try:
+                        _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_dedupe_hash ON news(dedupe_hash)"))
+                    except Exception:
+                        logger.exception("创建news dedupe_hash索引失败")
                 if "source_site" not in news_cols:
                     _ = await conn.execute(text("ALTER TABLE news ADD COLUMN source_site VARCHAR(100)"))
                 if "review_status" not in news_cols:
@@ -317,6 +324,11 @@ async def init_db():
                 _ = await conn.execute(text("ALTER TABLE news ADD COLUMN IF NOT EXISTS scheduled_publish_at TIMESTAMPTZ"))
                 _ = await conn.execute(text("ALTER TABLE news ADD COLUMN IF NOT EXISTS scheduled_unpublish_at TIMESTAMPTZ"))
                 _ = await conn.execute(text("ALTER TABLE news ADD COLUMN IF NOT EXISTS source_url VARCHAR(500)"))
+                _ = await conn.execute(text("ALTER TABLE news ADD COLUMN IF NOT EXISTS dedupe_hash VARCHAR(40)"))
+                try:
+                    _ = await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_news_dedupe_hash ON news(dedupe_hash)"))
+                except Exception:
+                    logger.exception("创建news dedupe_hash索引失败")
                 _ = await conn.execute(text("ALTER TABLE news ADD COLUMN IF NOT EXISTS source_site VARCHAR(100)"))
                 _ = await conn.execute(text("ALTER TABLE news ADD COLUMN IF NOT EXISTS review_status VARCHAR(20) DEFAULT 'approved'"))
                 _ = await conn.execute(text("ALTER TABLE news ADD COLUMN IF NOT EXISTS review_reason VARCHAR(200)"))

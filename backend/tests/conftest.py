@@ -50,6 +50,9 @@ async def test_session(test_engine) -> AsyncGenerator[AsyncSession, None]:
         test_engine, class_=AsyncSession, expire_on_commit=False
     )
     async with async_session() as session:
+        for table in reversed(Base.metadata.sorted_tables):
+            await session.execute(table.delete())
+        await session.commit()
         yield session
 
 

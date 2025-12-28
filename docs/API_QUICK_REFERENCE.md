@@ -86,6 +86,21 @@
 - `PUT /api/news/admin/topics/{topic_id}/items/{item_id}`
 - `DELETE /api/news/admin/topics/{topic_id}/items/{item_id}`
 
+#### RSS 采集（管理员）
+
+- `GET /api/news/admin/sources`
+  - 采集来源列表（DB 配置）
+- `POST /api/news/admin/sources`
+  - 创建采集来源
+- `PUT /api/news/admin/sources/{source_id}`
+  - 更新采集来源
+- `DELETE /api/news/admin/sources/{source_id}`
+  - 删除采集来源（同时清理该来源的 ingest runs）
+- `POST /api/news/admin/sources/{source_id}/ingest/run-once`
+  - 手动触发单个来源采集
+- `GET /api/news/admin/ingest-runs`
+  - 采集运行记录列表（可按 source_id/status 过滤；支持 `from/to` ISO 时间过滤 created_at）
+
 ---
 
 ## 2. SystemConfig（系统配置，管理员）

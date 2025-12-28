@@ -39,6 +39,7 @@ class NewsUpdate(BaseModel):
     review_status: str | None = None
     review_reason: str | None = Field(None, max_length=200)
     reviewed_at: datetime | None = None
+    published_at: datetime | None = None
     scheduled_publish_at: datetime | None = None
     scheduled_unpublish_at: datetime | None = None
 
@@ -252,6 +253,123 @@ class NewsReviewAction(BaseModel):
     reason: str | None = Field(None, max_length=200)
 
 
+class NewsVersionItem(BaseModel):
+    id: int
+    news_id: int
+    action: str
+    reason: str | None = None
+    snapshot_json: str
+    created_by: int
+    created_at: datetime
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
+
+
+class NewsVersionListResponse(BaseModel):
+    items: list[NewsVersionItem]
+
+
+class NewsRollbackRequest(BaseModel):
+    version_id: int
+    reason: str | None = Field(None, max_length=200)
+
+
+class NewsAIGenerationItem(BaseModel):
+    id: int
+    user_id: int
+    news_id: int | None = None
+    task_type: str
+    status: str
+    input_json: str
+    output_json: str | None = None
+    raw_output: str | None = None
+    error: str | None = None
+    created_at: datetime
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
+
+
+class NewsAIGenerationListResponse(BaseModel):
+    items: list[NewsAIGenerationItem]
+
+
+class NewsAIGenerateRequest(BaseModel):
+    news_id: int | None = None
+    task_type: str = Field(..., min_length=1, max_length=50)
+    title: str | None = None
+    summary: str | None = None
+    content: str | None = None
+    style: str | None = Field(None, max_length=50)
+    word_count_min: int | None = Field(None, ge=0, le=20000)
+    word_count_max: int | None = Field(None, ge=0, le=20000)
+    append: bool = False
+    use_news_content: bool = True
+
+
+class NewsLinkCheckRequest(BaseModel):
+    news_id: int | None = None
+    markdown: str | None = None
+    timeout_seconds: float = Field(6.0, ge=1.0, le=30.0)
+    max_urls: int = Field(50, ge=1, le=200)
+    use_news_content: bool = True
+
+
+class NewsLinkCheckItem(BaseModel):
+    id: int
+    run_id: str
+    user_id: int
+    news_id: int | None = None
+    url: str
+    final_url: str | None = None
+    ok: bool
+    status_code: int | None = None
+    error: str | None = None
+    checked_at: datetime
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
+
+
+class NewsLinkCheckListResponse(BaseModel):
+    items: list[NewsLinkCheckItem]
+
+
+class NewsLinkCheckResponse(BaseModel):
+    run_id: str
+    items: list[NewsLinkCheckItem]
+
+
+class NewsBatchActionRequest(BaseModel):
+    ids: list[int] = Field(..., min_length=1, max_length=500)
+    action: str = Field(..., min_length=1, max_length=50)
+    reason: str | None = Field(None, max_length=200)
+
+
+class NewsBatchActionResponse(BaseModel):
+    requested: list[int]
+    processed: list[int]
+    missing: list[int]
+    skipped: list[int]
+    action: str
+    reason: str | None = None
+    message: str
+
+
+class ScheduledNewsItem(BaseModel):
+    id: int
+    title: str
+    category: str
+    is_published: bool
+    review_status: str | None = None
+    scheduled_publish_at: datetime | None = None
+    scheduled_unpublish_at: datetime | None = None
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
+
+
+class ScheduledNewsListResponse(BaseModel):
+    items: list[ScheduledNewsItem]
+
+
 class NewsTopicCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     description: str | None = Field(None, max_length=500)
@@ -384,3 +502,72 @@ class NewsTopicReportItem(BaseModel):
 
 class NewsTopicReportResponse(BaseModel):
     items: list[NewsTopicReportItem]
+
+
+class NewsSourceCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    feed_url: str = Field(..., min_length=1, max_length=500)
+    site: str | None = Field(None, max_length=100)
+    category: str | None = Field(None, max_length=50)
+    is_enabled: bool = True
+    fetch_timeout_seconds: float | None = None
+    max_items_per_feed: int | None = Field(None, ge=1, le=200)
+
+
+class NewsSourceUpdate(BaseModel):
+    name: str | None = Field(None, max_length=100)
+    feed_url: str | None = Field(None, max_length=500)
+    site: str | None = Field(None, max_length=100)
+    category: str | None = Field(None, max_length=50)
+    is_enabled: bool | None = None
+    fetch_timeout_seconds: float | None = None
+    max_items_per_feed: int | None = Field(None, ge=1, le=200)
+
+
+class NewsSourceResponse(BaseModel):
+    id: int
+    name: str
+    source_type: str
+    feed_url: str
+    site: str | None = None
+    category: str | None = None
+    is_enabled: bool
+    fetch_timeout_seconds: float | None = None
+    max_items_per_feed: int | None = None
+    last_run_at: datetime | None = None
+    last_success_at: datetime | None = None
+    last_error: str | None = None
+    last_error_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
+
+
+class NewsSourceListResponse(BaseModel):
+    items: list[NewsSourceResponse]
+
+
+class NewsIngestRunResponse(BaseModel):
+    id: int
+    source_id: int | None = None
+    source_name: str | None = None
+    feed_url: str | None = None
+    status: str
+    fetched: int
+    inserted: int
+    skipped: int
+    errors: int
+    last_error: str | None = None
+    started_at: datetime
+    finished_at: datetime | None = None
+    created_at: datetime
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
+
+
+class NewsIngestRunListResponse(BaseModel):
+    items: list[NewsIngestRunResponse]
+    total: int
+    page: int
+    page_size: int

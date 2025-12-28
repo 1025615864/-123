@@ -8,7 +8,7 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, and_, or_
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, AliasChoices
 from datetime import datetime, timedelta
 
 from ..database import get_db
@@ -40,7 +40,7 @@ class ConfigResponse(BaseModel):
 
 
 class ConfigBatchUpdate(BaseModel):
-    configs: list[ConfigItem]
+    configs: list[ConfigItem] = Field(validation_alias=AliasChoices("configs", "items"))
 
 
 def _mask_config_value(key_name: str, value: str | None) -> str | None:
@@ -85,21 +85,24 @@ def _validate_system_config_no_secrets(key: str, value: str | None) -> None:
     if value is None or not str(value).strip():
         return
 
+    k_upper = k.upper()
     k_lower = k.lower()
+    providers_prefixes = ("NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON", "NEWS_AI_SUMMARY_LLM_PROVIDERS_B64")
+    is_providers_key = k_upper in providers_prefixes or any(k_upper.startswith(f"{p}_") for p in providers_prefixes)
     if (
         any(token in k_lower for token in ("secret", "password", "api_key", "apikey", "private_key"))
-        and k not in {"NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON", "NEWS_AI_SUMMARY_LLM_PROVIDERS_B64"}
+        and not is_providers_key
     ):
         raise HTTPException(
             status_code=400,
             detail="Secret values must not be stored in SystemConfig. Use environment variables / Secret Manager.",
         )
 
-    if k not in {"NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON", "NEWS_AI_SUMMARY_LLM_PROVIDERS_B64"}:
+    if not is_providers_key:
         return
 
     decoded = str(value)
-    if k == "NEWS_AI_SUMMARY_LLM_PROVIDERS_B64":
+    if k_upper.startswith("NEWS_AI_SUMMARY_LLM_PROVIDERS_B64"):
         try:
             decoded = base64.b64decode(str(value).strip()).decode("utf-8")
         except Exception as e:

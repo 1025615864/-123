@@ -97,8 +97,21 @@
   - 默认 `120`
 
 - （可选）RSS ingest：
+
   - `RSS_FEEDS`（非空即启用）
+  - `RSS_INGEST_ENABLED`（可选；`true/1/on/yes` 即启用周期任务，即使 `RSS_FEEDS` 为空也会运行；用于仅使用 DB 配置的 sources）
   - `RSS_INGEST_INTERVAL_SECONDS`（默认 `300`）
+  - `NEWS_DEDUPE_STRATEGY`（可选；默认 `url_only`；可设为 `url_hash/hash/url+hash` 启用内容哈希去重，减少重复入库）
+  - `NEWS_DEDUPE_HASH_DUPLICATE_ACTION`（可选；默认 `skip`；当启用 hash 去重且发现重复时：
+    - `skip`：直接跳过（不入库）
+    - `pending`：仍入库但保持 `review_status=pending`，并写入 `review_reason` 提示重复）
+  - `RSS_FETCH_RETRIES`（可选；默认 `0`；拉取 RSS 的重试次数，建议只在网络不稳定环境开启）
+  - `RSS_FETCH_RETRY_BACKOFF_SECONDS`（可选；默认 `0.5`；重试退避基准秒数，指数退避）
+
+- （可选）AI 风险 -> 审核策略（默认关闭，不改变现有行为）：
+  - `NEWS_REVIEW_POLICY_ENABLED`（`true/1/on/yes` 即启用；仅对 `review_status=pending` 的新闻生效）
+  - `NEWS_REVIEW_POLICY_JSON`（可选；JSON 对象；key 为 `risk_level`，value 为 `approved/pending/rejected`）
+    - 示例：`{"safe":"approved","warning":"pending","danger":"pending"}`
 
 ---
 

@@ -1,5 +1,5 @@
-import { useMemo, useState, useEffect } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { useMemo, useState, useEffect, useRef } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
   Calendar,
   Eye,
@@ -15,6 +15,7 @@ import {
   Card,
   Input,
   Chip,
+  Button,
   Badge,
   EmptyState,
   Pagination,
@@ -77,11 +78,24 @@ export default function NewsPage() {
   const toast = useToast();
   const { prefetch } = usePrefetchLimiter();
   const location = useLocation();
+  const navigate = useNavigate();
+  const lastSyncedSearchRef = useRef<string>("");
+
+  const formatDateInput = (d: Date) => {
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  };
 
   const [page, setPage] = useState(1);
   const pageSize = 18;
   const [category, setCategory] = useState<string | null>(null);
   const [keyword, setKeyword] = useState("");
+  const [riskLevel, setRiskLevel] = useState<string>("all");
+  const [sourceSite, setSourceSite] = useState<string>("");
+  const [from, setFrom] = useState<string>("");
+  const [to, setTo] = useState<string>("");
   const [mode, setMode] = useState<
     "all" | "recommended" | "favorites" | "history" | "subscribed"
   >("all");
@@ -91,6 +105,10 @@ export default function NewsPage() {
     const rawMode = String(params.get("mode") ?? "").trim().toLowerCase();
     const rawCategory = params.get("category");
     const rawKeyword = params.get("keyword");
+    const rawRiskLevel = params.get("risk_level");
+    const rawSourceSite = params.get("source_site");
+    const rawFrom = params.get("from");
+    const rawTo = params.get("to");
 
     const allowedModes = new Set([
       "all",
@@ -118,12 +136,83 @@ export default function NewsPage() {
     if (rawKeyword !== null) {
       setKeyword(String(rawKeyword ?? ""));
     }
+
+    if (rawRiskLevel !== null) {
+      const v = String(rawRiskLevel ?? "").trim().toLowerCase();
+      const allowedRiskLevels = new Set([
+        "all",
+        "unknown",
+        "safe",
+        "warning",
+        "danger",
+      ]);
+      setRiskLevel(allowedRiskLevels.has(v) ? v : "all");
+    }
+
+    if (rawSourceSite !== null) {
+      setSourceSite(String(rawSourceSite ?? ""));
+    }
+
+    if (rawFrom !== null) {
+      setFrom(String(rawFrom ?? ""));
+    }
+
+    if (rawTo !== null) {
+      setTo(String(rawTo ?? ""));
+    }
   }, [isAuthenticated, location.search]);
 
   const [hotDays, setHotDays] = useState<7 | 30>(7);
   const hotLimit = 6;
 
   const [debouncedKeyword, setDebouncedKeyword] = useState("");
+
+  const hasActiveFilters =
+    mode !== "all" ||
+    Boolean(category) ||
+    Boolean(String(keyword || "").trim()) ||
+    (String(riskLevel || "").trim().toLowerCase() !== "all" &&
+      Boolean(String(riskLevel || "").trim())) ||
+    Boolean(String(sourceSite || "").trim()) ||
+    Boolean(String(from || "").trim()) ||
+    Boolean(String(to || "").trim());
+
+  const clearFilters = () => {
+    setMode("all");
+    setCategory(null);
+    setKeyword("");
+    setRiskLevel("all");
+    setSourceSite("");
+    setFrom("");
+    setTo("");
+    setPage(1);
+  };
+
+  const applyQuickRange = (days: 7 | 30) => {
+    const end = new Date();
+    const start = new Date(end);
+    start.setDate(end.getDate() - (days - 1));
+    setFrom(formatDateInput(start));
+    setTo(formatDateInput(end));
+    setPage(1);
+  };
+
+  const nowForQuickRange = new Date();
+  const todayStr = formatDateInput(nowForQuickRange);
+  const start7Str = (() => {
+    const start = new Date(nowForQuickRange);
+    start.setDate(nowForQuickRange.getDate() - (7 - 1));
+    return formatDateInput(start);
+  })();
+  const start30Str = (() => {
+    const start = new Date(nowForQuickRange);
+    start.setDate(nowForQuickRange.getDate() - (30 - 1));
+    return formatDateInput(start);
+  })();
+
+  const quick7Active = String(from || "").trim() === start7Str && String(to || "").trim() === todayStr;
+  const quick30Active =
+    String(from || "").trim() === start30Str && String(to || "").trim() === todayStr;
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebouncedKeyword(keyword), 250);
@@ -132,7 +221,70 @@ export default function NewsPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [category, keyword, mode]);
+  }, [category, keyword, mode, riskLevel, sourceSite, from, to]);
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+
+    const safeMode =
+      !isAuthenticated &&
+      (mode === "favorites" || mode === "history" || mode === "subscribed")
+        ? "all"
+        : mode;
+
+    if (safeMode && safeMode !== "all") params.set("mode", safeMode);
+    if (category) params.set("category", category);
+
+    const kw = String(keyword || "").trim();
+    if (kw) params.set("keyword", kw);
+
+    const rl = String(riskLevel || "").trim().toLowerCase();
+    if (rl && rl !== "all") params.set("risk_level", rl);
+
+    const ss = String(sourceSite || "").trim();
+    if (ss) params.set("source_site", ss);
+
+    const fromValue = String(from || "").trim();
+    if (fromValue) params.set("from", fromValue);
+
+    const toValue = String(to || "").trim();
+    if (toValue) params.set("to", toValue);
+
+    const nextSearch = params.toString();
+    const currentSearch = location.search.startsWith("?")
+      ? location.search.slice(1)
+      : location.search;
+
+    if (nextSearch === currentSearch) {
+      lastSyncedSearchRef.current = nextSearch;
+      return;
+    }
+
+    if (lastSyncedSearchRef.current === nextSearch) {
+      return;
+    }
+
+    lastSyncedSearchRef.current = nextSearch;
+    navigate(
+      {
+        pathname: location.pathname,
+        search: nextSearch ? `?${nextSearch}` : "",
+      },
+      { replace: true }
+    );
+  }, [
+    category,
+    from,
+    isAuthenticated,
+    keyword,
+    location.pathname,
+    location.search,
+    mode,
+    navigate,
+    riskLevel,
+    sourceSite,
+    to,
+  ]);
 
   const categoriesQuery = useQuery({
     queryKey: queryKeys.newsCategories(),
@@ -174,30 +326,55 @@ export default function NewsPage() {
             page,
             pageSize,
             category,
-            debouncedKeyword.trim()
+            debouncedKeyword.trim(),
+            riskLevel,
+            sourceSite.trim(),
+            from.trim(),
+            to.trim()
           )
         : mode === "favorites"
         ? queryKeys.newsFavoritesList(
             page,
             pageSize,
             category,
-            debouncedKeyword.trim()
+            debouncedKeyword.trim(),
+            riskLevel,
+            sourceSite.trim(),
+            from.trim(),
+            to.trim()
           )
         : mode === "history"
         ? queryKeys.newsHistoryList(
             page,
             pageSize,
             category,
-            debouncedKeyword.trim()
+            debouncedKeyword.trim(),
+            riskLevel,
+            sourceSite.trim(),
+            from.trim(),
+            to.trim()
           )
         : mode === "subscribed"
         ? queryKeys.newsSubscribedList(
             page,
             pageSize,
             category,
-            debouncedKeyword.trim()
+            debouncedKeyword.trim(),
+            riskLevel,
+            sourceSite.trim(),
+            from.trim(),
+            to.trim()
           )
-        : queryKeys.newsList(page, pageSize, category, debouncedKeyword.trim()),
+        : queryKeys.newsList(
+            page,
+            pageSize,
+            category,
+            debouncedKeyword.trim(),
+            riskLevel,
+            sourceSite.trim(),
+            from.trim(),
+            to.trim()
+          ),
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set("page", String(page));
@@ -205,6 +382,18 @@ export default function NewsPage() {
       if (category) params.set("category", category);
       if (debouncedKeyword.trim())
         params.set("keyword", debouncedKeyword.trim());
+
+      const rl = String(riskLevel || "").trim().toLowerCase();
+      if (rl && rl !== "all") params.set("risk_level", rl);
+
+      const ss = String(sourceSite || "").trim();
+      if (ss) params.set("source_site", ss);
+
+      const fromValue = String(from || "").trim();
+      if (fromValue) params.set("from", fromValue);
+
+      const toValue = String(to || "").trim();
+      if (toValue) params.set("to", toValue);
 
       const endpoint =
         mode === "recommended"
@@ -370,6 +559,69 @@ export default function NewsPage() {
             );
           })}
         </div>
+
+        <div className="mt-6 grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div>
+            <label className="block text-sm font-medium text-slate-700 dark:text-white/70 mb-2">
+              AI 风险
+            </label>
+            <select
+              value={riskLevel}
+              onChange={(e) => setRiskLevel(e.target.value)}
+              className="w-full px-4 py-3 rounded-lg border border-slate-200 bg-white text-slate-900 outline-none transition focus-visible:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+            >
+              <option value="all">全部</option>
+              <option value="unknown">未知</option>
+              <option value="safe">安全</option>
+              <option value="warning">注意</option>
+              <option value="danger">敏感</option>
+            </select>
+          </div>
+          <Input
+            label="来源站点"
+            value={sourceSite}
+            onChange={(e) => setSourceSite(e.target.value)}
+            placeholder="例如：court.gov.cn"
+          />
+          <Input
+            label="从"
+            type="date"
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+          />
+          <Input
+            label="到"
+            type="date"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+          />
+        </div>
+
+        <div className="mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant={quick7Active ? "secondary" : "outline"}
+              size="sm"
+              onClick={() => applyQuickRange(7)}
+            >
+              近 7 天
+            </Button>
+            <Button
+              variant={quick30Active ? "secondary" : "outline"}
+              size="sm"
+              onClick={() => applyQuickRange(30)}
+            >
+              近 30 天
+            </Button>
+          </div>
+          <Button
+            variant="outline"
+            disabled={!hasActiveFilters}
+            onClick={clearFilters}
+          >
+            清空筛选
+          </Button>
+        </div>
       </Card>
 
       <section data-testid="news-hot">
@@ -445,6 +697,22 @@ export default function NewsPage() {
                               </Badge>
                             ))
                           : null}
+                        {(() => {
+                          const riskNorm = String(item.ai_risk_level ?? "")
+                            .trim()
+                            .toLowerCase();
+                          const hasKw =
+                            Array.isArray(item.ai_keywords) && item.ai_keywords.length > 0;
+                          if (hasKw) return null;
+                          if (!riskNorm || riskNorm === "unknown") {
+                            return (
+                              <Badge variant="default" size="sm">
+                                AI生成中
+                              </Badge>
+                            );
+                          }
+                          return null;
+                        })()}
                       </div>
                     </div>
                     <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-white/55">
@@ -527,6 +795,22 @@ export default function NewsPage() {
                           </Badge>
                         ))
                       : null}
+                    {(() => {
+                      const riskNorm = String(item.ai_risk_level ?? "")
+                        .trim()
+                        .toLowerCase();
+                      const hasKw =
+                        Array.isArray(item.ai_keywords) && item.ai_keywords.length > 0;
+                      if (hasKw) return null;
+                      if (!riskNorm || riskNorm === "unknown") {
+                        return (
+                          <Badge variant="default" size="sm">
+                            AI生成中
+                          </Badge>
+                        );
+                      }
+                      return null;
+                    })()}
                   </div>
 
                   <h3 className="text-base font-semibold text-slate-900 mb-2 line-clamp-2 leading-snug dark:text-white">

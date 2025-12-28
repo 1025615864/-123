@@ -27,32 +27,52 @@ export const queryKeys = {
     page: number,
     pageSize: number,
     category: string | null,
-    keyword: string
-  ) => ["news", { page, pageSize, category, keyword }] as const,
+    keyword: string,
+    riskLevel: string,
+    sourceSite: string,
+    from: string,
+    to: string
+  ) => ["news", { page, pageSize, category, keyword, riskLevel, sourceSite, from, to }] as const,
   newsFavoritesList: (
     page: number,
     pageSize: number,
     category: string | null,
-    keyword: string
-  ) => ["news-favorites", { page, pageSize, category, keyword }] as const,
+    keyword: string,
+    riskLevel: string,
+    sourceSite: string,
+    from: string,
+    to: string
+  ) => ["news-favorites", { page, pageSize, category, keyword, riskLevel, sourceSite, from, to }] as const,
   newsHistoryList: (
     page: number,
     pageSize: number,
     category: string | null,
-    keyword: string
-  ) => ["news-history", { page, pageSize, category, keyword }] as const,
+    keyword: string,
+    riskLevel: string,
+    sourceSite: string,
+    from: string,
+    to: string
+  ) => ["news-history", { page, pageSize, category, keyword, riskLevel, sourceSite, from, to }] as const,
   newsSubscribedList: (
     page: number,
     pageSize: number,
     category: string | null,
-    keyword: string
-  ) => ["news-subscribed", { page, pageSize, category, keyword }] as const,
+    keyword: string,
+    riskLevel: string,
+    sourceSite: string,
+    from: string,
+    to: string
+  ) => ["news-subscribed", { page, pageSize, category, keyword, riskLevel, sourceSite, from, to }] as const,
   newsRecommendedList: (
     page: number,
     pageSize: number,
     category: string | null,
-    keyword: string
-  ) => ["news-recommended", { page, pageSize, category, keyword }] as const,
+    keyword: string,
+    riskLevel: string,
+    sourceSite: string,
+    from: string,
+    to: string
+  ) => ["news-recommended", { page, pageSize, category, keyword, riskLevel, sourceSite, from, to }] as const,
   newsTop: (limit: number) => ["news-top", { limit }] as const,
   newsRecent: (limit: number) => ["news-recent", { limit }] as const,
   newsHot: (days: number, limit: number, category: string | null = null) =>

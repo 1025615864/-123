@@ -363,6 +363,51 @@ class TestNewsAIPipelineService:
         assert ann.processed_at is not None
 
     @pytest.mark.asyncio
+    async def test_run_once_review_policy_updates_pending(self, test_session, monkeypatch):
+        from app.models.news import News
+        from app.services.news_ai_pipeline_service import NewsAIPipelineService
+
+        monkeypatch.setenv("NEWS_AI_SUMMARY_WRITEBACK_ENABLED", "0")
+        monkeypatch.setenv("NEWS_REVIEW_POLICY_ENABLED", "1")
+
+        news = News(
+            title="审核策略单测",
+            summary=None,
+            content="正文内容",
+            category="法律动态",
+            is_top=False,
+            is_published=False,
+            review_status="pending",
+        )
+        test_session.add(news)
+        await test_session.commit()
+        await test_session.refresh(news)
+
+        async def fake_make_summary(self, _news: News, *, env_overrides=None):
+            _ = self
+            _ = env_overrides
+            return "AI摘要", True, ["要点一"], ["关键词A"]
+
+        def fake_make_risk(self, _news: News):
+            return "safe", None
+
+        async def fake_find_duplicate_of(self, _db, _news: News):
+            return None
+
+        monkeypatch.setattr(NewsAIPipelineService, "_make_summary", fake_make_summary, raising=True)
+        monkeypatch.setattr(NewsAIPipelineService, "_make_risk", fake_make_risk, raising=True)
+        monkeypatch.setattr(NewsAIPipelineService, "_find_duplicate_of", fake_find_duplicate_of, raising=True)
+
+        svc = NewsAIPipelineService()
+        res = await svc.run_once(test_session)
+        assert int(res.get("processed", 0)) == 1
+
+        await test_session.refresh(news)
+        assert str(news.review_status) == "approved"
+        assert getattr(news, "reviewed_at", None) is not None
+        assert getattr(news, "review_reason", None) in {None, ""}
+
+    @pytest.mark.asyncio
     async def test_make_summary_provider_api_key_fallback(self, test_session, monkeypatch):
         import json
 
@@ -470,3 +515,121 @@ class TestNewsAIPipelineService:
         assert highlights == ["H1"]
         assert keywords == ["K1"]
         assert calls == ["http://bad", "http://good"]
+
+    @pytest.mark.asyncio
+    async def test_load_system_config_overrides_env_suffix_preferred(self, test_session, monkeypatch):
+        from app.models.system import SystemConfig
+        from app.services.news_ai_pipeline_service import NewsAIPipelineService
+
+        monkeypatch.setenv("APP_ENV", "production")
+
+        test_session.add_all(
+            [
+                SystemConfig(
+                    key="NEWS_AI_SUMMARY_LLM_PROVIDER_STRATEGY",
+                    value="random",
+                    category="news_ai",
+                ),
+                SystemConfig(
+                    key="NEWS_AI_SUMMARY_LLM_PROVIDER_STRATEGY_PROD",
+                    value="priority",
+                    category="news_ai",
+                ),
+            ]
+        )
+        await test_session.commit()
+
+        cfg = await NewsAIPipelineService.load_system_config_overrides(test_session)
+        assert cfg.get("NEWS_AI_SUMMARY_LLM_PROVIDER_STRATEGY") == "priority"
+
+    @pytest.mark.asyncio
+    async def test_make_summary_respects_priority_order(self, test_session, monkeypatch):
+        from app.models.news import News
+        from app.services.news_ai_pipeline_service import NewsAIPipelineService
+
+        monkeypatch.setenv("NEWS_AI_SUMMARY_LLM_ENABLED", "1")
+        monkeypatch.setenv("NEWS_AI_SUMMARY_LLM_PROVIDER_STRATEGY", "priority")
+        monkeypatch.setenv(
+            "NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON",
+            json.dumps(
+                [
+                    {"name": "p2", "base_url": "http://p2", "api_key": "k2", "model": "m2", "priority": 2},
+                    {"name": "p1", "base_url": "http://p1", "api_key": "k1", "model": "m1", "priority": 1},
+                ],
+                ensure_ascii=False,
+            ),
+        )
+
+        calls: list[str] = []
+
+        async def fake_llm_summarize(self, *, base_url: str, **kwargs):
+            _ = self
+            _ = kwargs
+            calls.append(str(base_url))
+            return '{"summary":"S","highlights":["H1"],"keywords":["K1"]}'
+
+        monkeypatch.setattr(NewsAIPipelineService, "_llm_summarize", fake_llm_summarize, raising=True)
+
+        news = News(
+            title="单测新闻",
+            summary=None,
+            content="正文内容",
+            category="法律动态",
+            is_top=False,
+            is_published=True,
+            review_status="approved",
+        )
+        test_session.add(news)
+        await test_session.commit()
+        await test_session.refresh(news)
+
+        svc = NewsAIPipelineService()
+        summary, is_llm, highlights, keywords = await svc._make_summary(news)
+
+        assert is_llm is True
+        assert summary == "S"
+        assert highlights == ["H1"]
+        assert keywords == ["K1"]
+        assert calls == ["http://p1"]
+
+    @pytest.mark.asyncio
+    async def test_get_summary_llm_providers_name_only_from_env(self, monkeypatch):
+        from app.config import get_settings
+        from app.services.news_ai_pipeline_service import NewsAIPipelineService
+
+        monkeypatch.setenv("OPENAI_API_KEY", "k_openai")
+        monkeypatch.setenv("OPENAI_BASE_URL", "http://openai")
+        monkeypatch.setenv("AI_MODEL", "m_openai")
+        monkeypatch.setenv("AZURE_OPENAI_API_KEY", "k_azure")
+        monkeypatch.setenv("AZURE_OPENAI_BASE_URL", "http://azure")
+        monkeypatch.setenv("AZURE_OPENAI_MODEL", "m_azure")
+        get_settings.cache_clear()
+
+        providers_json = json.dumps(
+            [
+                {"name": "openai", "priority": 1},
+                {"name": "azure-openai", "priority": 2},
+            ],
+            ensure_ascii=False,
+        )
+
+        settings = get_settings()
+        svc = NewsAIPipelineService()
+        providers = svc.get_summary_llm_providers(
+            settings,
+            env_overrides={"NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON": providers_json},
+        )
+
+        assert len(providers) == 2
+        by_name = {str(p.get("name")): p for p in providers}
+
+        p1 = by_name.get("openai")
+        assert p1 is not None
+        assert str(p1.get("base_url")) == "http://openai"
+        assert str(p1.get("api_key")) == "k_openai"
+
+        p2 = by_name.get("azure-openai")
+        assert p2 is not None
+        assert str(p2.get("base_url")) == "http://azure"
+        assert str(p2.get("api_key")) == "k_azure"
+        assert str(p2.get("model")) == "m_azure"

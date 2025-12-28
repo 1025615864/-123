@@ -3,17 +3,18 @@ from datetime import datetime
 import json
 from typing import Annotated, cast
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_, desc
+from sqlalchemy import select, and_, or_, desc, func, delete
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.orm.exc import StaleDataError
+from sqlalchemy.exc import IntegrityError
 
 from ..database import get_db
-from ..models.news import News, NewsComment, NewsTopicItem
+from ..models.news import News, NewsComment, NewsTopicItem, NewsSource, NewsIngestRun
 from ..models.news_ai import NewsAIAnnotation
 from ..models.notification import Notification, NotificationType
 from ..models.user import User
@@ -35,13 +36,21 @@ from ..schemas.news import (
     NewsCommentAdminItem, NewsCommentAdminListResponse, NewsCommentReviewAction,
     NewsReviewAction,
     NewsAIAnnotationResponse,
+    NewsVersionItem, NewsVersionListResponse, NewsRollbackRequest,
+    NewsAIGenerateRequest, NewsAIGenerationItem, NewsAIGenerationListResponse,
+    NewsLinkCheckRequest, NewsLinkCheckItem, NewsLinkCheckResponse,
+    NewsBatchActionRequest, NewsBatchActionResponse,
+    ScheduledNewsItem, ScheduledNewsListResponse,
+    NewsSourceCreate, NewsSourceUpdate, NewsSourceResponse, NewsSourceListResponse,
+    NewsIngestRunResponse, NewsIngestRunListResponse,
 )
 from ..services.news_service import news_service
+from ..services.news_workbench_service import news_workbench_service
+from ..services.rss_ingest_service import rss_ingest_service
 from ..utils.deps import require_admin, get_current_user, get_current_user_optional
 from ..utils.content_filter import check_comment_content, needs_review
 
 router = APIRouter(prefix="/news", tags=["新闻资讯"])
-
 
 def _coerce_int(value: object) -> int | None:
     if isinstance(value, int):
@@ -53,6 +62,31 @@ def _coerce_int(value: object) -> int | None:
         if s and s.lstrip("-").isdigit():
             return int(s)
     return None
+
+
+def _parse_dt_param(raw: str | None, *, field: str, end_of_day: bool = False) -> datetime | None:
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    s = s.replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(s)
+        if (
+            end_of_day
+            and len(s) == 10
+            and s[4:5] == "-"
+            and s[7:8] == "-"
+            and dt.hour == 0
+            and dt.minute == 0
+            and dt.second == 0
+            and dt.microsecond == 0
+        ):
+            return dt.replace(hour=23, minute=59, second=59, microsecond=999999)
+        return dt
+    except Exception:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"invalid {field}")
 
 
 async def _get_ai_risk_levels(db: AsyncSession, news_ids: list[int]) -> dict[int, str]:
@@ -133,10 +167,25 @@ async def get_news_list(
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     category: str | None = None,
     keyword: str | None = None,
+    risk_level: str | None = None,
+    source_site: str | None = None,
+    from_dt: Annotated[str | None, Query(alias="from")] = None,
+    to_dt: Annotated[str | None, Query(alias="to")] = None,
 ):
     """获取新闻列表，支持分类筛选和关键词搜索"""
+    parsed_from = _parse_dt_param(from_dt, field="from")
+    parsed_to = _parse_dt_param(to_dt, field="to", end_of_day=True)
     news_list, total = await news_service.get_list(
-        db, page, page_size, category, keyword, published_only=True
+        db,
+        page,
+        page_size,
+        category,
+        keyword,
+        published_only=True,
+        ai_risk_level=risk_level,
+        source_site=source_site,
+        from_dt=parsed_from,
+        to_dt=parsed_to,
     )
 
     ids = [int(n.id) for n in news_list]
@@ -213,8 +262,14 @@ async def get_recommended_news(
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     category: str | None = None,
     keyword: str | None = None,
+    risk_level: str | None = None,
+    source_site: str | None = None,
+    from_dt: Annotated[str | None, Query(alias="from")] = None,
+    to_dt: Annotated[str | None, Query(alias="to")] = None,
 ):
     user_id = current_user.id if current_user else None
+    parsed_from = _parse_dt_param(from_dt, field="from")
+    parsed_to = _parse_dt_param(to_dt, field="to", end_of_day=True)
     news_list, total = await news_service.get_recommended_news(
         db,
         user_id,
@@ -222,6 +277,10 @@ async def get_recommended_news(
         page_size=page_size,
         category=category,
         keyword=keyword,
+        ai_risk_level=risk_level,
+        source_site=source_site,
+        from_dt=parsed_from,
+        to_dt=parsed_to,
     )
 
     ids = [int(n.id) for n in news_list]
@@ -287,9 +346,24 @@ async def get_my_subscribed_news(
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     category: str | None = None,
     keyword: str | None = None,
+    risk_level: str | None = None,
+    source_site: str | None = None,
+    from_dt: Annotated[str | None, Query(alias="from")] = None,
+    to_dt: Annotated[str | None, Query(alias="to")] = None,
 ):
+    parsed_from = _parse_dt_param(from_dt, field="from")
+    parsed_to = _parse_dt_param(to_dt, field="to", end_of_day=True)
     news_list, total = await news_service.get_subscribed_news(
-        db, current_user.id, page, page_size, category, keyword
+        db,
+        current_user.id,
+        page,
+        page_size,
+        category,
+        keyword,
+        ai_risk_level=risk_level,
+        source_site=source_site,
+        from_dt=parsed_from,
+        to_dt=parsed_to,
     )
 
     ids = [int(n.id) for n in news_list]
@@ -347,8 +421,25 @@ async def get_my_news_history(
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     category: str | None = None,
     keyword: str | None = None,
+    risk_level: str | None = None,
+    source_site: str | None = None,
+    from_dt: Annotated[str | None, Query(alias="from")] = None,
+    to_dt: Annotated[str | None, Query(alias="to")] = None,
 ):
-    news_list, total = await news_service.get_user_history(db, current_user.id, page, page_size, category, keyword)
+    parsed_from = _parse_dt_param(from_dt, field="from")
+    parsed_to = _parse_dt_param(to_dt, field="to", end_of_day=True)
+    news_list, total = await news_service.get_user_history(
+        db,
+        current_user.id,
+        page,
+        page_size,
+        category,
+        keyword,
+        ai_risk_level=risk_level,
+        source_site=source_site,
+        from_dt=parsed_from,
+        to_dt=parsed_to,
+    )
 
     ids = [int(n.id) for n in news_list]
     fav_stats = await news_service.get_favorite_stats(db, ids, int(current_user.id))
@@ -435,6 +526,181 @@ async def get_categories(db: Annotated[AsyncSession, Depends(get_db)]):
         )
         for cat in categories
     ]
+
+
+@router.get("/admin/sources", response_model=NewsSourceListResponse, summary="管理员获取采集来源列表")
+async def admin_list_news_sources(
+    _current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    res = await db.execute(select(NewsSource).order_by(NewsSource.id.asc()))
+    rows = list(res.scalars().all())
+    return NewsSourceListResponse(items=[NewsSourceResponse.model_validate(s) for s in rows])
+
+
+@router.post("/admin/sources", response_model=NewsSourceResponse, summary="管理员创建采集来源")
+async def admin_create_news_source(
+    data: NewsSourceCreate,
+    _current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    feed_url = str(getattr(data, "feed_url", "") or "").strip()
+    if not feed_url:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="feed_url不能为空")
+
+    src = NewsSource(
+        name=str(getattr(data, "name", "") or "").strip() or feed_url,
+        source_type="rss",
+        feed_url=feed_url,
+        site=str(getattr(data, "site", None) or "").strip() or None,
+        category=str(getattr(data, "category", None) or "").strip().lower() or None,
+        is_enabled=bool(getattr(data, "is_enabled", True)),
+        fetch_timeout_seconds=getattr(data, "fetch_timeout_seconds", None),
+        max_items_per_feed=getattr(data, "max_items_per_feed", None),
+    )
+    db.add(src)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="feed_url已存在")
+    await db.refresh(src)
+    return NewsSourceResponse.model_validate(src)
+
+
+@router.put("/admin/sources/{source_id}", response_model=NewsSourceResponse, summary="管理员更新采集来源")
+async def admin_update_news_source(
+    source_id: int,
+    data: NewsSourceUpdate,
+    _current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    res = await db.execute(select(NewsSource).where(NewsSource.id == int(source_id)))
+    src = res.scalar_one_or_none()
+    if src is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="来源不存在")
+
+    payload = data.model_dump(exclude_unset=True)
+    if "name" in payload:
+        src.name = str(payload.get("name") or "").strip() or src.name
+    if "feed_url" in payload:
+        fu = str(payload.get("feed_url") or "").strip()
+        if not fu:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="feed_url不能为空")
+        src.feed_url = fu
+    if "site" in payload:
+        src.site = str(payload.get("site") or "").strip() or None
+    if "category" in payload:
+        src.category = str(payload.get("category") or "").strip().lower() or None
+    if "is_enabled" in payload:
+        src.is_enabled = bool(payload.get("is_enabled"))
+    if "fetch_timeout_seconds" in payload:
+        src.fetch_timeout_seconds = payload.get("fetch_timeout_seconds")
+    if "max_items_per_feed" in payload:
+        src.max_items_per_feed = payload.get("max_items_per_feed")
+
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="feed_url已存在")
+    await db.refresh(src)
+    return NewsSourceResponse.model_validate(src)
+
+
+@router.delete("/admin/sources/{source_id}", summary="管理员删除采集来源")
+async def admin_delete_news_source(
+    source_id: int,
+    _current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    res = await db.execute(select(NewsSource).where(NewsSource.id == int(source_id)))
+    src = res.scalar_one_or_none()
+    if src is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="来源不存在")
+
+    _ = await db.execute(delete(NewsIngestRun).where(NewsIngestRun.source_id == int(source_id)))
+    await db.delete(src)
+    await db.commit()
+    return {"message": "删除成功"}
+
+
+@router.post("/admin/sources/{source_id}/ingest/run-once", summary="管理员手动触发单个来源采集")
+async def admin_run_ingest_once(
+    source_id: int,
+    _current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    res = await db.execute(select(NewsSource.id).where(NewsSource.id == int(source_id)))
+    exists = res.scalar_one_or_none()
+    if exists is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="来源不存在")
+
+    stats = await rss_ingest_service.run_once(db, source_id=int(source_id))
+    return {"message": "ok", **{k: int(v) for k, v in stats.items()}}
+
+
+@router.get("/admin/ingest-runs", response_model=NewsIngestRunListResponse, summary="管理员获取采集运行记录")
+async def admin_list_ingest_runs(
+    _current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    source_id: int | None = None,
+    status_filter: Annotated[str | None, Query(alias="status")] = None,
+    from_dt: Annotated[str | None, Query(alias="from")] = None,
+    to_dt: Annotated[str | None, Query(alias="to")] = None,
+    page: int = 1,
+    page_size: int = 20,
+):
+    page = max(1, int(page))
+    page_size = min(100, max(1, int(page_size)))
+
+    conditions: list[ColumnElement[bool]] = []
+    if source_id is not None:
+        conditions.append(NewsIngestRun.source_id == int(source_id))
+    if status_filter is not None and str(status_filter).strip():
+        conditions.append(NewsIngestRun.status == str(status_filter).strip())
+
+    if from_dt is not None and str(from_dt).strip():
+        raw = str(from_dt).strip().replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid from")
+        conditions.append(NewsIngestRun.created_at >= parsed)
+
+    if to_dt is not None and str(to_dt).strip():
+        raw = str(to_dt).strip().replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except Exception:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="invalid to")
+        conditions.append(NewsIngestRun.created_at <= parsed)
+
+    where_clause = and_(*conditions) if conditions else None
+
+    base = select(NewsIngestRun)
+    if where_clause is not None:
+        base = base.where(where_clause)
+
+    total_q = select(func.count(NewsIngestRun.id))
+    if where_clause is not None:
+        total_q = total_q.where(where_clause)
+    total_res = await db.execute(total_q)
+    total = int(total_res.scalar() or 0)
+
+    q = (
+        base.order_by(desc(NewsIngestRun.created_at), desc(NewsIngestRun.id))
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    res = await db.execute(q)
+    runs = list(res.scalars().all())
+    return NewsIngestRunListResponse(
+        items=[NewsIngestRunResponse.model_validate(r) for r in runs],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.get("/admin/topics", response_model=NewsTopicListResponse, summary="管理员获取专题列表")
@@ -780,8 +1046,25 @@ async def get_my_news_favorites(
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     category: str | None = None,
     keyword: str | None = None,
+    risk_level: str | None = None,
+    source_site: str | None = None,
+    from_dt: Annotated[str | None, Query(alias="from")] = None,
+    to_dt: Annotated[str | None, Query(alias="to")] = None,
 ):
-    news_list, total = await news_service.get_user_favorites(db, current_user.id, page, page_size, category, keyword)
+    parsed_from = _parse_dt_param(from_dt, field="from")
+    parsed_to = _parse_dt_param(to_dt, field="to", end_of_day=True)
+    news_list, total = await news_service.get_user_favorites(
+        db,
+        current_user.id,
+        page,
+        page_size,
+        category,
+        keyword,
+        ai_risk_level=risk_level,
+        source_site=source_site,
+        from_dt=parsed_from,
+        to_dt=parsed_to,
+    )
 
     ids = [int(n.id) for n in news_list]
     fav_stats = await news_service.get_favorite_stats(db, ids, int(current_user.id))
@@ -1041,8 +1324,7 @@ async def create_news(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """创建新闻（需要管理员权限）"""
-    _ = current_user
-    news = await news_service.create(db, news_data)
+    news = await news_service.create(db, news_data, admin_user_id=int(current_user.id))
     if news.is_published:
         _ = await news_service.notify_subscribers_on_publish(db, news)
     return NewsResponse.model_validate(news)
@@ -1100,6 +1382,330 @@ async def admin_rerun_news_ai(
     return {"message": "ok"}
 
 
+@router.post("/admin/ai/generate", response_model=NewsAIGenerationItem, summary="新闻AI工作台生成")
+async def admin_news_ai_generate(
+    data: NewsAIGenerateRequest,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
+):
+    from ..routers.system import log_admin_action
+
+    news_id = getattr(data, "news_id", None)
+    nid = int(news_id) if news_id is not None else None
+
+    title = getattr(data, "title", None)
+    summary = getattr(data, "summary", None)
+    content = getattr(data, "content", None)
+
+    use_news_content = bool(getattr(data, "use_news_content", True))
+    if use_news_content and nid is not None and nid > 0:
+        t0, s0, c0 = await news_workbench_service.get_news_content_for_task(db, int(nid))
+        if title is None:
+            title = t0
+        if summary is None:
+            summary = s0
+        if content is None:
+            content = c0
+
+    if not str(content or "").strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="content 不能为空（可传 content 或传 news_id 并开启 use_news_content）")
+
+    task_type = str(getattr(data, "task_type", "") or "").strip()
+    if not task_type:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="task_type 不能为空")
+
+    wc_min = getattr(data, "word_count_min", None)
+    wc_max = getattr(data, "word_count_max", None)
+    if wc_min is not None and wc_max is not None and int(wc_min) > int(wc_max):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="word_count_min 不能大于 word_count_max")
+
+    rec = await news_workbench_service.generate(
+        db,
+        user_id=int(current_user.id),
+        news_id=nid,
+        task_type=task_type,
+        title=title,
+        summary=summary,
+        content=content,
+        style=getattr(data, "style", None),
+        word_count_min=getattr(data, "word_count_min", None),
+        word_count_max=getattr(data, "word_count_max", None),
+        append=bool(getattr(data, "append", False)),
+    )
+
+    await log_admin_action(
+        db,
+        int(current_user.id),
+        "ai_generate",
+        "news",
+        target_id=int(nid) if nid is not None else None,
+        description=f"task_type={str(getattr(data, 'task_type', '') or '').strip()} status={str(getattr(rec, 'status', '') or '')}",
+        request=request,
+    )
+    return NewsAIGenerationItem.model_validate(rec)
+
+
+@router.get("/admin/ai/generations", response_model=NewsAIGenerationListResponse, summary="获取新闻AI生成历史")
+async def admin_list_news_ai_generations(
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
+    news_id: int | None = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+):
+    from ..routers.system import log_admin_action
+
+    nid = int(news_id) if news_id is not None else None
+    items = await news_workbench_service.list_generations(db, user_id=int(current_user.id), news_id=nid, limit=int(limit))
+
+    await log_admin_action(
+        db,
+        int(current_user.id),
+        "ai_generations_list",
+        "news",
+        target_id=int(nid) if nid is not None else None,
+        description=f"news_id={int(nid) if nid is not None else ''} limit={int(limit)} items={len(items)}",
+        request=request,
+    )
+    return NewsAIGenerationListResponse(items=[NewsAIGenerationItem.model_validate(x) for x in items])
+
+
+@router.post("/admin/link_check", response_model=NewsLinkCheckResponse, summary="链接提取与检查")
+async def admin_check_news_links(
+    data: NewsLinkCheckRequest,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
+):
+    from ..routers.system import log_admin_action
+
+    news_id = getattr(data, "news_id", None)
+    nid = int(news_id) if news_id is not None else None
+    markdown = getattr(data, "markdown", None)
+
+    use_news_content = bool(getattr(data, "use_news_content", True))
+    if (markdown is None) and use_news_content and nid is not None and nid > 0:
+        _, _, c0 = await news_workbench_service.get_news_content_for_task(db, int(nid))
+        markdown = c0
+    md = str(markdown or "")
+
+    if not md.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="markdown 不能为空")
+
+    run_id, items = await news_workbench_service.check_links(
+        db,
+        user_id=int(current_user.id),
+        news_id=nid,
+        markdown=md,
+        timeout_seconds=float(getattr(data, "timeout_seconds", 6.0) or 6.0),
+        max_urls=int(getattr(data, "max_urls", 50) or 50),
+    )
+
+    await log_admin_action(
+        db,
+        int(current_user.id),
+        "link_check",
+        "news",
+        target_id=int(nid) if nid is not None else None,
+        description=f"run_id={str(run_id)} urls={len(items)}",
+        request=request,
+    )
+    return NewsLinkCheckResponse(run_id=str(run_id), items=[NewsLinkCheckItem.model_validate(x) for x in items])
+
+
+@router.get("/admin/link_check/{run_id}", response_model=NewsLinkCheckResponse, summary="按run_id获取链接检查结果")
+async def admin_get_link_check_result(
+    run_id: str,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
+):
+    from ..routers.system import log_admin_action
+
+    rid = str(run_id or "").strip()
+    if not rid:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="run_id 不能为空")
+
+    items = await news_workbench_service.get_link_checks_by_run_id(db, run_id=rid)
+
+    await log_admin_action(
+        db,
+        int(current_user.id),
+        "link_check_get",
+        "news",
+        target_id=None,
+        description=f"run_id={rid} items={len(items)}",
+        request=request,
+    )
+
+    return NewsLinkCheckResponse(run_id=rid, items=[NewsLinkCheckItem.model_validate(x) for x in items])
+
+
+@router.post("/admin/batch", response_model=NewsBatchActionResponse, summary="新闻批量操作")
+async def admin_batch_action_news(
+    data: NewsBatchActionRequest,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
+):
+    from ..routers.system import log_admin_action
+
+    raw_ids = [int(x) for x in (getattr(data, "ids", None) or []) if int(x) > 0]
+    seen: set[int] = set()
+    ids: list[int] = []
+    for i in raw_ids:
+        if int(i) not in seen:
+            ids.append(int(i))
+            seen.add(int(i))
+    if not ids:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ids 不能为空")
+
+    action = str(getattr(data, "action", "") or "").strip().lower()
+    reason = str(getattr(data, "reason", "") or "").strip() or None
+
+    allowed = {"publish", "unpublish", "top", "untop", "rerun_ai"}
+    if action not in allowed:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="action 不支持")
+
+    res = await db.execute(select(News).where(News.id.in_(ids)))
+    items = list(res.scalars().all())
+    found_ids = {int(n.id) for n in items}
+    missing_ids = [int(i) for i in ids if int(i) not in found_ids]
+
+    processed: list[int] = []
+    skipped: list[int] = []
+
+    if action == "rerun_ai":
+        from ..services.news_ai_pipeline_service import news_ai_pipeline_service
+
+        for n in items:
+            try:
+                await news_ai_pipeline_service.rerun_news(db, int(n.id))
+                processed.append(int(n.id))
+            except Exception:
+                skipped.append(int(n.id))
+        msg = f"已处理 {len(processed)} 条，跳过 {len(skipped)} 条，缺失 {len(missing_ids)} 条"
+        await log_admin_action(
+            db,
+            int(current_user.id),
+            "batch_rerun_ai",
+            "news",
+            target_id=None,
+            description=msg,
+            request=request,
+        )
+        return NewsBatchActionResponse(
+            requested=ids,
+            processed=processed,
+            missing=missing_ids,
+            skipped=skipped,
+            action=action,
+            reason=reason,
+            message=msg,
+        )
+
+    updated_items: list[News] = []
+    for n in items:
+        if action == "publish":
+            if str(getattr(n, "review_status", "approved") or "approved").strip().lower() != "approved":
+                skipped.append(int(n.id))
+                continue
+            upd = NewsUpdate(is_published=True)
+        elif action == "unpublish":
+            upd = NewsUpdate(is_published=False)
+        elif action == "top":
+            upd = NewsUpdate(is_top=True)
+        else:
+            upd = NewsUpdate(is_top=False)
+
+        try:
+            updated = await news_service.update(
+                db,
+                n,
+                upd,
+                admin_user_id=int(current_user.id),
+                version_action=f"batch_{action}",
+                version_reason=reason,
+            )
+            updated_items.append(updated)
+            processed.append(int(n.id))
+        except Exception:
+            skipped.append(int(n.id))
+
+    published_new: list[News] = []
+    if action == "publish":
+        for n in updated_items:
+            if int(n.id) in processed and bool(getattr(n, "is_published", False)):
+                published_new.append(n)
+
+    notifications_created = 0
+    for n in published_new:
+        try:
+            notifications_created += int(await news_service.notify_subscribers_on_publish(db, n))
+        except Exception:
+            continue
+
+    msg = f"已处理 {len(processed)} 条，跳过 {len(skipped)} 条，缺失 {len(missing_ids)} 条"
+    if notifications_created:
+        msg += f"，推送 {int(notifications_created)} 条"
+
+    await log_admin_action(
+        db,
+        int(current_user.id),
+        f"batch_{action}",
+        "news",
+        target_id=None,
+        description=msg,
+        request=request,
+    )
+
+    return NewsBatchActionResponse(
+        requested=ids,
+        processed=processed,
+        missing=missing_ids,
+        skipped=skipped,
+        action=action,
+        reason=reason,
+        message=msg,
+    )
+
+
+@router.get("/admin/scheduled", response_model=ScheduledNewsListResponse, summary="获取定时发布/下线队列")
+async def admin_list_scheduled_news(
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+):
+    from ..routers.system import log_admin_action
+
+    q = (
+        select(News)
+        .where(
+            or_(
+                News.scheduled_publish_at.is_not(None),
+                News.scheduled_unpublish_at.is_not(None),
+            )
+        )
+        .order_by(desc(News.scheduled_publish_at), desc(News.scheduled_unpublish_at), desc(News.id))
+        .limit(int(limit))
+    )
+    res = await db.execute(q)
+    items = list(res.scalars().all())
+
+    await log_admin_action(
+        db,
+        int(current_user.id),
+        "scheduled_list",
+        "news",
+        target_id=None,
+        description=f"limit={int(limit)} items={len(items)}",
+        request=request,
+    )
+    return ScheduledNewsListResponse(items=[ScheduledNewsItem.model_validate(x) for x in items])
+
+
 class BatchReviewAction(BaseModel):
     ids: list[int]
     action: str
@@ -1109,9 +1715,12 @@ class BatchReviewAction(BaseModel):
 @router.post("/admin/review/batch", summary="批量审核新闻")
 async def admin_batch_review_news(
     data: BatchReviewAction,
-    _current_user: Annotated[User, Depends(require_admin)],
+    current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
 ):
+    from ..routers.system import log_admin_action
+
     ids = [int(x) for x in (data.ids or []) if int(x) > 0]
     if not ids:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ids 不能为空")
@@ -1179,6 +1788,16 @@ async def admin_batch_review_news(
         "notifications_created": int(notifications_created),
     }
     message = f"已处理 {counts['processed']} 条，缺失 {counts['missing']} 条"
+
+    await log_admin_action(
+        db,
+        int(current_user.id),
+        f"review_batch_{action}",
+        "news",
+        target_id=None,
+        description=message,
+        request=request,
+    )
     return {
         "processed": processed,
         "missing": missing_ids,
@@ -1335,7 +1954,6 @@ async def update_news(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """更新新闻（需要管理员权限）"""
-    _ = current_user
     news = await news_service.get_by_id(db, news_id)
     if not news:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="新闻不存在")
@@ -1345,7 +1963,7 @@ async def update_news(
     target = news
     for attempt in range(2):
         try:
-            updated_news = await news_service.update(db, target, news_data)
+            updated_news = await news_service.update(db, target, news_data, admin_user_id=int(current_user.id))
             break
         except StaleDataError:
             await db.rollback()
@@ -1369,6 +1987,55 @@ async def update_news(
     if (not was_published) and bool(updated_news.is_published):
         _ = await news_service.notify_subscribers_on_publish(db, updated_news)
     return NewsResponse.model_validate(updated_news)
+
+
+@router.get("/admin/{news_id:int}/versions", response_model=NewsVersionListResponse, summary="管理员查看新闻版本历史")
+async def admin_list_news_versions(
+    news_id: int,
+    _current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+):
+    versions = await news_service.list_versions(db, int(news_id), limit=int(limit))
+    items = [NewsVersionItem.model_validate(v) for v in versions]
+    return NewsVersionListResponse(items=items)
+
+
+@router.post("/admin/{news_id:int}/rollback", response_model=NewsResponse, summary="管理员回滚新闻到历史版本")
+async def admin_rollback_news(
+    news_id: int,
+    data: NewsRollbackRequest,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
+):
+    from ..routers.system import log_admin_action
+
+    try:
+        updated = await news_service.rollback_to_version(
+            db,
+            int(news_id),
+            int(data.version_id),
+            admin_user_id=int(current_user.id),
+            reason=getattr(data, "reason", None),
+        )
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="版本不存在或快照无效")
+
+    if updated is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="新闻不存在")
+
+    await log_admin_action(
+        db,
+        int(current_user.id),
+        "rollback",
+        "news",
+        target_id=int(news_id),
+        description=f"rollback to version {int(data.version_id)}",
+        request=request,
+    )
+
+    return NewsResponse.model_validate(updated)
 
 
 @router.delete("/{news_id:int}", summary="删除新闻")

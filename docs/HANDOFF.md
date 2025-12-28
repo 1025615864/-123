@@ -169,9 +169,6 @@ E2E 关键点：
 - 已新增：
   - `docs/PROD_DEPLOY_AND_SMOKE_SOP.md`
   - `docs/UPDATE_LOG.md`
-- 已删除（已完成的阶段性计划/状态文档，避免重复维护）：
-  - `docs/NEWS_MODULE_STATUS.md`
-  - `docs/NEWS_AI_CONFIG_AND_SMOKE_TEST.md`
 
 ---
 
