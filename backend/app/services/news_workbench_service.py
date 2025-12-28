@@ -29,7 +29,7 @@ class NewsWorkbenchService:
             api_key=cast(Any, self._settings.openai_api_key),
             base_url=str(self._settings.openai_base_url or "").strip() or None,
             temperature=0.7,
-            max_completion_tokens=2000,
+            model_kwargs={"max_completion_tokens": 2000},
         )
 
     @staticmethod

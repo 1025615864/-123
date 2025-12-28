@@ -1021,3 +1021,90 @@ class TestSystemAPI:
         response = await client.get("/api/admin/stats")
         # 未认证应返回401
         assert response.status_code == 401
+
+
+class TestAIConsultationAPI:
+    @pytest.mark.asyncio
+    async def test_ai_chat_seeds_history_and_enforces_permission(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+        monkeypatch: MonkeyPatch,
+    ):
+        from app.models.consultation import Consultation, ChatMessage
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        import app.routers.ai as ai_router
+
+        # enable AI endpoints without needing real OPENAI_API_KEY
+        monkeypatch.setattr(ai_router.settings, "openai_api_key", "test", raising=True)
+
+        u1 = User(
+            username="ai_u1",
+            email="ai_u1@example.com",
+            nickname="ai_u1",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        u2 = User(
+            username="ai_u2",
+            email="ai_u2@example.com",
+            nickname="ai_u2",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add_all([u1, u2])
+        await test_session.commit()
+        await test_session.refresh(u1)
+        await test_session.refresh(u2)
+
+        token_u1 = create_access_token({"sub": str(u1.id)})
+        token_u2 = create_access_token({"sub": str(u2.id)})
+
+        sid = "seeded_session"
+        cons = Consultation(user_id=u1.id, session_id=sid, title="t")
+        test_session.add(cons)
+        await test_session.commit()
+        await test_session.refresh(cons)
+
+        test_session.add_all(
+            [
+                ChatMessage(consultation_id=cons.id, role="user", content="hello"),
+                ChatMessage(consultation_id=cons.id, role="assistant", content="hi"),
+            ]
+        )
+        await test_session.commit()
+
+        class FakeAssistant:
+            async def chat(self, *, message: str, session_id: str | None = None, initial_history=None):
+                _ = message
+                assert session_id == sid
+                assert isinstance(initial_history, list)
+                assert len(initial_history) >= 2
+                assert initial_history[0]["role"] == "user"
+                assert initial_history[0]["content"] == "hello"
+                return sid, "OK", []
+
+        monkeypatch.setattr(ai_router, "_try_get_ai_assistant", lambda: FakeAssistant(), raising=True)
+
+        res = await client.post(
+            "/api/ai/chat",
+            json={"message": "next", "session_id": sid},
+            headers={"Authorization": f"Bearer {token_u1}"},
+        )
+        assert res.status_code == 200
+        data = _json_dict(res)
+        assert data.get("session_id") == sid
+        assert data.get("answer") == "OK"
+
+        # non-owner should be blocked before assistant is called
+        monkeypatch.setattr(ai_router, "_try_get_ai_assistant", lambda: (_ for _ in ()).throw(RuntimeError("should_not_call")), raising=True)
+        res2 = await client.post(
+            "/api/ai/chat",
+            json={"message": "hack", "session_id": sid},
+            headers={"Authorization": f"Bearer {token_u2}"},
+        )
+        assert res2.status_code == 403

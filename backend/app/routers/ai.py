@@ -33,6 +33,8 @@ settings = get_settings()
 GUEST_AI_LIMIT = 5
 GUEST_AI_WINDOW_SECONDS = 60 * 60 * 24
 
+SEED_HISTORY_MAX_MESSAGES = 20
+
 
 def _enforce_guest_ai_quota(request: Request) -> None:
     key = f"ai:guest:{get_client_ip(request)}"
@@ -62,6 +64,46 @@ def _try_get_ai_assistant():
         return None
 
 
+async def _load_seed_history(
+    db: AsyncSession,
+    session_id: str,
+    *,
+    current_user: User | None,
+) -> tuple[Consultation | None, list[dict[str, str]]]:
+    """Load DB-backed conversation history for a given session.
+
+    Returns:
+        (consultation, history)
+    """
+    result = await db.execute(
+        select(Consultation).where(Consultation.session_id == session_id)
+    )
+    consultation = result.scalar_one_or_none()
+
+    if consultation is None:
+        return None, []
+
+    consultation_user_id = cast(int | None, getattr(consultation, "user_id", None))
+    if consultation_user_id is not None:
+        if current_user is None or consultation_user_id != current_user.id:
+            raise HTTPException(status_code=403, detail="无权限访问该咨询会话")
+
+    messages_result = await db.execute(
+        select(ChatMessage)
+        .where(ChatMessage.consultation_id == consultation.id)
+        .order_by(ChatMessage.created_at)
+    )
+    messages = messages_result.scalars().all()
+
+    history = [
+        {"role": cast(str, cast(object, m.role)), "content": cast(str, cast(object, m.content))}
+        for m in messages
+    ]
+    if len(history) > SEED_HISTORY_MAX_MESSAGES:
+        history = history[-SEED_HISTORY_MAX_MESSAGES:]
+    return consultation, history
+
+
 @router.post("/chat", response_model=ChatResponse)
 @rate_limit(*RateLimitConfig.AI_CHAT, by_ip=True, by_user=False)
 async def chat_with_ai(
@@ -86,25 +128,32 @@ async def chat_with_ai(
     if current_user is None:
         _enforce_guest_ai_quota(request)
 
+    seed_history: list[dict[str, str]] | None = None
+    consultation: Consultation | None = None
+    if payload.session_id:
+        consultation, seed_history = await _load_seed_history(db, payload.session_id, current_user=current_user)
+
     assistant = _try_get_ai_assistant()
     if assistant is None:
         raise HTTPException(status_code=503, detail="AI服务不可用：缺少可选依赖或配置异常")
 
     session_id, answer, references = await assistant.chat(
         message=payload.message,
-        session_id=payload.session_id
+        session_id=payload.session_id,
+        initial_history=seed_history,
     )
-    
-    result = await db.execute(
-        select(Consultation).where(Consultation.session_id == session_id)
-    )
-    consultation = result.scalar_one_or_none()
 
-    if consultation is not None:
-        consultation_user_id = cast(int | None, getattr(consultation, "user_id", None))
-        if consultation_user_id is not None:
-            if current_user is None or consultation_user_id != current_user.id:
-                raise HTTPException(status_code=403, detail="无权限访问该咨询会话")
+    if consultation is None:
+        result = await db.execute(
+            select(Consultation).where(Consultation.session_id == session_id)
+        )
+        consultation = result.scalar_one_or_none()
+
+        if consultation is not None:
+            consultation_user_id = cast(int | None, getattr(consultation, "user_id", None))
+            if consultation_user_id is not None:
+                if current_user is None or consultation_user_id != current_user.id:
+                    raise HTTPException(status_code=403, detail="无权限访问该咨询会话")
 
     if not consultation:
         consultation = Consultation(
@@ -175,6 +224,10 @@ async def chat_with_ai_stream(
     if current_user is None:
         _enforce_guest_ai_quota(request)
 
+    seed_history: list[dict[str, str]] | None = None
+    if payload.session_id:
+        _, seed_history = await _load_seed_history(db, payload.session_id, current_user=current_user)
+
     assistant = _try_get_ai_assistant()
     if assistant is None:
         raise HTTPException(status_code=503, detail="AI服务不可用：缺少可选依赖或配置异常")
@@ -185,24 +238,33 @@ async def chat_with_ai_stream(
         answer_parts: list[str] = []
         done_payload: dict[str, object] | None = None
 
-        async for event_type, data in assistant.chat_stream(
-            message=payload.message,
-            session_id=payload.session_id
-        ):
-            if event_type == "session":
-                session_id = cast(str | None, data.get("session_id"))
-            elif event_type == "references":
-                references_payload = cast(list[dict[str, object]] | None, data.get("references"))
-            elif event_type == "content":
-                chunk = cast(str | None, data.get("text"))
-                if chunk:
-                    answer_parts.append(chunk)
+        assistant_message_id: int | None = None
+        persist_error: str | None = None
 
-            if event_type == "done":
-                done_payload = cast(dict[str, object], data)
-                continue
+        try:
+            async for event_type, data in assistant.chat_stream(
+                message=payload.message,
+                session_id=payload.session_id,
+                initial_history=seed_history,
+            ):
+                if event_type == "session":
+                    session_id = cast(str | None, data.get("session_id"))
+                elif event_type == "references":
+                    references_payload = cast(list[dict[str, object]] | None, data.get("references"))
+                elif event_type == "content":
+                    chunk = cast(str | None, data.get("text"))
+                    if chunk:
+                        answer_parts.append(chunk)
 
-            yield f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                if event_type == "done":
+                    done_payload = cast(dict[str, object], data)
+                    continue
+
+                yield f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            persist_error = "stream_failed"
 
         if session_id is None:
             return
@@ -252,19 +314,23 @@ async def chat_with_ai_stream(
             assistant_message_id = cast(int | None, getattr(ai_message, "id", None))
 
             await db.commit()
-
-            final_done: dict[str, object] = {}
-            if done_payload:
-                final_done.update(done_payload)
-            final_done["session_id"] = session_id
-            if assistant_message_id is not None:
-                final_done["assistant_message_id"] = assistant_message_id
-
-            yield f"event: done\ndata: {json.dumps(final_done, ensure_ascii=False)}\n\n"
         except asyncio.CancelledError:
             raise
         except Exception:
             await db.rollback()
+            if persist_error is None:
+                persist_error = "persist_failed"
+
+        final_done: dict[str, object] = {}
+        if done_payload:
+            final_done.update(done_payload)
+        final_done["session_id"] = session_id
+        if assistant_message_id is not None:
+            final_done["assistant_message_id"] = assistant_message_id
+        if persist_error is not None:
+            final_done["persist_error"] = persist_error
+
+        yield f"event: done\ndata: {json.dumps(final_done, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_generator(),

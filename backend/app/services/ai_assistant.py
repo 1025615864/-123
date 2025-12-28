@@ -2,12 +2,13 @@
 import uuid
 import logging
 import time
-from typing import Any, cast
+from typing import cast
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from pydantic import SecretStr
 
 from ..config import get_settings
 from ..schemas.ai import LawReference
@@ -21,14 +22,14 @@ class LegalKnowledgeBase:
     """法律知识库管理"""
     
     def __init__(self):
-        self.embeddings = None
+        self.embeddings: OpenAIEmbeddings | None = None
         self.vector_store: Chroma | None = None
-        self.text_splitter = RecursiveCharacterTextSplitter(
+        self.text_splitter: RecursiveCharacterTextSplitter = RecursiveCharacterTextSplitter(
             chunk_size=500,
             chunk_overlap=50,
             separators=["\n\n", "\n", "。", "；", " "]
         )
-        self._initialized = False
+        self._initialized: bool = False
     
     def initialize(self):
         """初始化或加载向量数据库"""
@@ -38,7 +39,7 @@ class LegalKnowledgeBase:
         try:
             if settings.openai_api_key:
                 self.embeddings = OpenAIEmbeddings(
-                    api_key=cast(Any, settings.openai_api_key),
+                    api_key=SecretStr(settings.openai_api_key),
                     base_url=settings.openai_base_url
                 )
                 self.vector_store = Chroma(
@@ -60,8 +61,8 @@ class LegalKnowledgeBase:
         if not self.vector_store:
             self.initialize()
         
-        texts = []
-        metadatas = []
+        texts: list[str] = []
+        metadatas: list[dict[str, str]] = []
         
         for doc in documents:
             content = f"【{str(doc.get('law_name', ''))}】{str(doc.get('article', ''))}\n{str(doc.get('content', ''))}"
@@ -73,7 +74,9 @@ class LegalKnowledgeBase:
             })
         
         if texts and self.vector_store:
-            self.vector_store.add_texts(texts=texts, metadatas=metadatas)
+            add_texts = getattr(self.vector_store, "add_texts", None)
+            if callable(add_texts):
+                _ = add_texts(texts=texts, metadatas=metadatas)
     
     def search(self, query: str, k: int = 5) -> list[tuple[str, dict[str, object], float]]:
         """搜索相关法律条文
@@ -93,7 +96,15 @@ class LegalKnowledgeBase:
         
         try:
             results = self.vector_store.similarity_search_with_score(query, k=k)
-            return [(doc.page_content, doc.metadata, score) for doc, score in results]
+            packed: list[tuple[str, dict[str, object], float]] = []
+            for doc, score in results:
+                doc_obj = cast(object, doc)
+                content = str(getattr(doc_obj, "page_content", ""))
+                metadata_raw = getattr(doc_obj, "metadata", {})
+                if not isinstance(metadata_raw, dict):
+                    metadata_raw = {}
+                packed.append((content, cast(dict[str, object], metadata_raw), float(score)))
+            return packed
         except Exception:
             logger.exception("搜索失败")
             return []
@@ -101,8 +112,8 @@ class LegalKnowledgeBase:
 
 class AILegalAssistant:
     """AI法律咨询助手"""
-    
-    SYSTEM_PROMPT = """你是"百姓法律助手"的AI法律咨询员，专门为普通百姓提供法律咨询服务。
+
+    SYSTEM_PROMPT: str = """你是"百姓法律助手"的AI法律咨询员，专门为普通百姓提供法律咨询服务。
 
 ## 你的核心职责：
 1. 基于中国法律法规，为用户提供准确、专业的法律咨询
@@ -155,19 +166,19 @@ class AILegalAssistant:
 请基于以上信息和格式规范回答用户的问题。"""
 
     def __init__(self):
-        self.llm = ChatOpenAI(
+        self.llm: ChatOpenAI = ChatOpenAI(
             model=settings.ai_model,
-            api_key=cast(Any, settings.openai_api_key),
+            api_key=SecretStr(settings.openai_api_key),
             base_url=settings.openai_base_url,
             temperature=0.7,
-            max_completion_tokens=2000
+            model_kwargs={"max_completion_tokens": 2000},
         )
-        self.knowledge_base = LegalKnowledgeBase()
+        self.knowledge_base: LegalKnowledgeBase = LegalKnowledgeBase()
         self.knowledge_base.initialize()
         self.conversation_histories: dict[str, list[dict[str, str]]] = {}
         self._last_seen: dict[str, float] = {}
-        self._max_sessions = 5000
-        self._max_messages_per_session = 50
+        self._max_sessions: int = 5000
+        self._max_messages_per_session: int = 50
 
     def _evict_if_needed(self) -> None:
         if len(self.conversation_histories) <= self._max_sessions:
@@ -181,23 +192,23 @@ class AILegalAssistant:
                 oldest_session = sid
 
         if oldest_session is not None:
-            self.conversation_histories.pop(oldest_session, None)
-            self._last_seen.pop(oldest_session, None)
+            _ = self.conversation_histories.pop(oldest_session, None)
+            _ = self._last_seen.pop(oldest_session, None)
     
     def _build_context(self, references: list[tuple[str, dict[str, object], float]]) -> str:
         """构建上下文字符串"""
         if not references:
             return "暂无相关法律条文参考，请基于你的法律知识回答。"
         
-        context_parts = []
-        for i, (content, metadata, score) in enumerate(references, 1):
+        context_parts: list[str] = []
+        for i, (content, _metadata, _score) in enumerate(references, 1):
             context_parts.append(f"{i}. {content}")
         
         return "\n\n".join(context_parts)
     
     def _parse_references(self, references: list[tuple[str, dict[str, object], float]]) -> list[LawReference]:
         """解析法律引用"""
-        result = []
+        result: list[LawReference] = []
         for content, metadata, score in references:
             result.append(LawReference(
                 law_name=str(metadata.get('law_name', '未知法律')),
@@ -206,15 +217,45 @@ class AILegalAssistant:
                 relevance=round(1 - score, 2) if score < 1 else round(score, 2)
             ))
         return result
+
+    def _normalize_history(self, history: list[dict[str, str]]) -> list[dict[str, str]]:
+        normalized: list[dict[str, str]] = []
+        for item in history:
+            role = str(item.get("role", "")).strip().lower()
+            if role not in {"user", "assistant"}:
+                continue
+            content = str(item.get("content", "")).strip()
+            if not content:
+                continue
+            normalized.append({"role": role, "content": content})
+
+        if not normalized:
+            return []
+        return normalized[-self._max_messages_per_session:]
     
-    def get_or_create_session(self, session_id: str | None = None) -> str:
-        """获取或创建会话"""
+    def get_or_create_session(
+        self,
+        session_id: str | None = None,
+        *,
+        initial_history: list[dict[str, str]] | None = None,
+    ) -> str:
+        """获取或创建会话
+
+        - 当服务重启后，如果传入了旧的 session_id，本方法允许用 initial_history
+          （通常来自 DB）为该 session 进行一次性补种，以保证上下文连续。
+        """
         if session_id and session_id in self.conversation_histories:
             self._last_seen[session_id] = time.time()
             return session_id
-        
+
         new_session_id = session_id or uuid.uuid4().hex
-        self.conversation_histories[new_session_id] = []
+        if new_session_id not in self.conversation_histories:
+            self.conversation_histories[new_session_id] = []
+
+        existing = self.conversation_histories.get(new_session_id, [])
+        if (not existing) and initial_history:
+            self.conversation_histories[new_session_id] = self._normalize_history(initial_history)
+
         self._last_seen[new_session_id] = time.time()
         self._evict_if_needed()
         return new_session_id
@@ -222,7 +263,9 @@ class AILegalAssistant:
     async def chat(
         self, 
         message: str, 
-        session_id: str | None = None
+        session_id: str | None = None,
+        *,
+        initial_history: list[dict[str, str]] | None = None,
     ) -> tuple[str, str, list[LawReference]]:
         """
         与AI助手对话
@@ -234,7 +277,7 @@ class AILegalAssistant:
         Returns:
             (session_id, answer, references)
         """
-        session_id = self.get_or_create_session(session_id)
+        session_id = self.get_or_create_session(session_id, initial_history=initial_history)
         
         references = self.knowledge_base.search(message, k=5)
         context = self._build_context(references)
@@ -274,12 +317,14 @@ class AILegalAssistant:
         """清除会话历史"""
         if session_id in self.conversation_histories:
             del self.conversation_histories[session_id]
-        self._last_seen.pop(session_id, None)
+        _ = self._last_seen.pop(session_id, None)
     
     async def chat_stream(
         self, 
         message: str, 
-        session_id: str | None = None
+        session_id: str | None = None,
+        *,
+        initial_history: list[dict[str, str]] | None = None,
     ):
         """
         流式对话
@@ -291,7 +336,7 @@ class AILegalAssistant:
         Yields:
             (event_type, data) - 事件类型和数据
         """
-        session_id = self.get_or_create_session(session_id)
+        session_id = self.get_or_create_session(session_id, initial_history=initial_history)
         
         references = self.knowledge_base.search(message, k=5)
         context = self._build_context(references)
@@ -318,8 +363,16 @@ class AILegalAssistant:
         full_answer = ""
         try:
             async for chunk in self.llm.astream(messages):
-                if chunk.content:
-                    content = str(chunk.content)
+                raw = cast(object | None, getattr(chunk, "content", None))
+                if raw is None:
+                    continue
+                if isinstance(raw, str):
+                    content = raw
+                elif isinstance(raw, list):
+                    content = "".join(str(item) for item in cast(list[object], raw))
+                else:
+                    content = str(raw)
+                if content:
                     full_answer += content
                     yield ("content", {"text": content})
         except Exception:
