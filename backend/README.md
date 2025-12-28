@@ -17,6 +17,8 @@
 ```bash
 cd backend
 pip install -r requirements.txt
+
+# Windows 提示：若 `python` 指向 WindowsApps stub，优先使用 `py -m pip ...` / `py -m uvicorn ...`
 ```
 
 ### 2. 配置环境变量
@@ -54,7 +56,7 @@ python scripts/init_knowledge_base.py
 
 ```bash
 # 开发模式
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 # 或直接运行
 python -m app.main

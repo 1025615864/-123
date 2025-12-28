@@ -2,6 +2,19 @@
 
 一站式法律服务平台，提供 AI 法律咨询、论坛交流、新闻资讯、律所查询等功能。
 
+## Release
+
+- Tag：`news-module-20251229`
+- GitHub Release：https://github.com/1025615864/-123/releases/tag/news-module-20251229
+
+## 文档入口（建议先看）
+
+- `docs/HANDOFF.md`：项目交接（架构/配置/关键入口/排障）
+- `docs/PROD_DEPLOY_AND_SMOKE_SOP.md`：生产部署参数清单 + 冒烟 SOP
+- `docs/API_QUICK_REFERENCE.md`：News/News AI/SystemConfig 常用 API 速查
+- `docs/UPDATE_LOG.md`：更新记录（变更点与测试结果）
+- `helm/baixing-assistant/README.md`：Helm Chart 部署说明（K8s + Ingress）
+
 ## 快速启动
 
 ### 本地开发
@@ -13,6 +26,8 @@ cd backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+# Windows 上如果 `python` 指向 WindowsApps 的 stub，可改用：
+# py -m uvicorn app.main:app --reload --port 8000
 python -m uvicorn app.main:app --reload --port 8000
 ```
 
@@ -27,7 +42,7 @@ npm run dev
 ### Docker（可选）
 
 ```bash
-docker-compose up -d --build
+docker compose up -d --build
 ```
 
 ## 环境要求

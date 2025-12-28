@@ -10,9 +10,14 @@
 
 - API 前缀：`/api`
 - 健康检查：
+
   - `GET /health`
   - `GET /api/health`
   - `GET /health/detailed`
+
+- 登录：
+  - `POST /api/user/login`
+  - 说明：JWT 位于响应的 `token.access_token`（不是顶层 `access_token`）。
 
 ---
 

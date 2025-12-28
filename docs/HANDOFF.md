@@ -9,6 +9,11 @@
 ## 1. 当前项目状态（结论）
 
 - **新闻模块 + News AI 已完成并达到“可生产运行”的工程状态**。
+
+发布信息：
+
+- Tag：`news-module-20251229`
+- GitHub Release：`https://github.com/1025615864/-123/releases/tag/news-module-20251229`
 - 已落地的生产就绪工作包含：
   - **Secrets 不入库**（SystemConfig 拦截敏感字段；providers JSON/B64 禁止包含 `api_key`）。
   - **News AI provider 缺省 `api_key` 时可走 env 回退**（方案 A：统一使用 `OPENAI_API_KEY`）。
@@ -86,6 +91,10 @@ News AI 的核心是：让新闻在进入系统后具备结构化“可运营、
    - 支持 `response_format`（json_object/json_schema），不支持时自动回退。
 4. 解析并写入 `NewsAIAnnotation`（以及新闻详情/列表接口会带上相应字段）。
 
+补充：
+
+- 当 LLM 被关闭或不可用时，后端会走本地兜底生成摘要/要点/关键词，尽量保证 `highlights/keywords` 不为空（提升可用性与 E2E 稳定性）。
+
 ### 4.3 关键接口（运维/排障必看）
 
 - `GET /api/system/news-ai/status`（管理员）
@@ -162,6 +171,13 @@ E2E 关键点：
 
 - Playwright 配置会自动拉起后端与前端 dev server（端口隔离，避免串线）。
 
+E2E 历史不稳定问题（已修复）：
+
+- SQLite 可能复用已删除新闻的 `id`，导致残留的 `NewsAIAnnotation` 被错误复用。
+- 修复思路：
+  - 删除新闻时联动删除 AI 标注。
+  - pipeline 选取待处理条件增强：`highlights/keywords` 不完整也视为待处理。
+
 ---
 
 ## 8. 文档变更说明（给接手者）
@@ -198,18 +214,14 @@ E2E 关键点：
 
 - 生产部署与冒烟：`PROD_DEPLOY_AND_SMOKE_SOP.md`
 - 更新记录：`UPDATE_LOG.md`
-- 交接附录：部署示例：`DEPLOY_EXAMPLES.md`
-- 交接附录：CI 模板：`CI_TEMPLATES.md`
 - 交接附录：API 速查：`API_QUICK_REFERENCE.md`
 - GitHub Actions（CI 主流程）：`../.github/workflows/ci.yml`
 - Branch Protection：Required Status Checks 里勾选 `required-checks`（使 `helm-validate`/`helm lint` 成为必需门禁）
-- GitHub Actions（类型检查）：`../.github/workflows/type-check.yml`
-- GitHub Actions（部署后冒烟）：`../.github/workflows/post-deploy-smoke.yml`
+- Helm Chart（K8s 部署）：`../helm/baixing-assistant`
+- Helm Chart 说明：`../helm/baixing-assistant/README.md`
 - GitHub Secrets（部署后冒烟所需）：`BASE_URL`、`ADMIN_TOKEN`
 - docker-compose（开发）：`../docker-compose.yml`
 - docker-compose（生产示例）：`../docker-compose.prod.yml`
-- Helm Chart（K8s 部署）：`../helm/baixing-assistant`
-- Helm Chart 说明：`../helm/baixing-assistant/README.md`
 - Helm values 示例（生产占位符）：`../helm/baixing-assistant/values.prod.example.yaml`
 - Helm values 示例（ExternalSecrets 占位符）：`../helm/baixing-assistant/values.externalsecret.example.yaml`
 - Helm values 示例（redis/postgresql 子 chart 占位符）：`../helm/baixing-assistant/values.subcharts.example.yaml`

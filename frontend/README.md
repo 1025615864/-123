@@ -99,8 +99,8 @@ npm run preview
 
 ### 前置条件
 
-- 后端服务已启动且可访问（默认前端通过 Vite 代理访问 `http://localhost:8000`）
-- 数据库可写（E2E 会注册新用户、创建帖子/评论、触发审核/驳回等）
+- 默认情况下 Playwright 会自动启动后端与前端 dev server（端口隔离，避免与本地开发端口冲突）。
+- 数据库可写（E2E 会注册新用户、创建帖子/评论、触发审核/驳回等）。
 
 ### 安装浏览器（首次/Playwright 更新后需要）
 
@@ -123,8 +123,15 @@ npm run test:e2e:ui
 ### 可选环境变量
 
 - `E2E_API_BASE`
-  - 默认：`http://localhost:5173/api`
-  - 说明：Playwright 通过该地址直连后端 API（通常由 Vite 代理转发到后端）。
+  - 默认：`http://localhost:5174/api`
+  - 说明：Playwright 通过该地址访问后端 API（通常由 Vite 代理转发到后端）。
+- `E2E_BACKEND_PORT`
+  - 默认：`8001`
+- `E2E_FRONTEND_PORT`
+  - 默认：`5174`
+- `E2E_REUSE_EXISTING`
+  - `1`：复用已存在的后端/前端进程（仅本地建议使用）
+  - 默认：不复用，Playwright 会自己拉起 webServer
 - `E2E_ADMIN_USER`
   - 默认：`admin`
   - 说明：用于执行管理员审核/驳回接口的账号。
@@ -134,7 +141,7 @@ npm run test:e2e:ui
 在 PowerShell 中示例：
 
 ```powershell
-$env:E2E_API_BASE="http://localhost:5173/api"
+$env:E2E_API_BASE="http://localhost:5174/api"
 $env:E2E_ADMIN_USER="admin"
 $env:E2E_ADMIN_PASS="admin123"
 npm run test:e2e
@@ -142,13 +149,16 @@ npm run test:e2e
 
 ## 环境配置
 
-后端 API 代理配置在 `vite.config.ts` 中：
+后端 API 代理配置在 `vite.config.ts` 中（可用环境变量覆盖）：
+
+- `VITE_PROXY_TARGET`（默认 `http://localhost:8000`）
+- `VITE_WS_PROXY_TARGET`（默认跟随 HTTP target 推导为 `ws://...`）
 
 ```typescript
 server: {
   proxy: {
     '/api': {
-      target: 'http://localhost:8000',
+      target: process.env.VITE_PROXY_TARGET || 'http://localhost:8000',
       changeOrigin: true,
     }
   }
@@ -271,6 +281,14 @@ toast.warning("警告信息");
 
 ```css
 .animate-fade-in      /* 淡入动画 */
+/* 淡入动画 */
+/* 淡入动画 */
+/* 淡入动画 */
+/* 淡入动画 */
+/* 淡入动画 */
+/* 淡入动画 */
+/* 淡入动画 */
+/* 淡入动画 */
 /* 淡入动画 */
 /* 淡入动画 */
 /* 淡入动画 */
@@ -404,8 +422,8 @@ MIT License
 
 ## 联系方式
 
-- 项目地址: [GitHub](https://github.com/yourusername/baixing-law-assistant)
-- 问题反馈: [Issues](https://github.com/yourusername/baixing-law-assistant/issues)
+- 项目地址: https://github.com/1025615864/-123
+- 问题反馈: https://github.com/1025615864/-123/issues
 
 ## 更新日志
 
