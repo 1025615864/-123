@@ -210,6 +210,8 @@
 - `ADMIN_TOKEN`：管理员 JWT
 
 > 获取管理员 token 的方式：登录管理后台或调用登录接口 `/api/user/login`。
+>
+> 注意：`POST /api/user/login` 的响应中，JWT 位于 `token.access_token`（不是顶层 `access_token`）。
 
 推荐：使用仓库内的可执行脚本（比复制粘贴更稳定、也更适合 CI）：
 

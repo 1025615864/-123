@@ -18,6 +18,10 @@
 ./scripts/smoke-news-ai.ps1 -BaseUrl "https://yourdomain.com" -AdminToken "<ADMIN_TOKEN>"
 ```
 
+> 获取管理员 token 的方式：调用登录接口 `POST /api/user/login`。
+>
+> 注意：JWT 位于响应的 `token.access_token`（不是顶层 `access_token`）。
+
 可选参数：
 
 - `-PollSeconds <int>`：总轮询时长（默认 30）

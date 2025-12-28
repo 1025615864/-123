@@ -62,3 +62,20 @@
   - `../helm/baixing-assistant/values.prod.example.yaml`
   - `../helm/baixing-assistant/values.externalsecret.example.yaml`
   - `../helm/baixing-assistant/values.subcharts.example.yaml`
+
+---
+
+## 2025-12-29
+
+### 1. News 模块发布
+
+- Tag：`news-module-20251229`
+- GitHub Release：`https://github.com/1025615864/-123/releases/tag/news-module-20251229`
+
+### 2. 发布后冒烟验证
+
+- 本地冒烟脚本：`scripts/smoke-news-ai.ps1` 通过（health/status/创建新闻/AI rerun/轮询校验/清理）。
+
+### 3. 管理员登录 token 字段说明
+
+- `POST /api/user/login` 返回的 JWT 位于：`token.access_token`（不是顶层 `access_token`）。
