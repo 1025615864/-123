@@ -237,6 +237,14 @@ export default function NewsDetailPage() {
           ? "注意"
           : "未知";
 
+  const aiHighlights = Array.isArray(ai?.highlights) ? ai!.highlights! : [];
+  const aiKeywords = Array.isArray(ai?.keywords) ? ai!.keywords! : [];
+  const aiSensitive = Array.isArray(ai?.sensitive_words) ? ai!.sensitive_words : [];
+  const aiPending =
+    !ai ||
+    !ai.processed_at ||
+    (!ai.summary && !news?.summary && aiHighlights.length === 0 && aiKeywords.length === 0);
+
   const relatedLimit = 6;
   const relatedQuery = useQuery({
     queryKey: queryKeys.newsRelated(newsId, relatedLimit),
@@ -598,94 +606,120 @@ export default function NewsDetailPage() {
           </Card>
         )}
 
-        {ai && (
-          <Card variant="surface" padding="md" className="mb-8">
-            <div className="flex items-center justify-between gap-3 mb-3">
-              <h2 className="text-base font-semibold text-slate-900 dark:text-white">
-                AI 标注
-              </h2>
-              <Badge variant={riskVariant} size="sm">
-                {riskLabel}
-              </Badge>
-            </div>
+        <Card variant="surface" padding="md" className="mb-8">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <h2 className="text-base font-semibold text-slate-900 dark:text-white">
+              AI 标注
+            </h2>
+            <Badge variant={riskVariant} size="sm">
+              {riskLabel}
+            </Badge>
+          </div>
 
-            {ai.summary && !news.summary && (
-              <p className="text-slate-700 leading-relaxed dark:text-white/70">
-                {ai.summary}
+          {aiPending ? (
+            <div className="space-y-3">
+              <p className="text-sm text-slate-600 dark:text-white/55">
+                AI 标注生成中，稍后会自动更新。你也可以手动刷新。
               </p>
-            )}
+              <div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => newsQuery.refetch()}
+                  disabled={newsQuery.isFetching}
+                >
+                  {newsQuery.isFetching ? "刷新中..." : "刷新 AI 标注"}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              {ai?.summary && !news.summary ? (
+                <p className="text-slate-700 leading-relaxed dark:text-white/70">
+                  {ai.summary}
+                </p>
+              ) : null}
 
-            {Array.isArray(ai.highlights) && ai.highlights.length > 0 ? (
               <div className="mt-3">
                 <div className="text-sm font-medium text-slate-700 dark:text-white/70 mb-2">
                   要点
                 </div>
-                <ul className="list-disc pl-5 space-y-1 text-sm text-slate-700 dark:text-white/70">
-                  {ai.highlights.map((h, idx) => (
-                    <li key={`${idx}-${h}`}>{h}</li>
-                  ))}
-                </ul>
+                {aiHighlights.length > 0 ? (
+                  <ul className="list-disc pl-5 space-y-1 text-sm text-slate-700 dark:text-white/70">
+                    {aiHighlights.map((h, idx) => (
+                      <li key={`${idx}-${h}`}>{h}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-sm text-slate-600 dark:text-white/55">
+                    暂无要点
+                  </p>
+                )}
               </div>
-            ) : null}
 
-            {Array.isArray(ai.keywords) && ai.keywords.length > 0 ? (
               <div className="mt-3">
                 <div className="text-sm font-medium text-slate-700 dark:text-white/70 mb-2">
                   关键词
                 </div>
-                <div className="flex flex-wrap gap-2">
-                  {ai.keywords.map((k) => (
-                    <Badge key={k} variant="info" size="sm">
-                      {k}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
-            <div className="mt-3 space-y-2 text-sm text-slate-600 dark:text-white/50">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium text-slate-700 dark:text-white/70">
-                  敏感词
-                </span>
-                {Array.isArray(ai.sensitive_words) && ai.sensitive_words.length > 0 ? (
+                {aiKeywords.length > 0 ? (
                   <div className="flex flex-wrap gap-2">
-                    {ai.sensitive_words.map((w) => (
-                      <Badge key={w} variant="warning" size="sm">
-                        {w}
+                    {aiKeywords.map((k) => (
+                      <Badge key={k} variant="info" size="sm">
+                        {k}
                       </Badge>
                     ))}
                   </div>
                 ) : (
-                  <span>无</span>
+                  <p className="text-sm text-slate-600 dark:text-white/55">
+                    暂无关键词
+                  </p>
                 )}
               </div>
 
-              {ai.duplicate_of_news_id != null && (
+              <div className="mt-3 space-y-2 text-sm text-slate-600 dark:text-white/50">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium text-slate-700 dark:text-white/70">
-                    疑似重复
+                    敏感词
                   </span>
-                  <Link
-                    to={`/news/${ai.duplicate_of_news_id}`}
-                    className="text-amber-600 hover:underline dark:text-amber-400"
-                  >
-                    查看 #{ai.duplicate_of_news_id}
-                  </Link>
+                  {aiSensitive.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {aiSensitive.map((w) => (
+                        <Badge key={w} variant="warning" size="sm">
+                          {w}
+                        </Badge>
+                      ))}
+                    </div>
+                  ) : (
+                    <span>无</span>
+                  )}
                 </div>
-              )}
 
-              {ai.processed_at && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium text-slate-700 dark:text-white/70">
-                    处理时间
-                  </span>
-                  <span>{new Date(ai.processed_at).toLocaleString()}</span>
-                </div>
-              )}
-            </div>
-          </Card>
-        )}
+                {ai?.duplicate_of_news_id != null ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium text-slate-700 dark:text-white/70">
+                      疑似重复
+                    </span>
+                    <Link
+                      to={`/news/${ai.duplicate_of_news_id}`}
+                      className="text-amber-600 hover:underline dark:text-amber-400"
+                    >
+                      查看 #{ai.duplicate_of_news_id}
+                    </Link>
+                  </div>
+                ) : null}
+
+                {ai?.processed_at ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium text-slate-700 dark:text-white/70">
+                      处理时间
+                    </span>
+                    <span>{new Date(ai.processed_at).toLocaleString()}</span>
+                  </div>
+                ) : null}
+              </div>
+            </>
+          )}
+        </Card>
 
         {/* 正文 */}
         <MarkdownContent content={news.content} className="text-base" />

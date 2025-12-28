@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "baixing-assistant.fullname" . }}-backend
+  labels:
+{{ include "baixing-assistant.labels" . | indent 4 }}
+spec:
+  type: {{ .Values.service.backend.type }}
+  selector:
+    app.kubernetes.io/name: {{ include "baixing-assistant.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: backend
+  ports:
+    - name: http
+      port: {{ .Values.service.backend.port }}
+      targetPort: {{ .Values.service.backend.port }}

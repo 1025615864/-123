@@ -304,6 +304,22 @@ export default function NewsTopicDetailPage() {
                           </Badge>
                         ))
                       : null}
+                    {(() => {
+                      const riskNorm = String(item.ai_risk_level ?? "")
+                        .trim()
+                        .toLowerCase();
+                      const hasKw =
+                        Array.isArray(item.ai_keywords) && item.ai_keywords.length > 0;
+                      if (hasKw) return null;
+                      if (!riskNorm || riskNorm === "unknown") {
+                        return (
+                          <Badge variant="default" size="sm">
+                            AI生成中
+                          </Badge>
+                        );
+                      }
+                      return null;
+                    })()}
                   </div>
 
                   <h3 className="text-base font-semibold text-slate-900 mb-2 line-clamp-2 leading-snug dark:text-white">

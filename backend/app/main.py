@@ -71,7 +71,9 @@ async def lifespan(app: FastAPI):
         )
 
     rss_feeds_raw = os.getenv("RSS_FEEDS", "").strip()
-    rss_enabled = bool(rss_feeds_raw)
+    rss_ingest_enabled_raw = os.getenv("RSS_INGEST_ENABLED", "").strip().lower()
+    rss_ingest_enabled_flag = rss_ingest_enabled_raw in {"1", "true", "yes", "on"}
+    rss_enabled = bool(rss_feeds_raw) or bool(rss_ingest_enabled_flag) or bool(settings.debug)
     if (not settings.debug) and (not redis_connected):
         rss_enabled = False
 
@@ -128,7 +130,7 @@ async def lifespan(app: FastAPI):
     for t in (scheduled_task, rss_task, news_ai_task):
         if t is None:
             continue
-        t.cancel()
+        _ = t.cancel()
         try:
             await t
         except asyncio.CancelledError:
@@ -310,7 +312,9 @@ async def health_check_detailed():
     try:
         import psutil
         process = psutil.Process()
-        memory_mb = process.memory_info().rss / 1024 / 1024
+        mem_info = process.memory_info()
+        rss_bytes = int(getattr(mem_info, "rss", 0) or 0)
+        memory_mb = float(rss_bytes) / 1024.0 / 1024.0
         checks_detail["memory"] = {
             "status": "ok",
             "usage_mb": round(memory_mb, 2)
@@ -319,8 +323,3 @@ async def health_check_detailed():
         checks_detail["memory"] = {"status": "unknown"}
     
     return checks
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)

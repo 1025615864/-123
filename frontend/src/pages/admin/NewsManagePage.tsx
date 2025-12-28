@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   Search,
   Plus,
+  Sparkles,
   Edit,
   Trash2,
   Eye,
@@ -11,12 +13,15 @@ import {
   XCircle,
   Clock,
   RotateCcw,
+  Link2,
+  History,
 } from "lucide-react";
 import {
   Card,
   Input,
   Button,
   Badge,
+  FadeInImage,
   Modal,
   Loading,
   Pagination,
@@ -29,6 +34,7 @@ import { useAppMutation, useToast } from "../../hooks";
 import { useTheme } from "../../contexts/ThemeContext";
 import { getApiErrorMessage } from "../../utils";
 import RichTextEditor from "../../components/RichTextEditor";
+import MarkdownContent from "../../components/MarkdownContent";
 
 function extractMarkdownImageUrls(content: string): string[] {
   if (!content) return [];
@@ -40,6 +46,52 @@ function extractMarkdownImageUrls(content: string): string[] {
     if (typeof url === "string" && url.trim()) urls.push(url.trim());
   }
   return Array.from(new Set(urls));
+}
+
+function tryParseFirstJsonObject(text: string): Record<string, unknown> | null {
+  const raw = String(text || "");
+  if (!raw.trim()) return null;
+
+  const fenced = raw.match(/```json\s*([\s\S]*?)\s*```/i);
+  if (fenced && fenced[1]) {
+    try {
+      const obj = JSON.parse(String(fenced[1]).trim());
+      if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+        return obj as Record<string, unknown>;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    try {
+      const obj = JSON.parse(raw.slice(start, end + 1));
+      if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+        return obj as Record<string, unknown>;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return null;
+}
+
+function tryParseJson(text: unknown): Record<string, unknown> | null {
+  if (typeof text !== "string") return null;
+  const t = text.trim();
+  if (!t) return null;
+  try {
+    const obj = JSON.parse(t);
+    if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+      return obj as Record<string, unknown>;
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
 
 interface NewsItem {
@@ -82,6 +134,67 @@ type BatchReviewResponse = {
     notifications_created?: number;
   };
   message?: string;
+};
+
+type NewsBatchAction = "publish" | "unpublish" | "top" | "untop" | "rerun_ai";
+
+type NewsBatchActionResponse = {
+  requested: number[];
+  processed: number[];
+  missing: number[];
+  skipped: number[];
+  action: string;
+  reason?: string | null;
+  message: string;
+};
+
+type NewsVersionItem = {
+  id: number;
+  news_id: number;
+  action: string;
+  reason?: string | null;
+  snapshot_json: string;
+  created_by: number;
+  created_at: string;
+};
+
+type NewsVersionListResponse = {
+  items: NewsVersionItem[];
+};
+
+type NewsLinkCheckItem = {
+  id: number;
+  run_id: string;
+  user_id: number;
+  news_id?: number | null;
+  url: string;
+  final_url?: string | null;
+  ok: boolean;
+  status_code?: number | null;
+  error?: string | null;
+  checked_at: string;
+};
+
+type NewsLinkCheckResponse = {
+  run_id: string;
+  items: NewsLinkCheckItem[];
+};
+
+type NewsAIGenerationItem = {
+  id: number;
+  user_id: number;
+  news_id?: number | null;
+  task_type: string;
+  status: string;
+  input_json: string;
+  output_json?: string | null;
+  raw_output?: string | null;
+  error?: string | null;
+  created_at: string;
+};
+
+type NewsAIGenerationListResponse = {
+  items: NewsAIGenerationItem[];
 };
 
 function normalizeReviewStatus(value: unknown): string {
@@ -175,6 +288,19 @@ export default function NewsManagePage() {
     scheduled_unpublish_at: "",
   });
 
+  const [createPublishMode, setCreatePublishMode] = useState<
+    "publish" | "draft" | "schedule"
+  >("publish");
+  const [aiTopic, setAiTopic] = useState("");
+  const [aiHints, setAiHints] = useState("");
+  const [aiAutoRerunNewsAi, setAiAutoRerunNewsAi] = useState(true);
+  const [createContentMode, setCreateContentMode] = useState<
+    "edit" | "preview"
+  >("edit");
+  const [editContentMode, setEditContentMode] = useState<"edit" | "preview">(
+    "edit"
+  );
+
   const loadAdminDetailForEdit = async (id: number) => {
     const res = await api.get(`/news/admin/${id}`);
     const detail = res.data as any;
@@ -262,6 +388,28 @@ export default function NewsManagePage() {
     : null;
 
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [batchAction, setBatchAction] = useState<NewsBatchAction>("publish");
+
+  const [showVersionsModal, setShowVersionsModal] = useState(false);
+  const [showLinkCheckModal, setShowLinkCheckModal] = useState(false);
+  const [showWorkbenchModal, setShowWorkbenchModal] = useState(false);
+
+  const [linkCheckTimeoutSeconds, setLinkCheckTimeoutSeconds] = useState("6");
+  const [linkCheckMaxUrls, setLinkCheckMaxUrls] = useState("50");
+  const [linkCheckRunId, setLinkCheckRunId] = useState("");
+  const [linkCheckResult, setLinkCheckResult] =
+    useState<NewsLinkCheckResponse | null>(null);
+
+  const [workbenchTaskType, setWorkbenchTaskType] = useState("rewrite");
+  const [workbenchStyle, setWorkbenchStyle] = useState("");
+  const [workbenchWordMin, setWorkbenchWordMin] = useState("");
+  const [workbenchWordMax, setWorkbenchWordMax] = useState("");
+  const [workbenchAppend, setWorkbenchAppend] = useState(false);
+  const [workbenchOutput, setWorkbenchOutput] = useState<Record<
+    string,
+    unknown
+  > | null>(null);
+  const [workbenchRaw, setWorkbenchRaw] = useState("");
 
   useEffect(() => {
     setSelectedIds(new Set());
@@ -296,6 +444,26 @@ export default function NewsManagePage() {
         return;
       }
       toast.success(ok ? "已发布" : "已取消发布");
+    },
+  });
+
+  const batchActionMutation = useAppMutation<
+    NewsBatchActionResponse,
+    { ids: number[]; action: NewsBatchAction; reason?: string | null }
+  >({
+    mutationFn: async (payload) => {
+      const res = await api.post(`/news/admin/batch`, {
+        ids: payload.ids,
+        action: payload.action,
+        reason: payload.reason ?? null,
+      });
+      return res.data as NewsBatchActionResponse;
+    },
+    errorMessageFallback: "操作失败，请稍后重试",
+    invalidateQueryKeys: [newsQueryKey as any],
+    onSuccess: (data) => {
+      setSelectedIds(new Set());
+      if (data?.message) toast.success(data.message);
     },
   });
 
@@ -334,6 +502,169 @@ export default function NewsManagePage() {
 
     openReviewReasonModal({ mode: "batch", ids, action });
   };
+
+  const handleBatchAction = async () => {
+    if (batchActionMutation.isPending) return;
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    const action = batchAction;
+
+    let reason: string | null = null;
+    if (action !== "rerun_ai") {
+      const r = prompt("原因（可选）", "");
+      reason = r && r.trim() ? r.trim() : null;
+    }
+
+    await batchActionMutation.mutateAsync({ ids, action, reason });
+  };
+
+  const applyWorkbenchDraftToEditForm = (
+    draft: Record<string, unknown>,
+    rawAnswer: string
+  ) => {
+    const title = String(draft.title ?? "").trim();
+    const summary = String(draft.summary ?? "").trim();
+    const content =
+      String(draft.content ?? "").trim() || String(rawAnswer || "").trim();
+
+    setEditForm((prev) => ({
+      ...prev,
+      title: title || prev.title,
+      summary: summary || prev.summary,
+      content: content || prev.content,
+    }));
+
+    if (content) {
+      setEditImages(extractMarkdownImageUrls(content));
+    }
+  };
+
+  const versionsQuery = useQuery({
+    queryKey: ["news-versions", { id: editingId, limit: 50 }] as const,
+    enabled: showVersionsModal && !!editingId,
+    queryFn: async () => {
+      if (!editingId) return { items: [] } as NewsVersionListResponse;
+      const res = await api.get(`/news/admin/${editingId}/versions`, {
+        params: { limit: 50 },
+      });
+      return res.data as NewsVersionListResponse;
+    },
+    retry: 1,
+    refetchOnWindowFocus: false,
+  });
+
+  const rollbackMutation = useAppMutation<
+    NewsItem,
+    { version_id: number; reason?: string | null }
+  >({
+    mutationFn: async (payload) => {
+      if (!editingId) throw new Error("missing editingId");
+      const res = await api.post(`/news/admin/${editingId}/rollback`, {
+        version_id: payload.version_id,
+        reason: payload.reason ?? null,
+      });
+      return res.data as NewsItem;
+    },
+    errorMessageFallback: "回滚失败，请稍后重试",
+    invalidateQueryKeys: [newsQueryKey as any],
+    onSuccess: async () => {
+      if (editingId) {
+        try {
+          await loadAdminDetailForEdit(editingId);
+        } catch (e) {
+          toast.error(getApiErrorMessage(e, "加载失败，请稍后重试"));
+        }
+      }
+      toast.success("已回滚并刷新内容");
+      setShowVersionsModal(false);
+    },
+  });
+
+  const linkCheckMutation = useAppMutation<
+    NewsLinkCheckResponse,
+    { markdown: string; timeout_seconds: number; max_urls: number }
+  >({
+    mutationFn: async (payload) => {
+      const res = await api.post(`/news/admin/link_check`, {
+        news_id: editingId,
+        markdown: payload.markdown,
+        timeout_seconds: payload.timeout_seconds,
+        max_urls: payload.max_urls,
+      });
+      return res.data as NewsLinkCheckResponse;
+    },
+    errorMessageFallback: "链接检查失败，请稍后重试",
+    onSuccess: (data) => {
+      setLinkCheckResult(data);
+      setLinkCheckRunId(String(data?.run_id || ""));
+    },
+  });
+
+  const linkCheckFetchMutation = useAppMutation<
+    NewsLinkCheckResponse,
+    { run_id: string }
+  >({
+    mutationFn: async (payload) => {
+      const rid = String(payload.run_id || "").trim();
+      const res = await api.get(`/news/admin/link_check/${rid}`);
+      return res.data as NewsLinkCheckResponse;
+    },
+    errorMessageFallback: "获取检查结果失败，请稍后重试",
+    onSuccess: (data) => {
+      setLinkCheckResult(data);
+      setLinkCheckRunId(String(data?.run_id || ""));
+    },
+  });
+
+  const workbenchGenerateMutation = useAppMutation<
+    NewsAIGenerationItem,
+    {
+      task_type: string;
+      style?: string | null;
+      word_count_min?: number | null;
+      word_count_max?: number | null;
+      append: boolean;
+    }
+  >({
+    mutationFn: async (payload) => {
+      const res = await api.post(`/news/admin/ai/generate`, {
+        news_id: editingId,
+        task_type: payload.task_type,
+        title: editForm.title || null,
+        summary: editForm.summary || null,
+        content: editForm.content || null,
+        style: payload.style ?? null,
+        word_count_min: payload.word_count_min ?? null,
+        word_count_max: payload.word_count_max ?? null,
+        append: !!payload.append,
+        use_news_content: false,
+      });
+      return res.data as NewsAIGenerationItem;
+    },
+    errorMessageFallback: "AI 生成失败，请稍后重试",
+    onSuccess: (data) => {
+      const raw = String((data as any)?.raw_output || "");
+      const outJson = (data as any)?.output_json;
+      const parsed =
+        tryParseJson(outJson) || tryParseFirstJsonObject(raw) || null;
+      setWorkbenchOutput(parsed);
+      setWorkbenchRaw(raw);
+    },
+  });
+
+  const workbenchGenerationsQuery = useQuery({
+    queryKey: ["news-ai-generations", { id: editingId, limit: 20 }] as const,
+    enabled: showWorkbenchModal && !!editingId,
+    queryFn: async () => {
+      if (!editingId) return { items: [] } as NewsAIGenerationListResponse;
+      const res = await api.get(`/news/admin/ai/generations`, {
+        params: { news_id: editingId, limit: 20 },
+      });
+      return res.data as NewsAIGenerationListResponse;
+    },
+    retry: 1,
+    refetchOnWindowFocus: false,
+  });
 
   const [reviewReasonModalOpen, setReviewReasonModalOpen] = useState(false);
   const [reviewReasonDraft, setReviewReasonDraft] = useState("");
@@ -409,7 +740,7 @@ export default function NewsManagePage() {
       const res = await api.post(`/news/admin/${id}/ai/rerun`);
       return (res.data ?? {}) as { message?: string };
     },
-    successMessage: "已触发重跑AI标注",
+    successMessage: "已触发重跑AI标注，请稍等后刷新查看结果",
     errorMessageFallback: "重跑失败，请稍后重试",
     invalidateQueryKeys: [newsQueryKey as any],
     onSuccess: async (_data, payload) => {
@@ -424,7 +755,7 @@ export default function NewsManagePage() {
   });
 
   const createMutation = useAppMutation<
-    void,
+    { id: number },
     {
       title: string;
       category: string;
@@ -444,14 +775,25 @@ export default function NewsManagePage() {
     }
   >({
     mutationFn: async (payload) => {
-      await api.post("/news", payload);
+      const res = await api.post("/news", payload);
+      return (res.data ?? {}) as { id: number };
     },
-    successMessage: "发布成功",
     errorMessageFallback: "发布失败，请稍后重试",
     invalidateQueryKeys: [newsQueryKey as any],
-    onSuccess: () => {
+    onSuccess: (data, payload) => {
+      const isPublished = Boolean((payload as any)?.is_published);
+      const hasSchedule = Boolean((payload as any)?.scheduled_publish_at);
+      if (hasSchedule) toast.success("已创建定时发布");
+      else if (isPublished) toast.success("已发布");
+      else toast.success("已保存草稿");
+
       setShowCreateModal(false);
       setCreateImages([]);
+      setCreatePublishMode("publish");
+      setAiTopic("");
+      setAiHints("");
+      setAiAutoRerunNewsAi(true);
+      setCreateContentMode("edit");
       setCreateForm({
         title: "",
         category: "法律动态",
@@ -469,7 +811,41 @@ export default function NewsManagePage() {
         scheduled_publish_at: "",
         scheduled_unpublish_at: "",
       });
+
+      const createdId = Number((data as any)?.id || 0);
+      if (createdId > 0 && aiAutoRerunNewsAi) {
+        rerunAiMutation.mutate({ id: createdId });
+      }
     },
+  });
+
+  const aiGenerateMutation = useAppMutation<
+    { draft: Record<string, unknown>; rawAnswer: string },
+    { topic: string; hints: string; category: string }
+  >({
+    mutationFn: async (payload) => {
+      const topic = String(payload.topic || "").trim();
+      const hints = String(payload.hints || "").trim();
+      const cat = String(payload.category || "").trim();
+
+      const prompt = [
+        "你是一名法律资讯编辑。请根据给定主题与要点，生成一篇适合普通读者的法律资讯新闻。",
+        "请只输出一个 JSON 对象，不要输出任何额外文字。",
+        "字段为：title, summary, content, category, source, source_url, source_site, author。",
+        "content 使用 Markdown，800~1200 字。",
+        `主题：${topic}`,
+        hints ? `要点：${hints}` : "",
+        cat ? `分类建议：${cat}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      const res = await api.post("/ai/chat", { message: prompt });
+      const answer = String((res.data as any)?.answer || "");
+      const parsed = tryParseFirstJsonObject(answer) || {};
+      return { draft: parsed, rawAnswer: answer };
+    },
+    errorMessageFallback: "AI 生成失败，请稍后重试",
   });
 
   const editMutation = useAppMutation<
@@ -526,6 +902,53 @@ export default function NewsManagePage() {
   const handleCreate = async () => {
     if (!createForm.title.trim() || !createForm.content.trim()) return;
     if (createMutation.isPending) return;
+
+    const mode = createPublishMode;
+    const reviewStatus = String(createForm.review_status || "")
+      .trim()
+      .toLowerCase();
+
+    const scheduledPublish = createForm.scheduled_publish_at.trim();
+    const scheduledUnpublish = createForm.scheduled_unpublish_at.trim();
+
+    if (mode === "publish") {
+      if (reviewStatus !== "approved") {
+        toast.error("立即发布需要审核状态为：已通过");
+        return;
+      }
+    }
+
+    if (mode === "schedule") {
+      if (!scheduledPublish) {
+        toast.error("请选择定时发布时间");
+        return;
+      }
+      if (reviewStatus !== "approved") {
+        toast.error("定时发布需要审核状态为：已通过");
+        return;
+      }
+      try {
+        const pub = new Date(scheduledPublish);
+        if (Number.isNaN(pub.getTime())) throw new Error("bad");
+        if (pub.getTime() < Date.now() - 60 * 1000) {
+          toast.error("定时发布时间不能早于当前时间");
+          return;
+        }
+        if (scheduledUnpublish) {
+          const un = new Date(scheduledUnpublish);
+          if (Number.isNaN(un.getTime())) throw new Error("bad");
+          if (un.getTime() <= pub.getTime()) {
+            toast.error("定时下线时间需晚于定时发布时间");
+            return;
+          }
+        }
+      } catch {
+        toast.error("定时日期格式不正确");
+        return;
+      }
+    }
+
+    const isPublished = mode === "publish";
     createMutation.mutate({
       title: createForm.title.trim(),
       category: createForm.category,
@@ -543,18 +966,124 @@ export default function NewsManagePage() {
       author: createForm.author.trim() ? createForm.author.trim() : null,
       content: createForm.content.trim(),
       is_top: !!createForm.is_top,
-      is_published: createForm.is_published,
+      is_published: isPublished,
       review_status: createForm.review_status || null,
       review_reason: createForm.review_reason.trim()
         ? createForm.review_reason.trim()
         : null,
-      scheduled_publish_at: createForm.scheduled_publish_at.trim()
-        ? createForm.scheduled_publish_at.trim()
-        : null,
-      scheduled_unpublish_at: createForm.scheduled_unpublish_at.trim()
-        ? createForm.scheduled_unpublish_at.trim()
-        : null,
+      scheduled_publish_at:
+        mode === "schedule" && scheduledPublish ? scheduledPublish : null,
+      scheduled_unpublish_at:
+        mode === "schedule" && scheduledUnpublish ? scheduledUnpublish : null,
     });
+  };
+
+  const applyAiDraftToCreateForm = (
+    draft: Record<string, unknown>,
+    rawAnswer: string
+  ) => {
+    const title = String(draft.title ?? "").trim();
+    const summary = String(draft.summary ?? "").trim();
+    const content =
+      String(draft.content ?? "").trim() || String(rawAnswer || "").trim();
+    const category = String(draft.category ?? "").trim();
+
+    setCreateForm((prev) => ({
+      ...prev,
+      title: title || prev.title,
+      summary: summary || prev.summary,
+      content: content || prev.content,
+      category: category || prev.category,
+      source: String(draft.source ?? "").trim() || prev.source,
+      source_url: String(draft.source_url ?? "").trim() || prev.source_url,
+      source_site: String(draft.source_site ?? "").trim() || prev.source_site,
+      author: String(draft.author ?? "").trim() || prev.author,
+    }));
+
+    if (content) {
+      setCreateImages(extractMarkdownImageUrls(content));
+    }
+  };
+
+  const handleAiGenerateFill = async (autoPublish: boolean) => {
+    if (aiGenerateMutation.isPending) return;
+    if (createMutation.isPending) return;
+
+    const topic = aiTopic.trim();
+    if (!topic) {
+      toast.error("请输入 AI 主题");
+      return;
+    }
+
+    const result = await aiGenerateMutation.mutateAsync({
+      topic,
+      hints: aiHints.trim(),
+      category: createForm.category,
+    });
+
+    applyAiDraftToCreateForm(result.draft, result.rawAnswer);
+
+    if (autoPublish) {
+      setCreatePublishMode("publish");
+      setCreateForm((prev) => ({
+        ...prev,
+        is_published: true,
+        review_status: "approved",
+        scheduled_publish_at: "",
+        scheduled_unpublish_at: "",
+      }));
+
+      const title = String(
+        (result.draft as any)?.title || createForm.title || ""
+      ).trim();
+      const content = String(
+        (result.draft as any)?.content ||
+          createForm.content ||
+          result.rawAnswer ||
+          ""
+      ).trim();
+      if (!title || !content) {
+        toast.error("AI 生成内容不完整，请先检查后再发布");
+        return;
+      }
+
+      await createMutation.mutateAsync({
+        title: title || createForm.title.trim(),
+        category: String(
+          (result.draft as any)?.category || createForm.category || "法律动态"
+        ),
+        summary:
+          String(
+            (result.draft as any)?.summary || createForm.summary || ""
+          ).trim() || null,
+        cover_image: createForm.cover_image.trim()
+          ? createForm.cover_image.trim()
+          : null,
+        source:
+          String(
+            (result.draft as any)?.source || createForm.source || ""
+          ).trim() || null,
+        source_url:
+          String(
+            (result.draft as any)?.source_url || createForm.source_url || ""
+          ).trim() || null,
+        source_site:
+          String(
+            (result.draft as any)?.source_site || createForm.source_site || ""
+          ).trim() || null,
+        author:
+          String(
+            (result.draft as any)?.author || createForm.author || ""
+          ).trim() || null,
+        content,
+        is_top: !!createForm.is_top,
+        is_published: true,
+        review_status: "approved",
+        review_reason: null,
+        scheduled_publish_at: null,
+        scheduled_unpublish_at: null,
+      });
+    }
   };
 
   const openEdit = async (id: number) => {
@@ -724,6 +1253,38 @@ export default function NewsManagePage() {
                   }
                 >
                   批量待审
+                </Button>
+                <select
+                  value={batchAction}
+                  onChange={(e) =>
+                    setBatchAction(e.target.value as NewsBatchAction)
+                  }
+                  className="px-3 py-2 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none text-sm dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
+                  disabled={
+                    selectedIds.size === 0 ||
+                    batchActionMutation.isPending ||
+                    batchReviewNewsMutation.isPending ||
+                    reviewNewsMutation.isPending
+                  }
+                >
+                  <option value="publish">批量发布</option>
+                  <option value="unpublish">批量下线</option>
+                  <option value="top">批量置顶</option>
+                  <option value="untop">批量取消置顶</option>
+                  <option value="rerun_ai">批量重跑AI</option>
+                </select>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleBatchAction}
+                  disabled={
+                    selectedIds.size === 0 ||
+                    batchActionMutation.isPending ||
+                    batchReviewNewsMutation.isPending ||
+                    reviewNewsMutation.isPending
+                  }
+                >
+                  {batchActionMutation.isPending ? "执行中..." : "执行"}
                 </Button>
               </div>
             </div>
@@ -1006,9 +1567,9 @@ export default function NewsManagePage() {
                             )}
                           </Button>
                           <Button
-                            variant="ghost"
+                            variant="outline"
                             size="sm"
-                            className="p-2"
+                            className="p-2 sm:px-3"
                             title="重跑AI标注"
                             aria-label={`admin-news-ai-rerun-${item.id}`}
                             data-testid={`admin-news-ai-rerun-${item.id}`}
@@ -1024,6 +1585,7 @@ export default function NewsManagePage() {
                             }
                           >
                             <RotateCcw className="h-4 w-4" />
+                            <span className="hidden sm:inline">重跑AI</span>
                           </Button>
                           <Button
                             variant="ghost"
@@ -1151,16 +1713,499 @@ export default function NewsManagePage() {
       </Modal>
 
       <Modal
+        isOpen={showVersionsModal}
+        onClose={() => setShowVersionsModal(false)}
+        title="版本历史"
+        description="查看历史快照并回滚"
+        size="lg"
+        zIndexClass="z-[60]"
+      >
+        <div className="space-y-4">
+          {versionsQuery.isLoading ? (
+            <Loading text="加载中..." tone={actualTheme} />
+          ) : versionsQuery.isError ? (
+            <div className="text-sm text-red-600 dark:text-red-300">
+              {getApiErrorMessage(versionsQuery.error, "加载失败，请稍后重试")}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {(versionsQuery.data?.items ?? []).length === 0 ? (
+                <div className="text-sm text-slate-500 dark:text-white/50">
+                  暂无版本记录
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {(versionsQuery.data?.items ?? []).map((v) => (
+                    <div
+                      key={v.id}
+                      className="rounded-xl border border-slate-200/70 bg-white p-3 dark:border-white/10 dark:bg-white/5"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="text-sm text-slate-800 dark:text-white/80">
+                          <span className="font-medium">#{v.id}</span>
+                          <span className="ml-2">
+                            {String(v.action || "-")}
+                          </span>
+                          {v.reason ? (
+                            <span className="ml-2 text-slate-500 dark:text-white/50">
+                              {v.reason}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="text-xs text-slate-500 dark:text-white/40">
+                            {v.created_at
+                              ? new Date(v.created_at).toLocaleString()
+                              : ""}
+                          </div>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              if (rollbackMutation.isPending) return;
+                              if (!confirm(`确认回滚到版本 #${v.id}？`)) return;
+                              const r = prompt("回滚原因（可选）", "");
+                              const rsn = r && r.trim() ? r.trim() : null;
+                              rollbackMutation.mutate({
+                                version_id: v.id,
+                                reason: rsn,
+                              });
+                            }}
+                            disabled={rollbackMutation.isPending}
+                          >
+                            {rollbackMutation.isPending ? "回滚中..." : "回滚"}
+                          </Button>
+                        </div>
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500 dark:text-white/40">
+                        操作人：{v.created_by}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showLinkCheckModal}
+        onClose={() => {
+          setShowLinkCheckModal(false);
+          setLinkCheckResult(null);
+          setLinkCheckRunId("");
+        }}
+        title="链接检查"
+        description="提取正文中的链接并检测可访问性"
+        size="xl"
+        zIndexClass="z-[60]"
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <Input
+              label="超时（秒）"
+              value={linkCheckTimeoutSeconds}
+              onChange={(e) => setLinkCheckTimeoutSeconds(e.target.value)}
+              placeholder="6"
+            />
+            <Input
+              label="最多链接数"
+              value={linkCheckMaxUrls}
+              onChange={(e) => setLinkCheckMaxUrls(e.target.value)}
+              placeholder="50"
+            />
+            <div className="flex items-end justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  const md = String(editForm.content || "");
+                  if (!md.trim()) {
+                    toast.error("正文为空，无法检查");
+                    return;
+                  }
+                  const t = Number(linkCheckTimeoutSeconds || 6);
+                  const m = Number(linkCheckMaxUrls || 50);
+                  linkCheckMutation.mutate({
+                    markdown: md,
+                    timeout_seconds: Number.isFinite(t) ? t : 6,
+                    max_urls: Number.isFinite(m) ? m : 50,
+                  });
+                }}
+                disabled={linkCheckMutation.isPending}
+              >
+                {linkCheckMutation.isPending ? "检查中..." : "开始检查"}
+              </Button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <Input
+              label="run_id（可选）"
+              value={linkCheckRunId}
+              onChange={(e) => setLinkCheckRunId(e.target.value)}
+              placeholder="粘贴 run_id 以加载历史结果"
+            />
+            <div className="flex items-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  const rid = linkCheckRunId.trim();
+                  if (!rid) return;
+                  linkCheckFetchMutation.mutate({ run_id: rid });
+                }}
+                disabled={
+                  linkCheckFetchMutation.isPending || !linkCheckRunId.trim()
+                }
+              >
+                {linkCheckFetchMutation.isPending ? "加载中..." : "加载结果"}
+              </Button>
+              {linkCheckResult?.run_id ? (
+                <Badge variant="info" size="sm">
+                  {linkCheckResult.run_id}
+                </Badge>
+              ) : null}
+            </div>
+          </div>
+
+          {linkCheckResult ? (
+            <div className="rounded-xl border border-slate-200/70 bg-white p-3 dark:border-white/10 dark:bg-white/5">
+              <div className="text-sm font-medium text-slate-800 dark:text-white/80 mb-2">
+                检查结果（{linkCheckResult.items.length}）
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200/70 dark:border-white/10">
+                      <th className="text-left py-2 pr-3 text-slate-500 font-medium dark:text-white/50">
+                        URL
+                      </th>
+                      <th className="text-left py-2 pr-3 text-slate-500 font-medium dark:text-white/50">
+                        状态
+                      </th>
+                      <th className="text-left py-2 pr-3 text-slate-500 font-medium dark:text-white/50">
+                        Code
+                      </th>
+                      <th className="text-left py-2 pr-3 text-slate-500 font-medium dark:text-white/50">
+                        备注
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {linkCheckResult.items.map((x) => (
+                      <tr
+                        key={x.id}
+                        className="border-b border-slate-200/50 dark:border-white/5"
+                      >
+                        <td className="py-2 pr-3">
+                          <a
+                            href={x.final_url || x.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-amber-600 hover:underline dark:text-amber-400 break-all"
+                          >
+                            {x.url}
+                          </a>
+                        </td>
+                        <td className="py-2 pr-3">
+                          <Badge
+                            variant={x.ok ? "success" : "danger"}
+                            size="sm"
+                          >
+                            {x.ok ? "OK" : "FAIL"}
+                          </Badge>
+                        </td>
+                        <td className="py-2 pr-3 text-slate-600 dark:text-white/60">
+                          {x.status_code ?? "-"}
+                        </td>
+                        <td className="py-2 pr-3 text-slate-500 dark:text-white/50 break-all">
+                          {x.error || ""}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showWorkbenchModal}
+        onClose={() => {
+          setShowWorkbenchModal(false);
+          setWorkbenchOutput(null);
+          setWorkbenchRaw("");
+        }}
+        title="AI 工作台"
+        description="生成/改写/润色/提纲等（支持一键应用到编辑表单）"
+        size="xl"
+        zIndexClass="z-[60]"
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">
+                任务类型
+              </label>
+              <select
+                className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
+                value={workbenchTaskType}
+                onChange={(e) => setWorkbenchTaskType(e.target.value)}
+              >
+                <option value="rewrite">改写</option>
+                <option value="polish">润色</option>
+                <option value="outline">大纲</option>
+                <option value="title_candidates">标题建议</option>
+                <option value="summary_candidates">摘要建议</option>
+                <option value="risk_warnings">风险提示</option>
+              </select>
+            </div>
+            <Input
+              label="风格（可选）"
+              value={workbenchStyle}
+              onChange={(e) => setWorkbenchStyle(e.target.value)}
+              placeholder="例如：简洁 / 口语化 / 严谨"
+            />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <Input
+              label="字数最小（可选）"
+              value={workbenchWordMin}
+              onChange={(e) => setWorkbenchWordMin(e.target.value)}
+              placeholder="800"
+            />
+            <Input
+              label="字数最大（可选）"
+              value={workbenchWordMax}
+              onChange={(e) => setWorkbenchWordMax(e.target.value)}
+              placeholder="1200"
+            />
+            <div className="flex items-center gap-2 pt-7">
+              <input
+                type="checkbox"
+                checked={workbenchAppend}
+                onChange={(e) => setWorkbenchAppend(e.target.checked)}
+              />
+              <span className="text-sm text-slate-700 dark:text-white/70">
+                追加到正文
+              </span>
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <Button
+              variant="outline"
+              onClick={() => {
+                const min = workbenchWordMin.trim()
+                  ? Number(workbenchWordMin)
+                  : null;
+                const max = workbenchWordMax.trim()
+                  ? Number(workbenchWordMax)
+                  : null;
+                workbenchGenerateMutation.mutate({
+                  task_type: workbenchTaskType,
+                  style: workbenchStyle.trim() ? workbenchStyle.trim() : null,
+                  word_count_min: min && Number.isFinite(min) ? min : null,
+                  word_count_max: max && Number.isFinite(max) ? max : null,
+                  append: !!workbenchAppend,
+                });
+              }}
+              disabled={workbenchGenerateMutation.isPending}
+            >
+              {workbenchGenerateMutation.isPending ? "生成中..." : "生成"}
+            </Button>
+          </div>
+
+          {workbenchOutput || workbenchRaw ? (
+            <div className="rounded-xl border border-slate-200/70 bg-white p-3 dark:border-white/10 dark:bg-white/5">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <div className="text-sm font-medium text-slate-800 dark:text-white/80">
+                  输出
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const draft = workbenchOutput || {};
+                    applyWorkbenchDraftToEditForm(draft, workbenchRaw);
+                    toast.success("已应用到编辑表单");
+                  }}
+                  disabled={!workbenchOutput && !workbenchRaw}
+                >
+                  应用到正文
+                </Button>
+              </div>
+              <Textarea
+                value={
+                  workbenchOutput
+                    ? JSON.stringify(workbenchOutput, null, 2)
+                    : String(workbenchRaw || "")
+                }
+                onChange={() => {}}
+                rows={10}
+              />
+            </div>
+          ) : null}
+
+          <div className="rounded-xl border border-slate-200/70 bg-slate-50 p-3 dark:border-white/10 dark:bg-white/5">
+            <div className="flex items-center justify-between gap-2">
+              <div className="text-sm font-medium text-slate-800 dark:text-white/80">
+                生成历史（最近 20 条）
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => workbenchGenerationsQuery.refetch()}
+                disabled={workbenchGenerationsQuery.isFetching}
+              >
+                刷新
+              </Button>
+            </div>
+            <div className="mt-3 space-y-2">
+              {workbenchGenerationsQuery.isLoading ? (
+                <div className="text-sm text-slate-500 dark:text-white/50">
+                  加载中...
+                </div>
+              ) : workbenchGenerationsQuery.isError ? (
+                <div className="text-sm text-red-600 dark:text-red-300">
+                  {getApiErrorMessage(
+                    workbenchGenerationsQuery.error,
+                    "加载失败，请稍后重试"
+                  )}
+                </div>
+              ) : (workbenchGenerationsQuery.data?.items ?? []).length === 0 ? (
+                <div className="text-sm text-slate-500 dark:text-white/50">
+                  暂无记录
+                </div>
+              ) : (
+                (workbenchGenerationsQuery.data?.items ?? []).map((g) => {
+                  const out = tryParseJson(g.output_json) || null;
+                  return (
+                    <div
+                      key={g.id}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200/70 bg-white px-3 py-2 dark:border-white/10 dark:bg-white/5"
+                    >
+                      <div className="text-sm text-slate-800 dark:text-white/80">
+                        <span className="font-medium">#{g.id}</span>
+                        <span className="ml-2">{g.task_type}</span>
+                        <span className="ml-2 text-slate-500 dark:text-white/50">
+                          {g.status}
+                        </span>
+                        <span className="ml-2 text-xs text-slate-500 dark:text-white/40">
+                          {g.created_at
+                            ? new Date(g.created_at).toLocaleString()
+                            : ""}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            if (!out) {
+                              toast.error("该记录没有可应用的结构化输出");
+                              return;
+                            }
+                            setWorkbenchOutput(out);
+                            setWorkbenchRaw(String(g.raw_output || ""));
+                          }}
+                          disabled={!out}
+                        >
+                          查看
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            if (!out) return;
+                            applyWorkbenchDraftToEditForm(
+                              out,
+                              String(g.raw_output || "")
+                            );
+                            toast.success("已应用到编辑表单");
+                          }}
+                          disabled={!out}
+                        >
+                          应用
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
         isOpen={showCreateModal}
         onClose={() => {
           setShowCreateModal(false);
           setCreateImages([]);
+          setCreateContentMode("edit");
         }}
         title="发布新闻"
         description="填写新闻内容"
         size="xl"
       >
         <div className="space-y-4">
+          <div className="rounded-xl border border-slate-200/70 bg-slate-50 px-4 py-3 dark:border-white/10 dark:bg-white/5">
+            <div className="flex items-center gap-2 text-sm font-medium text-slate-800 dark:text-white/80">
+              <Sparkles className="h-4 w-4" />
+              AI 一键生成 / 发布
+            </div>
+            <div className="mt-3 space-y-3">
+              <Input
+                label="AI 主题"
+                placeholder="例如：普通人如何识别和防范电信网络诈骗"
+                value={aiTopic}
+                onChange={(e) => setAiTopic(e.target.value)}
+              />
+              <Textarea
+                label="要点（可选）"
+                placeholder="可填写关键要点/结构要求，例如：风险点、法律依据、常见话术、操作清单等"
+                value={aiHints}
+                onChange={(e) => setAiHints(e.target.value)}
+                rows={3}
+              />
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-white/70">
+                  <input
+                    type="checkbox"
+                    checked={aiAutoRerunNewsAi}
+                    onChange={(e) => setAiAutoRerunNewsAi(e.target.checked)}
+                  />
+                  发布后自动触发 News AI 标注
+                </label>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => handleAiGenerateFill(false)}
+                    disabled={
+                      aiGenerateMutation.isPending || createMutation.isPending
+                    }
+                  >
+                    {aiGenerateMutation.isPending ? "生成中..." : "AI生成填充"}
+                  </Button>
+                  <Button
+                    onClick={() => handleAiGenerateFill(true)}
+                    disabled={
+                      aiGenerateMutation.isPending || createMutation.isPending
+                    }
+                  >
+                    {aiGenerateMutation.isPending
+                      ? "生成中..."
+                      : createMutation.isPending
+                      ? "发布中..."
+                      : "AI一键发布"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <Input
             label="标题"
             placeholder="请输入新闻标题"
@@ -1205,6 +2250,72 @@ export default function NewsManagePage() {
               }))
             }
           />
+
+          {createForm.cover_image?.trim() ? (
+            <div className="rounded-xl border border-slate-200/70 bg-white p-3 dark:border-white/10 dark:bg-white/5">
+              <div className="text-xs text-slate-500 dark:text-white/40 mb-2">
+                封面预览
+              </div>
+              <FadeInImage
+                src={createForm.cover_image.trim()}
+                alt="cover"
+                wrapperClassName="w-full rounded-2xl bg-slate-900/5 dark:bg-white/5"
+                className="h-48 w-full object-cover"
+              />
+            </div>
+          ) : null}
+
+          {createImages.length > 0 ? (
+            <div className="rounded-xl border border-slate-200/70 bg-slate-50 p-3 dark:border-white/10 dark:bg-white/5">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-medium text-slate-800 dark:text-white/80">
+                  从正文图片选择封面
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    setCreateForm((prev) => ({ ...prev, cover_image: "" }))
+                  }
+                  disabled={!createForm.cover_image.trim()}
+                >
+                  清空封面
+                </Button>
+              </div>
+              <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {createImages.slice(0, 8).map((url) => {
+                  const isSelected = createForm.cover_image.trim() === url;
+                  return (
+                    <button
+                      key={url}
+                      type="button"
+                      onClick={() =>
+                        setCreateForm((prev) => ({ ...prev, cover_image: url }))
+                      }
+                      className={`rounded-xl overflow-hidden border transition-all ${
+                        isSelected
+                          ? "border-amber-500/60 ring-2 ring-amber-500/30"
+                          : "border-slate-200/70 hover:border-slate-300 dark:border-white/10 dark:hover:border-white/20"
+                      }`}
+                      title="设为封面"
+                    >
+                      <FadeInImage
+                        src={url}
+                        alt="img"
+                        wrapperClassName="w-full bg-slate-900/5 dark:bg-white/5"
+                        className="h-20 w-full object-cover"
+                      />
+                    </button>
+                  );
+                })}
+              </div>
+              {createImages.length > 8 ? (
+                <div className="mt-2 text-xs text-slate-500 dark:text-white/40">
+                  仅展示前 8 张图片
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
               label="来源"
@@ -1301,70 +2412,134 @@ export default function NewsManagePage() {
           </div>
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">
-              状态
+              发布模式
             </label>
             <select
               className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
-              value={createForm.is_published ? "published" : "draft"}
-              onChange={(e) =>
+              value={createPublishMode}
+              onChange={(e) => {
+                const v = String(e.target.value || "publish") as
+                  | "publish"
+                  | "draft"
+                  | "schedule";
+                setCreatePublishMode(v);
                 setCreateForm((prev) => ({
                   ...prev,
-                  is_published: e.target.value === "published",
-                }))
-              }
+                  is_published: v === "publish",
+                  scheduled_publish_at:
+                    v === "schedule" ? prev.scheduled_publish_at : "",
+                  scheduled_unpublish_at:
+                    v === "schedule" ? prev.scheduled_unpublish_at : "",
+                  review_status:
+                    v === "publish" || v === "schedule"
+                      ? "approved"
+                      : prev.review_status,
+                }));
+              }}
             >
-              <option value="published">发布</option>
-              <option value="draft">草稿</option>
+              <option value="publish">立即发布</option>
+              <option value="draft">保存草稿</option>
+              <option value="schedule">定时发布</option>
             </select>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">
-                定时发布（可选）
-              </label>
-              <input
-                type="datetime-local"
-                className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
-                value={createForm.scheduled_publish_at}
-                onChange={(e) =>
-                  setCreateForm((prev) => ({
-                    ...prev,
-                    scheduled_publish_at: e.target.value,
-                  }))
-                }
-              />
+          {createPublishMode === "schedule" ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">
+                  定时发布
+                </label>
+                <input
+                  type="datetime-local"
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
+                  value={createForm.scheduled_publish_at}
+                  onChange={(e) =>
+                    setCreateForm((prev) => ({
+                      ...prev,
+                      scheduled_publish_at: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">
+                  定时下线（可选）
+                </label>
+                <input
+                  type="datetime-local"
+                  className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
+                  value={createForm.scheduled_unpublish_at}
+                  onChange={(e) =>
+                    setCreateForm((prev) => ({
+                      ...prev,
+                      scheduled_unpublish_at: e.target.value,
+                    }))
+                  }
+                />
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">
-                定时下线（可选）
-              </label>
-              <input
-                type="datetime-local"
-                className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
-                value={createForm.scheduled_unpublish_at}
-                onChange={(e) =>
-                  setCreateForm((prev) => ({
-                    ...prev,
-                    scheduled_unpublish_at: e.target.value,
-                  }))
-                }
-              />
-            </div>
-          </div>
+          ) : null}
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">
               内容
             </label>
-            <RichTextEditor
-              value={createForm.content}
-              onChange={(v) =>
-                setCreateForm((prev) => ({ ...prev, content: v }))
-              }
-              images={createImages}
-              onImagesChange={setCreateImages}
-              placeholder="请输入内容，支持 Markdown、表情、图片链接..."
-              minHeight="260px"
-            />
+            <div className="flex items-center justify-end gap-2 mb-2">
+              <Button
+                variant={createContentMode === "edit" ? "primary" : "outline"}
+                size="sm"
+                onClick={() => setCreateContentMode("edit")}
+              >
+                编辑
+              </Button>
+              <Button
+                variant={
+                  createContentMode === "preview" ? "primary" : "outline"
+                }
+                size="sm"
+                onClick={() => setCreateContentMode("preview")}
+                disabled={!createForm.content.trim()}
+              >
+                预览
+              </Button>
+            </div>
+
+            {createContentMode === "edit" ? (
+              <RichTextEditor
+                value={createForm.content}
+                onChange={(v) => {
+                  setCreateForm((prev) => ({ ...prev, content: v }));
+                  setCreateImages(extractMarkdownImageUrls(v));
+                }}
+                images={createImages}
+                onImagesChange={setCreateImages}
+                placeholder="请输入内容，支持 Markdown、表情、图片链接..."
+                minHeight="260px"
+              />
+            ) : (
+              <div className="rounded-2xl border border-slate-200/70 bg-white p-4 dark:border-white/10 dark:bg-white/5">
+                <div className="text-xl font-bold text-slate-900 dark:text-white">
+                  {createForm.title.trim() || "（无标题）"}
+                </div>
+                {createForm.summary.trim() ? (
+                  <div className="mt-2 text-slate-600 dark:text-white/60">
+                    {createForm.summary.trim()}
+                  </div>
+                ) : null}
+                {createForm.cover_image.trim() ? (
+                  <div className="mt-4">
+                    <FadeInImage
+                      src={createForm.cover_image.trim()}
+                      alt="cover"
+                      wrapperClassName="w-full rounded-2xl bg-slate-900/5 dark:bg-white/5"
+                      className="h-56 w-full object-cover"
+                    />
+                  </div>
+                ) : null}
+                <MarkdownContent
+                  content={createForm.content}
+                  className="mt-4"
+                />
+              </div>
+            )}
           </div>
           <div className="flex justify-end gap-3 pt-4">
             <Button
@@ -1380,7 +2555,11 @@ export default function NewsManagePage() {
               onClick={handleCreate}
               disabled={!createForm.title.trim() || !createForm.content.trim()}
             >
-              发布
+              {createPublishMode === "schedule"
+                ? "创建定时发布"
+                : createPublishMode === "draft"
+                ? "保存草稿"
+                : "发布"}
             </Button>
           </div>
         </div>
@@ -1394,6 +2573,14 @@ export default function NewsManagePage() {
           setEditImages([]);
           setEditingAi(null);
           setEditingAiRisk("unknown");
+          setEditContentMode("edit");
+          setShowVersionsModal(false);
+          setShowLinkCheckModal(false);
+          setShowWorkbenchModal(false);
+          setLinkCheckResult(null);
+          setLinkCheckRunId("");
+          setWorkbenchOutput(null);
+          setWorkbenchRaw("");
         }}
         title="编辑新闻"
         description="修改新闻内容"
@@ -1423,9 +2610,55 @@ export default function NewsManagePage() {
               {rerunAiMutation.isPending ? "重跑中..." : "重跑AI标注"}
             </Button>
           </div>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowWorkbenchModal(true)}
+              disabled={!editingId}
+            >
+              <Sparkles className="h-4 w-4" />
+              <span className="ml-2">AI工作台</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowLinkCheckModal(true)}
+              disabled={!editingId}
+            >
+              <Link2 className="h-4 w-4" />
+              <span className="ml-2">链接检查</span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowVersionsModal(true)}
+              disabled={!editingId}
+            >
+              <History className="h-4 w-4" />
+              <span className="ml-2">版本历史</span>
+            </Button>
+          </div>
           {editingAi?.summary ? (
             <div className="rounded-xl border border-slate-200/70 bg-white px-4 py-3 text-sm text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/70">
               {editingAi.summary}
+            </div>
+          ) : null}
+          {editingAi?.duplicate_of_news_id != null ? (
+            <div className="rounded-xl border border-slate-200/70 bg-white px-4 py-3 text-sm text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/70">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium text-slate-800 dark:text-white/80">
+                  疑似重复
+                </span>
+                <Link
+                  to={`/news/${editingAi.duplicate_of_news_id}`}
+                  className="text-amber-600 hover:underline dark:text-amber-400"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  查看 #{editingAi.duplicate_of_news_id}
+                </Link>
+              </div>
             </div>
           ) : null}
           {Array.isArray(editingAi?.highlights) &&
@@ -1497,6 +2730,72 @@ export default function NewsManagePage() {
               setEditForm((prev) => ({ ...prev, cover_image: e.target.value }))
             }
           />
+
+          {editForm.cover_image?.trim() ? (
+            <div className="rounded-xl border border-slate-200/70 bg-white p-3 dark:border-white/10 dark:bg-white/5">
+              <div className="text-xs text-slate-500 dark:text-white/40 mb-2">
+                封面预览
+              </div>
+              <FadeInImage
+                src={editForm.cover_image.trim()}
+                alt="cover"
+                wrapperClassName="w-full rounded-2xl bg-slate-900/5 dark:bg-white/5"
+                className="h-48 w-full object-cover"
+              />
+            </div>
+          ) : null}
+
+          {editImages.length > 0 ? (
+            <div className="rounded-xl border border-slate-200/70 bg-slate-50 p-3 dark:border-white/10 dark:bg-white/5">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-medium text-slate-800 dark:text-white/80">
+                  从正文图片选择封面
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    setEditForm((prev) => ({ ...prev, cover_image: "" }))
+                  }
+                  disabled={!editForm.cover_image.trim()}
+                >
+                  清空封面
+                </Button>
+              </div>
+              <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {editImages.slice(0, 8).map((url) => {
+                  const isSelected = editForm.cover_image.trim() === url;
+                  return (
+                    <button
+                      key={url}
+                      type="button"
+                      onClick={() =>
+                        setEditForm((prev) => ({ ...prev, cover_image: url }))
+                      }
+                      className={`rounded-xl overflow-hidden border transition-all ${
+                        isSelected
+                          ? "border-amber-500/60 ring-2 ring-amber-500/30"
+                          : "border-slate-200/70 hover:border-slate-300 dark:border-white/10 dark:hover:border-white/20"
+                      }`}
+                      title="设为封面"
+                    >
+                      <FadeInImage
+                        src={url}
+                        alt="img"
+                        wrapperClassName="w-full bg-slate-900/5 dark:bg-white/5"
+                        className="h-20 w-full object-cover"
+                      />
+                    </button>
+                  );
+                })}
+              </div>
+              {editImages.length > 8 ? (
+                <div className="mt-2 text-xs text-slate-500 dark:text-white/40">
+                  仅展示前 8 张图片
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
               label="来源"
@@ -1644,14 +2943,59 @@ export default function NewsManagePage() {
             <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">
               内容
             </label>
-            <RichTextEditor
-              value={editForm.content}
-              onChange={(v) => setEditForm((prev) => ({ ...prev, content: v }))}
-              images={editImages}
-              onImagesChange={setEditImages}
-              placeholder="请输入内容，支持 Markdown、表情、图片链接..."
-              minHeight="260px"
-            />
+            <div className="flex items-center justify-end gap-2 mb-2">
+              <Button
+                variant={editContentMode === "edit" ? "primary" : "outline"}
+                size="sm"
+                onClick={() => setEditContentMode("edit")}
+              >
+                编辑
+              </Button>
+              <Button
+                variant={editContentMode === "preview" ? "primary" : "outline"}
+                size="sm"
+                onClick={() => setEditContentMode("preview")}
+                disabled={!editForm.content.trim()}
+              >
+                预览
+              </Button>
+            </div>
+
+            {editContentMode === "edit" ? (
+              <RichTextEditor
+                value={editForm.content}
+                onChange={(v) => {
+                  setEditForm((prev) => ({ ...prev, content: v }));
+                  setEditImages(extractMarkdownImageUrls(v));
+                }}
+                images={editImages}
+                onImagesChange={setEditImages}
+                placeholder="请输入内容，支持 Markdown、表情、图片链接..."
+                minHeight="260px"
+              />
+            ) : (
+              <div className="rounded-2xl border border-slate-200/70 bg-white p-4 dark:border-white/10 dark:bg-white/5">
+                <div className="text-xl font-bold text-slate-900 dark:text-white">
+                  {editForm.title.trim() || "（无标题）"}
+                </div>
+                {editForm.summary.trim() ? (
+                  <div className="mt-2 text-slate-600 dark:text-white/60">
+                    {editForm.summary.trim()}
+                  </div>
+                ) : null}
+                {editForm.cover_image.trim() ? (
+                  <div className="mt-4">
+                    <FadeInImage
+                      src={editForm.cover_image.trim()}
+                      alt="cover"
+                      wrapperClassName="w-full rounded-2xl bg-slate-900/5 dark:bg-white/5"
+                      className="h-56 w-full object-cover"
+                    />
+                  </div>
+                ) : null}
+                <MarkdownContent content={editForm.content} className="mt-4" />
+              </div>
+            )}
           </div>
           <div className="flex justify-end gap-3 pt-4">
             <Button

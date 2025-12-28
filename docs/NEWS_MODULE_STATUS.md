@@ -122,27 +122,40 @@
 
 > 下面是“功能/质量/上线”维度仍建议继续做的点（不代表现在有 bug，而是为了产品化/可运营）。
 
-### 4.1 配置与上线策略（高优先级，需你决策）
+### 4.1 配置与上线策略（已决策并落地）
 
-- **LLM base_url/model/api_key 的配置治理**：
-  - 是否区分 dev/staging/prod 的 provider。
-  - 是否需要支持多 provider 轮询/降级。
-- **response_format 默认启用的影响面确认**：
-  - 已做 400/422 回退，但仍建议在真实供应商环境做一次冒烟验证。
+- **生产 provider：区分环境（是）**
+  - 后端已支持按环境读取 SystemConfig（优先读取带后缀的 key），并回退到 default key。
+  - 环境 token 解析来源：`APP_ENV` / `ENV` / `ENVIRONMENT`。
+    - `prod|production` -> `PROD`
+    - `staging` -> `STAGING`
+    - `dev|development` -> `DEV`
+- **多 provider：启用（是，按 priority 兜底）**
+  - `NEWS_AI_SUMMARY_LLM_PROVIDER_STRATEGY=priority`
+  - Providers JSON 示例（不写 api_key，api_key 走环境变量/Secret）：
+    - `NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON_PROD`：
+      - `[{"name":"openai","priority":1},{"name":"azure-openai","priority":2},{"name":"claude","priority":3}]`
+  - 对应环境变量约定：
+    - `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `AI_MODEL`
+    - `AZURE_OPENAI_API_KEY` / `AZURE_OPENAI_BASE_URL` / `AZURE_OPENAI_MODEL`
+    - `CLAUDE_API_KEY` / `CLAUDE_BASE_URL` / `CLAUDE_MODEL`
+- **response_format：默认启用 json_object（是）**
+  - 生产建议设置：`NEWS_AI_SUMMARY_LLM_RESPONSE_FORMAT=json_object`
+  - 后端已实现 400/422 自动回退（不携带 response_format 再重试一次）。
 
 ### 4.2 数据一致性/清理策略
 
 - 现已在删除新闻时清理 annotation，但：
-  - 生产环境历史脏数据是否需要一次性清理脚本（可选）。
-  - `duplicate_of_news_id` 的业务语义是否需要更明确（重复新闻合并策略）。
+  - 生产环境历史脏数据清理脚本：**已提供（是）**
+    - `backend/scripts/cleanup_news_ai_data.py`
+    - 默认 dry-run；加 `--apply` 才会落库。
+  - `duplicate_of_news_id` 的业务语义：**仅提示（不合并/不隐藏）**
+    - 前台新闻详情页会显示“疑似重复 -> 查看 #id”。
+    - 管理后台编辑弹窗也会显示同样提示，方便运营跳转核对。
 
 ### 4.3 可观测性（建议）
 
 （已完成）
-
-- 已落地错误追踪字段：`retry_count/last_error/last_error_at`
-- 已提供运维接口：`GET /api/system/news-ai/status`
-- 已补齐配置与线上冒烟清单：`docs/NEWS_AI_CONFIG_AND_SMOKE_TEST.md`
 
 ### 4.4 API/前端体验（可选增强）
 
@@ -153,8 +166,19 @@
 ### 4.5 性能与并发（可选）
 
 - 当前 pipeline 通过周期任务 + 锁运行：
-  - 多进程/多副本部署时的锁语义是否要更严格（Redis 强依赖 vs 内存锁退化策略）
-  - batch_size/interval 的配置是否要产品化
+  - 生产是否强依赖 Redis（用于分布式锁）：**是**
+  - batch_size/interval：继续以 env 为主（必要时再开放到 SystemConfig）。
+
+---
+
+## 4.x 已确认的决策（最终）
+
+1. 生产 provider：是否区分环境：**是**
+2. 多 provider 策略：**priority**（按 `priority` 兜底）
+3. response_format 默认：**json_object**
+4. 是否需要历史数据清理脚本：**是**（已提供 `backend/scripts/cleanup_news_ai_data.py`)
+5. duplicate_of_news_id：**仅提示**（不做合并/隐藏产品化）
+6. 生产 Redis 是否可用：**是**
 
 ## 5. 对“上一计划（n12）完成进度”的汇总
 

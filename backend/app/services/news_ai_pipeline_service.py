@@ -26,6 +26,23 @@ from ..utils.content_filter import content_filter
 logger = logging.getLogger(__name__)
 
 
+def _current_env_token() -> str | None:
+    raw = str(os.getenv("APP_ENV") or os.getenv("ENV") or os.getenv("ENVIRONMENT") or "").strip()
+    if not raw:
+        return None
+    v = raw.strip().lower()
+    if v in {"prod", "production"}:
+        return "PROD"
+    if v in {"stag", "staging"}:
+        return "STAGING"
+    if v in {"dev", "development"}:
+        return "DEV"
+    if v in {"test", "testing"}:
+        return "TEST"
+    v2 = re.sub(r"[^a-z0-9]+", "_", v).strip("_")
+    return v2.upper() if v2 else None
+
+
 class _NewsSummaryLLMProvider(TypedDict, total=False):
     name: str
     base_url: str
@@ -37,6 +54,7 @@ class _NewsSummaryLLMProvider(TypedDict, total=False):
     auth_prefix: str
     chat_completions_path: str
     weight: int
+    priority: int
 
 
 def _truncate(value: str | None, max_len: int) -> str | None:
@@ -80,17 +98,25 @@ class NewsAIPipelineService:
     async def load_system_config_overrides(db: AsyncSession) -> dict[str, str]:
         from ..models.system import SystemConfig
 
-        keys = {
+        base_keys = {
             "NEWS_AI_SUMMARY_LLM_ENABLED",
             "NEWS_AI_SUMMARY_LLM_RESPONSE_FORMAT",
             "NEWS_AI_SUMMARY_LLM_PROVIDER_STRATEGY",
             "NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON",
             "NEWS_AI_SUMMARY_LLM_PROVIDERS_B64",
+            "NEWS_REVIEW_POLICY_ENABLED",
+            "NEWS_REVIEW_POLICY_JSON",
         }
+
+        env_token = _current_env_token()
+        keys = set(base_keys)
+        if env_token:
+            for k in base_keys:
+                keys.add(f"{k}_{env_token}")
 
         res = await db.execute(select(SystemConfig.key, SystemConfig.value).where(SystemConfig.key.in_(keys)))
         rows = cast(list[tuple[object, object]], list(res.all()))
-        out: dict[str, str] = {}
+        raw: dict[str, str] = {}
         for k_obj, v_obj in rows:
             key = str(k_obj or "").strip()
             if not key:
@@ -100,7 +126,17 @@ class NewsAIPipelineService:
             val = str(v_obj).strip()
             if not val:
                 continue
-            out[key] = val
+            raw[key] = val
+
+        out: dict[str, str] = {}
+        for k in base_keys:
+            if env_token:
+                k_env = f"{k}_{env_token}"
+                if k_env in raw:
+                    out[k] = raw[k_env]
+                    continue
+            if k in raw:
+                out[k] = raw[k]
         return out
 
     @staticmethod
@@ -149,6 +185,39 @@ class NewsAIPipelineService:
 
         cfg_overrides = await self.load_system_config_overrides(db)
 
+        review_policy_enabled_raw = cfg_overrides.get("NEWS_REVIEW_POLICY_ENABLED")
+        if review_policy_enabled_raw is None or (not str(review_policy_enabled_raw).strip()):
+            review_policy_enabled_raw = os.getenv("NEWS_REVIEW_POLICY_ENABLED")
+        review_policy_enabled = False
+        if review_policy_enabled_raw is not None and str(review_policy_enabled_raw).strip():
+            review_policy_enabled = str(review_policy_enabled_raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+        review_policy_json = cfg_overrides.get("NEWS_REVIEW_POLICY_JSON")
+        if review_policy_json is None or (not str(review_policy_json).strip()):
+            review_policy_json = os.getenv("NEWS_REVIEW_POLICY_JSON")
+
+        review_policy_map: dict[str, str] = {
+            "safe": "approved",
+            "warning": "pending",
+            "danger": "pending",
+            "unknown": "pending",
+        }
+        if review_policy_json is not None and str(review_policy_json).strip():
+            try:
+                parsed_policy_obj: object = cast(object, json.loads(str(review_policy_json)))
+                if isinstance(parsed_policy_obj, dict):
+                    parsed_policy = cast(dict[object, object], parsed_policy_obj)
+                    for k_obj, v_obj in parsed_policy.items():
+                        k = str(k_obj or "").strip().lower()
+                        v = str(v_obj or "").strip().lower()
+                        if not k:
+                            continue
+                        if v not in {"approved", "pending", "rejected"}:
+                            continue
+                        review_policy_map[k] = v
+            except Exception:
+                logger.exception("invalid NEWS_REVIEW_POLICY_JSON")
+
         where_clause = or_(
             NewsAIAnnotation.id.is_(None),
             NewsAIAnnotation.processed_at.is_(None),
@@ -195,6 +264,18 @@ class NewsAIPipelineService:
                 summary, summary_is_llm, highlights, keywords = await self._make_summary(news, env_overrides=cfg_overrides)
                 risk_level, sensitive_words = self._make_risk(news)
                 duplicate_of = await self._find_duplicate_of(db, news)
+
+                if review_policy_enabled:
+                    current_review_status = str(getattr(news, "review_status", "") or "").strip().lower() or "approved"
+                    if current_review_status == "pending":
+                        target_review_status = review_policy_map.get(str(risk_level or "").strip().lower(), "pending")
+                        if target_review_status != current_review_status:
+                            news.review_status = target_review_status
+                            if target_review_status == "rejected":
+                                news.review_reason = _truncate(f"auto_review:risk={str(risk_level)}", 200)
+                            else:
+                                news.review_reason = None
+                            news.reviewed_at = now
 
                 ann.summary = summary
                 ann.risk_level = risk_level
@@ -256,6 +337,39 @@ class NewsAIPipelineService:
     async def rerun_news(self, db: AsyncSession, news_id: int) -> None:
         cfg_overrides = await self.load_system_config_overrides(db)
 
+        review_policy_enabled_raw = cfg_overrides.get("NEWS_REVIEW_POLICY_ENABLED")
+        if review_policy_enabled_raw is None or (not str(review_policy_enabled_raw).strip()):
+            review_policy_enabled_raw = os.getenv("NEWS_REVIEW_POLICY_ENABLED")
+        review_policy_enabled = False
+        if review_policy_enabled_raw is not None and str(review_policy_enabled_raw).strip():
+            review_policy_enabled = str(review_policy_enabled_raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+        review_policy_json = cfg_overrides.get("NEWS_REVIEW_POLICY_JSON")
+        if review_policy_json is None or (not str(review_policy_json).strip()):
+            review_policy_json = os.getenv("NEWS_REVIEW_POLICY_JSON")
+
+        review_policy_map: dict[str, str] = {
+            "safe": "approved",
+            "warning": "pending",
+            "danger": "pending",
+            "unknown": "pending",
+        }
+        if review_policy_json is not None and str(review_policy_json).strip():
+            try:
+                parsed_policy_obj: object = cast(object, json.loads(str(review_policy_json)))
+                if isinstance(parsed_policy_obj, dict):
+                    parsed_policy = cast(dict[object, object], parsed_policy_obj)
+                    for k_obj, v_obj in parsed_policy.items():
+                        k = str(k_obj or "").strip().lower()
+                        v = str(v_obj or "").strip().lower()
+                        if not k:
+                            continue
+                        if v not in {"approved", "pending", "rejected"}:
+                            continue
+                        review_policy_map[k] = v
+            except Exception:
+                logger.exception("invalid NEWS_REVIEW_POLICY_JSON")
+
         res = await db.execute(select(News).where(News.id == int(news_id)))
         news = res.scalar_one_or_none()
         if news is None:
@@ -274,6 +388,18 @@ class NewsAIPipelineService:
             )
             risk_level, sensitive_words = self._make_risk(news)
             duplicate_of = await self._find_duplicate_of(db, news)
+
+            if review_policy_enabled:
+                current_review_status = str(getattr(news, "review_status", "") or "").strip().lower() or "approved"
+                if current_review_status == "pending":
+                    target_review_status = review_policy_map.get(str(risk_level or "").strip().lower(), "pending")
+                    if target_review_status != current_review_status:
+                        news.review_status = target_review_status
+                        if target_review_status == "rejected":
+                            news.review_reason = _truncate(f"auto_review:risk={str(risk_level)}", 200)
+                        else:
+                            news.review_reason = None
+                        news.reviewed_at = now
 
             ann.summary = summary
             ann.risk_level = risk_level
@@ -539,6 +665,9 @@ class NewsAIPipelineService:
                     p_base_url = str(p.get("base_url", "") or "").strip()
                     p_model = str(p.get("model", "") or "").strip() or "gpt-4o-mini"
 
+                    if (not p_base_url) or (not p_api_key):
+                        continue
+
                     auth_type = str(p.get("auth_type", "bearer") or "bearer").strip().lower()
                     auth_header_name: str | None = None
                     auth_prefix: str | None = None
@@ -633,8 +762,38 @@ class NewsAIPipelineService:
         *,
         env_overrides: dict[str, str] | None = None,
     ) -> list[_NewsSummaryLLMProvider]:
-        raw_json = str((env_overrides or {}).get("NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON") or os.getenv("NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON", "") or "").strip()
-        raw_b64 = str((env_overrides or {}).get("NEWS_AI_SUMMARY_LLM_PROVIDERS_B64") or os.getenv("NEWS_AI_SUMMARY_LLM_PROVIDERS_B64", "") or "").strip()
+        override_json = (env_overrides or {}).get("NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON")
+        override_b64 = (env_overrides or {}).get("NEWS_AI_SUMMARY_LLM_PROVIDERS_B64")
+        providers_from_overrides = bool(
+            (override_json is not None and str(override_json).strip())
+            or (override_b64 is not None and str(override_b64).strip())
+        )
+
+        env_token = _current_env_token()
+        raw_json_env = (
+            str(os.getenv(f"NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON_{env_token}", "") or "").strip()
+            if env_token
+            else ""
+        )
+        raw_b64_env = (
+            str(os.getenv(f"NEWS_AI_SUMMARY_LLM_PROVIDERS_B64_{env_token}", "") or "").strip()
+            if env_token
+            else ""
+        )
+
+        raw_json = str(override_json or raw_json_env or os.getenv("NEWS_AI_SUMMARY_LLM_PROVIDERS_JSON", "") or "").strip()
+        raw_b64 = str(override_b64 or raw_b64_env or os.getenv("NEWS_AI_SUMMARY_LLM_PROVIDERS_B64", "") or "").strip()
+
+        default_api_key = str(getattr(settings, "openai_api_key", "") or "").strip()
+        default_base_url = str(getattr(settings, "openai_base_url", "") or "").strip()
+        default_model = str(getattr(settings, "ai_model", "") or "").strip() or "gpt-4o-mini"
+
+        def _provider_token(name: str) -> str:
+            s = re.sub(r"[^A-Za-z0-9]+", "_", str(name or "").strip()).strip("_")
+            return s.upper() if s else ""
+
+        def _env_str(var_name: str) -> str:
+            return str(os.getenv(var_name, "") or "").strip()
 
         providers: list[_NewsSummaryLLMProvider] = []
         decoded = raw_json
@@ -654,26 +813,54 @@ class NewsAIPipelineService:
                             continue
                         d_obj = cast(dict[object, object], item_obj)
                         d = {str(k): v for k, v in d_obj.items()}
+                        name_raw = str(d.get("name", "") or "").strip()
                         base_url = str(d.get("base_url", "") or "").strip()
-                        api_key = str(d.get("api_key", "") or "").strip()
+                        token = _provider_token(name_raw or base_url)
+
+                        if not base_url:
+                            if token == "OPENAI":
+                                base_url = default_base_url
+                            elif token:
+                                base_url = _env_str(f"{token}_BASE_URL")
+
+                        api_key_from_env = _env_str(f"{token}_API_KEY") if token else ""
+                        api_key = api_key_from_env or default_api_key
+                        if not providers_from_overrides:
+                            api_key = str(d.get("api_key", "") or "").strip() or api_key
+
                         if not base_url or not api_key:
                             continue
+
                         p: _NewsSummaryLLMProvider = {
-                            "name": str(d.get("name", "") or "").strip() or base_url,
+                            "name": name_raw or base_url,
                             "base_url": base_url,
                             "api_key": api_key,
                         }
-                        model = str(d.get("model", "") or "").strip()
+
+                        model_from_env = _env_str(f"{token}_MODEL") if token else ""
+                        model = str(d.get("model", "") or "").strip() or model_from_env or default_model
                         if model:
                             p["model"] = model
+
+                        priority_raw = d.get("priority")
+                        if isinstance(priority_raw, int):
+                            p["priority"] = int(priority_raw)
+                        elif isinstance(priority_raw, str):
+                            s = priority_raw.strip()
+                            if s and re.fullmatch(r"-?\d+", s):
+                                p["priority"] = int(s)
                         rf = str(d.get("response_format", "") or "").strip()
                         if rf:
                             p["response_format"] = rf
 
                         auth_type = str(d.get("auth_type", "") or "").strip().lower()
+                        if (not auth_type) and token.startswith("AZURE"):
+                            auth_type = "header"
                         if auth_type in {"bearer", "header"}:
                             p["auth_type"] = cast(Literal["bearer", "header"], auth_type)
                         auth_header_name = str(d.get("auth_header_name", "") or "").strip()
+                        if (not auth_header_name) and auth_type == "header" and token.startswith("AZURE"):
+                            auth_header_name = "api-key"
                         if auth_header_name:
                             p["auth_header_name"] = auth_header_name
                         auth_prefix = str(d.get("auth_prefix", "") or "")
@@ -695,7 +882,7 @@ class NewsAIPipelineService:
         if providers:
             return providers
 
-        api_key = str(getattr(settings, "openai_api_key", "") or "").strip()
+        api_key = default_api_key
         base_url = str(getattr(settings, "openai_base_url", "") or "").strip()
         model = str(getattr(settings, "ai_model", "") or "").strip() or "gpt-4o-mini"
         if api_key and base_url:
@@ -724,6 +911,20 @@ class NewsAIPipelineService:
         strategy: str | None = None,
     ) -> list[_NewsSummaryLLMProvider]:
         strategy_value = str(strategy if strategy is not None else os.getenv("NEWS_AI_SUMMARY_LLM_PROVIDER_STRATEGY", "priority") or "priority").strip().lower()
+        if strategy_value == "priority":
+            if not providers:
+                return []
+            indexed = list(enumerate(providers))
+
+            def _key(x: tuple[int, _NewsSummaryLLMProvider]) -> tuple[int, int]:
+                idx, p = x
+                pr = p.get("priority")
+                if isinstance(pr, int):
+                    return (int(pr), int(idx))
+                return (1_000_000_000, int(idx))
+
+            ordered = sorted(indexed, key=_key)
+            return [p for _, p in ordered]
         if strategy_value == "round_robin":
             if not providers:
                 return []

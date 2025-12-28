@@ -8,6 +8,84 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Helm Chart 校验（确保 templates 可渲染、YAML 合法）
+  helm-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Helm repo add (bitnami)
+        run: |
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm repo update
+
+      - name: Helm dependency build
+        run: |
+          helm dependency build ./helm/baixing-assistant
+
+      - name: Helm lint
+        run: |
+          helm lint ./helm/baixing-assistant
+
+      - name: Helm template (render)
+        run: |
+          set -euo pipefail
+          helm template test ./helm/baixing-assistant \
+            --namespace baixing \
+            --set-string image.backend.repository=example/baixing-backend \
+            --set-string image.backend.tag=ci \
+            --set-string image.frontend.repository=example/baixing-frontend \
+            --set-string image.frontend.tag=ci \
+            --set-string backend.secret.DATABASE_URL=postgresql+asyncpg://user:pass@postgres:5432/baixing_law \
+            --set-string backend.secret.JWT_SECRET_KEY=dummy_jwt_secret_key \
+            --set-string backend.secret.PAYMENT_WEBHOOK_SECRET=dummy_payment_webhook_secret \
+            --set-string backend.secret.REDIS_URL=redis://redis:6379/0 \
+            --set-string backend.secret.OPENAI_API_KEY=dummy_openai_api_key \
+            --set-string ingress.host=example.com \
+            > /tmp/helm-rendered.yaml
+
+      - name: Helm template (render) - subcharts enabled
+        run: |
+          set -euo pipefail
+          helm template test-subcharts ./helm/baixing-assistant \
+            --namespace baixing \
+            --set redis.enabled=true \
+            --set postgresql.enabled=true \
+            --set-string image.backend.repository=example/baixing-backend \
+            --set-string image.backend.tag=ci \
+            --set-string image.frontend.repository=example/baixing-frontend \
+            --set-string image.frontend.tag=ci \
+            --set-string backend.secret.DATABASE_URL=postgresql+asyncpg://user:pass@test-subcharts-postgresql:5432/baixing_law \
+            --set-string backend.secret.JWT_SECRET_KEY=dummy_jwt_secret_key \
+            --set-string backend.secret.PAYMENT_WEBHOOK_SECRET=dummy_payment_webhook_secret \
+            --set-string backend.secret.REDIS_URL=redis://:pass@test-subcharts-redis-master:6379/0 \
+            --set-string backend.secret.OPENAI_API_KEY=dummy_openai_api_key \
+            --set-string ingress.host=example.com \
+            > /tmp/helm-rendered-subcharts.yaml
+
+      - name: Helm template (render) - externalSecret enabled
+        run: |
+          set -euo pipefail
+          helm template test-externalsecret ./helm/baixing-assistant \
+            --namespace baixing \
+            --set-string image.backend.repository=example/baixing-backend \
+            --set-string image.backend.tag=ci \
+            --set-string image.frontend.repository=example/baixing-frontend \
+            --set-string image.frontend.tag=ci \
+            --set-string backend.externalSecret.enabled=true \
+            --set-string backend.externalSecret.secretStoreRef.name=dummy \
+            --set-string backend.externalSecret.secretStoreRef.kind=SecretStore \
+            --set-string backend.externalSecret.remoteRefs.DATABASE_URL=dummy_database_url \
+            --set-string backend.externalSecret.remoteRefs.JWT_SECRET_KEY=dummy_jwt_secret_key \
+            --set-string backend.externalSecret.remoteRefs.PAYMENT_WEBHOOK_SECRET=dummy_payment_webhook_secret \
+            --set-string backend.externalSecret.remoteRefs.REDIS_URL=dummy_redis_url \
+            --set-string backend.externalSecret.remoteRefs.OPENAI_API_KEY=dummy_openai_api_key \
+            --set-string ingress.host=example.com \
+            > /tmp/helm-rendered-externalsecret.yaml
+
   # 后端测试
   backend-test:
     runs-on: ubuntu-latest
@@ -199,3 +277,23 @@ jobs:
           echo "- **Branch:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Time:** $(date)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Post-deploy smoke hint
+        run: |
+          echo "## Post Deploy Smoke" >> $GITHUB_STEP_SUMMARY
+          echo "After production deploy, run workflow: .github/workflows/post-deploy-smoke.yml" >> $GITHUB_STEP_SUMMARY
+          echo "Required secrets: BASE_URL, ADMIN_TOKEN" >> $GITHUB_STEP_SUMMARY
+
+  required-checks:
+    runs-on: ubuntu-latest
+    needs: [helm-validate, backend-test, frontend-build]
+    if: always()
+    steps:
+      - name: Verify required jobs
+        run: |
+          echo "helm-validate=${{ needs.helm-validate.result }}"
+          echo "backend-test=${{ needs.backend-test.result }}"
+          echo "frontend-build=${{ needs.frontend-build.result }}"
+          test "${{ needs.helm-validate.result }}" = "success"
+          test "${{ needs.backend-test.result }}" = "success"
+          test "${{ needs.frontend-build.result }}" = "success"

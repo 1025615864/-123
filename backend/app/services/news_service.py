@@ -1,4 +1,5 @@
 """新闻服务层"""
+import json
 import logging
 import math
 from collections.abc import Sequence
@@ -23,6 +24,7 @@ from ..models.news import (
     NewsTopicItem,
 )
 from ..models.news_ai import NewsAIAnnotation
+from ..models.news_workbench import NewsVersion
 from ..models.notification import Notification, NotificationType
 from ..schemas.news import NewsCreate, NewsUpdate
 
@@ -32,6 +34,40 @@ logger = logging.getLogger(__name__)
 
 class NewsService:
     """新闻服务"""
+
+    @staticmethod
+    def _news_snapshot(news: News) -> dict[str, object]:
+        def _dt(v: object) -> str | None:
+            if isinstance(v, datetime):
+                return v.isoformat()
+            return None
+
+        return {
+            "id": int(getattr(news, "id", 0) or 0),
+            "title": str(getattr(news, "title", "") or ""),
+            "summary": getattr(news, "summary", None),
+            "content": str(getattr(news, "content", "") or ""),
+            "cover_image": getattr(news, "cover_image", None),
+            "category": str(getattr(news, "category", "") or ""),
+            "source": getattr(news, "source", None),
+            "source_url": getattr(news, "source_url", None),
+            "source_site": getattr(news, "source_site", None),
+            "author": getattr(news, "author", None),
+            "is_top": bool(getattr(news, "is_top", False)),
+            "is_published": bool(getattr(news, "is_published", False)),
+            "review_status": str(getattr(news, "review_status", "") or ""),
+            "review_reason": getattr(news, "review_reason", None),
+            "reviewed_at": _dt(getattr(news, "reviewed_at", None)),
+            "published_at": _dt(getattr(news, "published_at", None)),
+            "scheduled_publish_at": _dt(getattr(news, "scheduled_publish_at", None)),
+            "scheduled_unpublish_at": _dt(getattr(news, "scheduled_unpublish_at", None)),
+            "created_at": _dt(getattr(news, "created_at", None)),
+            "updated_at": _dt(getattr(news, "updated_at", None)),
+        }
+
+    @staticmethod
+    def _snapshot_json(news: News) -> str:
+        return json.dumps(NewsService._news_snapshot(news), ensure_ascii=False)
 
     _hot_cache: dict[tuple[int, str | None, str | None], tuple[float, list[int]]] = {}
     _hot_cache_ttl_seconds: int = 60
@@ -178,7 +214,7 @@ class NewsService:
         return len(ids)
     
     @staticmethod
-    async def create(db: AsyncSession, news_data: NewsCreate) -> News:
+    async def create(db: AsyncSession, news_data: NewsCreate, *, admin_user_id: int | None = None) -> News:
         """创建新闻"""
         now = datetime.now()
         scheduled_publish_at = news_data.scheduled_publish_at
@@ -234,6 +270,19 @@ class NewsService:
             scheduled_unpublish_at=scheduled_unpublish_at,
         )
         db.add(news)
+
+        if admin_user_id is not None and int(admin_user_id) > 0:
+            await db.flush()
+            db.add(
+                NewsVersion(
+                    news_id=int(news.id),
+                    action="create",
+                    reason=None,
+                    snapshot_json=NewsService._snapshot_json(news),
+                    created_by=int(admin_user_id),
+                )
+            )
+
         await db.commit()
         await db.refresh(news)
         return news
@@ -269,6 +318,10 @@ class NewsService:
         published_only: bool = True,
         review_status: str | None = None,
         ai_risk_level: str | None = None,
+        source_site: str | None = None,
+        source: str | None = None,
+        from_dt: datetime | None = None,
+        to_dt: datetime | None = None,
     ) -> tuple[list[News], int]:
         """获取新闻列表"""
         query = select(News)
@@ -298,6 +351,24 @@ class NewsService:
             )
             query = query.where(search_filter)
             count_query = count_query.where(search_filter)
+
+        ss = str(source_site or "").strip()
+        if ss:
+            query = query.where(News.source_site == ss)
+            count_query = count_query.where(News.source_site == ss)
+
+        src = str(source or "").strip()
+        if src:
+            query = query.where(News.source == src)
+            count_query = count_query.where(News.source == src)
+
+        ts_expr = func.coalesce(News.published_at, News.created_at)
+        if from_dt is not None:
+            query = query.where(ts_expr >= from_dt)
+            count_query = count_query.where(ts_expr >= from_dt)
+        if to_dt is not None:
+            query = query.where(ts_expr <= to_dt)
+            count_query = count_query.where(ts_expr <= to_dt)
 
         rl = str(ai_risk_level or "").strip().lower()
         if rl and rl != "all":
@@ -375,7 +446,15 @@ class NewsService:
         return news
     
     @staticmethod
-    async def update(db: AsyncSession, news: News, news_data: NewsUpdate) -> News:
+    async def update(
+        db: AsyncSession,
+        news: News,
+        news_data: NewsUpdate,
+        *,
+        admin_user_id: int | None = None,
+        version_action: str = "update",
+        version_reason: str | None = None,
+    ) -> News:
         """更新新闻"""
         update_data: dict[str, object] = news_data.model_dump(exclude_unset=True)
 
@@ -415,10 +494,120 @@ class NewsService:
         
         for field, value in update_data.items():
             setattr(news, field, value)
-        
+
+        if admin_user_id is not None and int(admin_user_id) > 0:
+            db.add(
+                NewsVersion(
+                    news_id=int(news.id),
+                    action=str(version_action or "update").strip() or "update",
+                    reason=str(version_reason).strip() if version_reason is not None else None,
+                    snapshot_json=NewsService._snapshot_json(news),
+                    created_by=int(admin_user_id),
+                )
+            )
+
         await db.commit()
         await db.refresh(news)
         return news
+
+    @staticmethod
+    async def list_versions(db: AsyncSession, news_id: int, *, limit: int = 50) -> list[NewsVersion]:
+        q = (
+            select(NewsVersion)
+            .where(NewsVersion.news_id == int(news_id))
+            .order_by(desc(NewsVersion.created_at), desc(NewsVersion.id))
+            .limit(int(max(1, min(200, limit))))
+        )
+        res = await db.execute(q)
+        return list(res.scalars().all())
+
+    @staticmethod
+    async def rollback_to_version(
+        db: AsyncSession,
+        news_id: int,
+        version_id: int,
+        *,
+        admin_user_id: int,
+        reason: str | None = None,
+    ) -> News | None:
+        news = await NewsService.get_by_id(db, int(news_id))
+        if news is None:
+            return None
+
+        res = await db.execute(
+            select(NewsVersion).where(
+                and_(
+                    NewsVersion.id == int(version_id),
+                    NewsVersion.news_id == int(news_id),
+                )
+            )
+        )
+        ver = res.scalar_one_or_none()
+        if ver is None:
+            raise ValueError("version not found")
+
+        raw = str(getattr(ver, "snapshot_json", "") or "").strip()
+        if not raw:
+            raise ValueError("empty snapshot")
+
+        try:
+            snap_obj: object = json.loads(raw)
+        except Exception as e:
+            raise ValueError("invalid snapshot") from e
+        if not isinstance(snap_obj, dict):
+            raise ValueError("invalid snapshot")
+        snap = cast(dict[str, object], snap_obj)
+
+        def _dt(value: object) -> datetime | None:
+            if isinstance(value, datetime):
+                return value
+            if isinstance(value, str):
+                s = value.strip()
+                if not s:
+                    return None
+                try:
+                    return datetime.fromisoformat(s)
+                except Exception:
+                    return None
+            return None
+
+        update_payload: dict[str, object] = {}
+        for k in (
+            "title",
+            "summary",
+            "content",
+            "cover_image",
+            "category",
+            "source",
+            "source_url",
+            "source_site",
+            "author",
+            "is_top",
+            "is_published",
+            "review_status",
+            "review_reason",
+        ):
+            if k in snap:
+                update_payload[k] = snap.get(k)
+
+        for k in (
+            "reviewed_at",
+            "published_at",
+            "scheduled_publish_at",
+            "scheduled_unpublish_at",
+        ):
+            if k in snap:
+                update_payload[k] = _dt(snap.get(k))
+
+        news_update = NewsUpdate(**update_payload)
+        return await NewsService.update(
+            db,
+            news,
+            news_update,
+            admin_user_id=int(admin_user_id),
+            version_action="rollback",
+            version_reason=str(reason).strip() if reason is not None else f"rollback_to_{int(version_id)}",
+        )
 
     @staticmethod
     async def process_scheduled_news(db: AsyncSession, batch_size: int = 50) -> tuple[int, int]:
@@ -523,6 +712,10 @@ class NewsService:
         page_size: int = 20,
         category: str | None = None,
         keyword: str | None = None,
+        ai_risk_level: str | None = None,
+        source_site: str | None = None,
+        from_dt: datetime | None = None,
+        to_dt: datetime | None = None,
     ) -> tuple[list[News], int]:
         query = (
             select(News)
@@ -562,6 +755,36 @@ class NewsService:
             )
             query = query.where(search_filter)
             count_query = count_query.where(search_filter)
+
+        ss = str(source_site or "").strip()
+        if ss:
+            query = query.where(News.source_site == ss)
+            count_query = count_query.where(News.source_site == ss)
+
+        ts_expr = func.coalesce(News.published_at, News.created_at)
+        if from_dt is not None:
+            query = query.where(ts_expr >= from_dt)
+            count_query = count_query.where(ts_expr >= from_dt)
+        if to_dt is not None:
+            query = query.where(ts_expr <= to_dt)
+            count_query = count_query.where(ts_expr <= to_dt)
+
+        rl = str(ai_risk_level or "").strip().lower()
+        if rl and rl != "all":
+            if rl == "unknown":
+                query = query.outerjoin(NewsAIAnnotation, NewsAIAnnotation.news_id == News.id).where(
+                    or_(NewsAIAnnotation.risk_level == "unknown", NewsAIAnnotation.id.is_(None))
+                )
+                count_query = count_query.outerjoin(NewsAIAnnotation, NewsAIAnnotation.news_id == News.id).where(
+                    or_(NewsAIAnnotation.risk_level == "unknown", NewsAIAnnotation.id.is_(None))
+                )
+            else:
+                query = query.join(NewsAIAnnotation, NewsAIAnnotation.news_id == News.id).where(
+                    NewsAIAnnotation.risk_level == rl
+                )
+                count_query = count_query.join(NewsAIAnnotation, NewsAIAnnotation.news_id == News.id).where(
+                    NewsAIAnnotation.risk_level == rl
+                )
 
         query = query.offset((page - 1) * page_size).limit(page_size)
 
@@ -781,6 +1004,10 @@ class NewsService:
         page_size: int = 20,
         category: str | None = None,
         keyword: str | None = None,
+        ai_risk_level: str | None = None,
+        source_site: str | None = None,
+        from_dt: datetime | None = None,
+        to_dt: datetime | None = None,
     ) -> tuple[list[News], int]:
         subs = await NewsService.list_subscriptions(db, int(user_id))
         categories = [str(s.value) for s in subs if str(s.sub_type) == "category" and str(s.value).strip()]
@@ -829,16 +1056,43 @@ class NewsService:
             )
             conditions.append(search_filter)
 
+        ss = str(source_site or "").strip()
+        if ss:
+            conditions.append(News.source_site == ss)
+
+        ts_expr = func.coalesce(News.published_at, News.created_at)
+        if from_dt is not None:
+            conditions.append(ts_expr >= from_dt)
+        if to_dt is not None:
+            conditions.append(ts_expr <= to_dt)
+
         where_clause = and_(*conditions)
 
+        query = select(News).where(where_clause)
+        count_query = select(func.count(News.id)).where(where_clause)
+
+        rl = str(ai_risk_level or "").strip().lower()
+        if rl and rl != "all":
+            if rl == "unknown":
+                query = query.outerjoin(NewsAIAnnotation, NewsAIAnnotation.news_id == News.id).where(
+                    or_(NewsAIAnnotation.risk_level == "unknown", NewsAIAnnotation.id.is_(None))
+                )
+                count_query = count_query.outerjoin(NewsAIAnnotation, NewsAIAnnotation.news_id == News.id).where(
+                    or_(NewsAIAnnotation.risk_level == "unknown", NewsAIAnnotation.id.is_(None))
+                )
+            else:
+                query = query.join(NewsAIAnnotation, NewsAIAnnotation.news_id == News.id).where(
+                    NewsAIAnnotation.risk_level == rl
+                )
+                count_query = count_query.join(NewsAIAnnotation, NewsAIAnnotation.news_id == News.id).where(
+                    NewsAIAnnotation.risk_level == rl
+                )
+
         query = (
-            select(News)
-            .where(where_clause)
-            .order_by(desc(News.is_top), desc(News.published_at), desc(News.created_at))
+            query.order_by(desc(News.is_top), desc(News.published_at), desc(News.created_at))
             .offset((page - 1) * page_size)
             .limit(page_size)
         )
-        count_query = select(func.count(News.id)).where(where_clause)
 
         result = await db.execute(query)
         items = list(result.scalars().all())
@@ -1070,6 +1324,10 @@ class NewsService:
         page_size: int = 20,
         category: str | None = None,
         keyword: str | None = None,
+        ai_risk_level: str | None = None,
+        source_site: str | None = None,
+        from_dt: datetime | None = None,
+        to_dt: datetime | None = None,
     ) -> tuple[list[News], int]:
         query = (
             select(News)
@@ -1088,6 +1346,27 @@ class NewsService:
         if keyword:
             search_filter = News.title.contains(keyword) | News.content.contains(keyword)
             query = query.where(search_filter)
+
+        ss = str(source_site or "").strip()
+        if ss:
+            query = query.where(News.source_site == ss)
+
+        ts_expr = func.coalesce(News.published_at, News.created_at)
+        if from_dt is not None:
+            query = query.where(ts_expr >= from_dt)
+        if to_dt is not None:
+            query = query.where(ts_expr <= to_dt)
+
+        rl = str(ai_risk_level or "").strip().lower()
+        if rl and rl != "all":
+            if rl == "unknown":
+                query = query.outerjoin(NewsAIAnnotation, NewsAIAnnotation.news_id == News.id).where(
+                    or_(NewsAIAnnotation.risk_level == "unknown", NewsAIAnnotation.id.is_(None))
+                )
+            else:
+                query = query.join(NewsAIAnnotation, NewsAIAnnotation.news_id == News.id).where(
+                    NewsAIAnnotation.risk_level == rl
+                )
 
         query = query.offset((page - 1) * page_size).limit(page_size)
 
@@ -1110,6 +1389,27 @@ class NewsService:
         if keyword:
             search_filter = News.title.contains(keyword) | News.content.contains(keyword)
             count_query = count_query.where(search_filter)
+
+        ss = str(source_site or "").strip()
+        if ss:
+            count_query = count_query.where(News.source_site == ss)
+
+        ts_expr = func.coalesce(News.published_at, News.created_at)
+        if from_dt is not None:
+            count_query = count_query.where(ts_expr >= from_dt)
+        if to_dt is not None:
+            count_query = count_query.where(ts_expr <= to_dt)
+
+        rl = str(ai_risk_level or "").strip().lower()
+        if rl and rl != "all":
+            if rl == "unknown":
+                count_query = count_query.outerjoin(NewsAIAnnotation, NewsAIAnnotation.news_id == News.id).where(
+                    or_(NewsAIAnnotation.risk_level == "unknown", NewsAIAnnotation.id.is_(None))
+                )
+            else:
+                count_query = count_query.join(NewsAIAnnotation, NewsAIAnnotation.news_id == News.id).where(
+                    NewsAIAnnotation.risk_level == rl
+                )
 
         count_result = await db.execute(count_query)
         total = int(count_result.scalar() or 0)
@@ -1205,6 +1505,10 @@ class NewsService:
         page_size: int = 20,
         category: str | None = None,
         keyword: str | None = None,
+        ai_risk_level: str | None = None,
+        source_site: str | None = None,
+        from_dt: datetime | None = None,
+        to_dt: datetime | None = None,
     ) -> tuple[list[News], int]:
         desired = max(1, int(page)) * max(1, int(page_size))
         needed_fetch_limit = min(300, max(200, desired * 3))
@@ -1294,6 +1598,37 @@ class NewsService:
                     kw_key,
                     len(all_ids),
                 )
+
+        ss = str(source_site or "").strip()
+        rl = str(ai_risk_level or "").strip().lower()
+
+        if all_ids and (ss or (rl and rl != "all") or (from_dt is not None) or (to_dt is not None)):
+            q = select(News.id).where(News.id.in_(all_ids))
+            if ss:
+                q = q.where(News.source_site == ss)
+
+            ts_expr = func.coalesce(News.published_at, News.created_at)
+            if from_dt is not None:
+                q = q.where(ts_expr >= from_dt)
+            if to_dt is not None:
+                q = q.where(ts_expr <= to_dt)
+
+            if rl and rl != "all":
+                if rl == "unknown":
+                    q = q.outerjoin(NewsAIAnnotation, NewsAIAnnotation.news_id == News.id).where(
+                        or_(NewsAIAnnotation.risk_level == "unknown", NewsAIAnnotation.id.is_(None))
+                    )
+                else:
+                    q = q.join(NewsAIAnnotation, NewsAIAnnotation.news_id == News.id).where(
+                        NewsAIAnnotation.risk_level == rl
+                    )
+
+            allow_res = await db.execute(q)
+            allowed = {int(x) for x in allow_res.scalars().all()}
+            if allowed:
+                all_ids = [i for i in all_ids if i in allowed]
+            else:
+                all_ids = []
 
         total = len(all_ids)
         start = max(0, (int(page) - 1) * int(page_size))

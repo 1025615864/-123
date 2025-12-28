@@ -80,7 +80,7 @@ class RequestLogger:
         path: str,
         user_id: int | None = None,
         ip: str | None = None,
-        extra: dict | None = None
+        extra: dict[str, object] | None = None
     ) -> None:
         """记录请求"""
         msg = f"REQUEST {method} {path}"

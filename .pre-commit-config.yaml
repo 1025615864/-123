@@ -19,7 +19,8 @@ repos:
       - id: pyright
         name: pyright
         entry: pyright
-        language: system
+        language: python
+        additional_dependencies: [pyright]
         types: [python]
         args: ["--project", "backend/pyrightconfig.json"]
         pass_filenames: false
