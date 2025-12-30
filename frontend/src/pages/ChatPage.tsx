@@ -62,6 +62,9 @@ interface Message {
   quickReplies?: string[];
   thinkingSteps?: ThinkingStep[];
   isThinking?: boolean;
+  intent?: string;
+  needsClarification?: boolean;
+  clarifyingQuestions?: string[];
 }
 
 const GUEST_AI_LIMIT = 5;
@@ -512,6 +515,9 @@ export default function ChatPage() {
             references: [],
             thinkingSteps: [],
             isThinking: true,
+            intent: undefined,
+            needsClarification: undefined,
+            clarifyingQuestions: undefined,
           },
         ];
       });
@@ -618,6 +624,27 @@ export default function ChatPage() {
             receivedSessionId = sid;
             setCurrentSessionId(sid);
           }
+          return;
+        }
+        if (eventType === "meta") {
+          const intent = data?.intent;
+          const needs = data?.needs_clarification;
+          const questions = data?.clarifying_questions;
+
+          const cleanedQuestions = Array.isArray(questions)
+            ? questions
+                .filter((q) => typeof q === "string" && q.trim())
+                .map((q) => String(q).trim())
+                .slice(0, 6)
+            : undefined;
+
+          applyAssistantUpdate((m) => ({
+            ...m,
+            intent: typeof intent === "string" ? intent : m.intent,
+            needsClarification:
+              typeof needs === "boolean" ? needs : m.needsClarification,
+            clarifyingQuestions: cleanedQuestions ?? m.clarifyingQuestions,
+          }));
           return;
         }
         if (eventType === "thinking") {
@@ -835,6 +862,18 @@ export default function ChatPage() {
                 content: response.answer,
                 references: response.references || [],
                 quickReplies: [],
+                intent:
+                  typeof response.intent === "string" ? response.intent : undefined,
+                needsClarification:
+                  typeof response.needs_clarification === "boolean"
+                    ? response.needs_clarification
+                    : undefined,
+                clarifyingQuestions: Array.isArray(response.clarifying_questions)
+                  ? response.clarifying_questions
+                      .filter((q: any) => typeof q === "string" && q.trim())
+                      .map((q: any) => String(q).trim())
+                      .slice(0, 6)
+                  : undefined,
               },
             ];
           }
@@ -846,6 +885,18 @@ export default function ChatPage() {
             content: response.answer,
             references: response.references || [],
             quickReplies: current.quickReplies || [],
+            intent:
+              typeof response.intent === "string" ? response.intent : current.intent,
+            needsClarification:
+              typeof response.needs_clarification === "boolean"
+                ? response.needs_clarification
+                : current.needsClarification,
+            clarifyingQuestions: Array.isArray(response.clarifying_questions)
+              ? response.clarifying_questions
+                  .filter((q: any) => typeof q === "string" && q.trim())
+                  .map((q: any) => String(q).trim())
+                  .slice(0, 6)
+              : current.clarifyingQuestions,
             id:
               typeof response.assistant_message_id === "number"
                 ? response.assistant_message_id
@@ -995,6 +1046,9 @@ export default function ChatPage() {
                       thinkingSteps={message.thinkingSteps}
                       isThinking={message.isThinking}
                       quickReplies={message.quickReplies}
+                      intent={message.intent}
+                      needsClarification={message.needsClarification}
+                      clarifyingQuestions={message.clarifyingQuestions}
                       onQuickReplySelect={(text) => {
                         setInput(text);
                         requestAnimationFrame(() => inputRef.current?.focus());
@@ -1250,6 +1304,9 @@ function AssistantMessage({
   thinkingSteps,
   isThinking,
   quickReplies,
+  intent,
+  needsClarification,
+  clarifyingQuestions,
   onQuickReplySelect,
   isStreaming,
 }: {
@@ -1259,6 +1316,9 @@ function AssistantMessage({
   thinkingSteps?: ThinkingStep[];
   isThinking?: boolean;
   quickReplies?: string[];
+  intent?: string;
+  needsClarification?: boolean;
+  clarifyingQuestions?: string[];
   onQuickReplySelect?: (text: string) => void;
   isStreaming?: boolean;
 }) {
@@ -1792,6 +1852,37 @@ function AssistantMessage({
                 {String(text)}
               </button>
             ))}
+        </div>
+      )}
+
+      {(needsClarification ?? true) &&
+        Array.isArray(clarifyingQuestions) &&
+        clarifyingQuestions.length > 0 && (
+        <div className="pt-1">
+          <div className="flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
+            <Lightbulb className="h-3.5 w-3.5" />
+            <span>建议追问</span>
+            {typeof intent === "string" && intent.trim() && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] bg-indigo-50 text-indigo-700 border border-indigo-200 dark:bg-indigo-900/20 dark:text-indigo-200 dark:border-indigo-800">
+                {intent.trim()}
+              </span>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2 pt-2">
+            {clarifyingQuestions
+              .filter((t) => typeof t === "string" && t.trim())
+              .slice(0, 6)
+              .map((text, idx) => (
+                <button
+                  key={`cq-${idx}`}
+                  type="button"
+                  onClick={() => onQuickReplySelect?.(String(text))}
+                  className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition-colors dark:bg-indigo-900/20 dark:hover:bg-indigo-900/30 dark:text-indigo-200 dark:border-indigo-800"
+                >
+                  {String(text)}
+                </button>
+              ))}
+          </div>
         </div>
       )}
 
