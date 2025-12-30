@@ -91,3 +91,11 @@ class QuickRepliesResponse(BaseModel):
 
 class TranscribeResponse(BaseModel):
     text: str = Field(..., description="语音转写文本")
+
+
+class FileAnalyzeResponse(BaseModel):
+    filename: str = Field(..., description="文件名")
+    content_type: str | None = Field(None, description="文件类型")
+    text_chars: int = Field(..., description="提取文本长度")
+    text_preview: str = Field(..., description="提取文本预览")
+    summary: str = Field(..., description="分析摘要")

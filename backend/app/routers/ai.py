@@ -2,6 +2,7 @@
 import uuid
 import asyncio
 import io
+import tempfile
 import json
 import logging
 import time
@@ -34,6 +35,7 @@ from ..schemas.ai import (
     QuickRepliesRequest,
     QuickRepliesResponse,
     TranscribeResponse,
+    FileAnalyzeResponse,
 )
 from ..utils.deps import get_current_user, get_current_user_optional
 from ..utils.rate_limiter import rate_limit, RateLimitConfig, rate_limiter, get_client_ip
@@ -1242,6 +1244,249 @@ async def transcribe(
             message="语音转写失败",
             request_id=request_id,
         )
+
+
+@router.post("/files/analyze", response_model=FileAnalyzeResponse)
+@rate_limit(*RateLimitConfig.AI_CHAT, by_ip=True, by_user=False)
+async def analyze_file(
+    request: Request,
+    response: Response,
+    file: Annotated[UploadFile, File(...)],
+    current_user: Annotated[User | None, Depends(get_current_user_optional)] = None,
+):
+    started_at = float(time.time())
+    request_id = uuid.uuid4().hex
+    ai_metrics.record_request("file_analyze")
+    client_ip = get_client_ip(request)
+
+    current_user_id: int | None = None
+    if current_user is not None:
+        try:
+            identity = inspect(current_user).identity
+            if identity:
+                current_user_id = cast(int | None, identity[0])
+        except Exception:
+            current_user_id = None
+
+    user_id_str = str(current_user_id) if current_user_id is not None else "guest"
+
+    e2e_mock_enabled = bool(settings.debug) and str(request.headers.get("X-E2E-Mock-AI") or "").strip() == "1"
+    if e2e_mock_enabled:
+        try:
+            _ = await file.read()
+        except Exception:
+            pass
+        response.headers["X-Request-Id"] = request_id
+        return FileAnalyzeResponse(
+            filename=str(file.filename or "attachment"),
+            content_type=str(file.content_type or "") or None,
+            text_chars=12,
+            text_preview="这是一个E2E mock 的文件内容",
+            summary="这是一个E2E mock 的文件分析结果",
+        )
+
+    if not settings.openai_api_key:
+        error_code = ERROR_AI_NOT_CONFIGURED
+        message = "AI服务未配置：请设置 OPENAI_API_KEY 后重试"
+        ai_metrics.record_error(
+            endpoint="file_analyze",
+            request_id=request_id,
+            error_code=error_code,
+            status_code=503,
+            message=message,
+        )
+        _audit_event(
+            "file_analyze_error",
+            {
+                "request_id": request_id,
+                "endpoint": "file_analyze",
+                "user_id": user_id_str,
+                "ip": client_ip,
+                "status_code": 503,
+                "error_code": error_code,
+                "duration_ms": int((time.time() - started_at) * 1000),
+            },
+        )
+        return _make_error_response(
+            status_code=503,
+            error_code=error_code,
+            message=message,
+            request_id=request_id,
+        )
+
+    if current_user is None:
+        _enforce_guest_ai_quota(request)
+
+    try:
+        content = await file.read()
+    except Exception:
+        return _make_error_response(
+            status_code=400,
+            error_code=ERROR_AI_BAD_REQUEST,
+            message="读取文件失败",
+            request_id=request_id,
+        )
+
+    if not content:
+        return _make_error_response(
+            status_code=400,
+            error_code=ERROR_AI_BAD_REQUEST,
+            message="文件为空",
+            request_id=request_id,
+        )
+
+    if len(content) > 10 * 1024 * 1024:
+        return _make_error_response(
+            status_code=400,
+            error_code=ERROR_AI_BAD_REQUEST,
+            message="文件大小不能超过 10MB",
+            request_id=request_id,
+        )
+
+    filename = str(file.filename or "attachment").strip() or "attachment"
+    content_type = str(file.content_type or "").strip() or None
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+    def _extract_text_sync() -> str:
+        if ext == "pdf" or (content_type or "").lower() == "application/pdf":
+            from pypdf import PdfReader
+
+            reader = PdfReader(io.BytesIO(content))
+            parts: list[str] = []
+            for page in reader.pages:
+                t = page.extract_text() or ""
+                if t:
+                    parts.append(t)
+            return "\n".join(parts)
+
+        if ext == "docx" or (content_type or "").lower() == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+            import os
+            import docx2txt
+
+            tmp_path: str | None = None
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
+                    tmp.write(content)
+                    tmp_path = tmp.name
+                return str(docx2txt.process(tmp_path) or "")
+            finally:
+                if tmp_path:
+                    try:
+                        os.remove(tmp_path)
+                    except Exception:
+                        pass
+
+        if ext in {"txt", "md", "csv", "json"} or (content_type or "").startswith("text/"):
+            try:
+                return content.decode("utf-8", errors="replace")
+            except Exception:
+                return str(content.decode(errors="replace"))
+
+        raise ValueError("unsupported")
+
+    try:
+        extracted = await asyncio.to_thread(_extract_text_sync)
+    except ValueError:
+        return _make_error_response(
+            status_code=400,
+            error_code=ERROR_AI_BAD_REQUEST,
+            message="不支持的文件类型",
+            request_id=request_id,
+        )
+    except Exception:
+        return _make_error_response(
+            status_code=500,
+            error_code=ERROR_AI_INTERNAL_ERROR,
+            message="文件解析失败",
+            request_id=request_id,
+        )
+
+    extracted_norm = str(extracted or "").strip()
+    if not extracted_norm:
+        return _make_error_response(
+            status_code=400,
+            error_code=ERROR_AI_BAD_REQUEST,
+            message="无法从文件中提取文本",
+            request_id=request_id,
+        )
+
+    max_chars = 200_000
+    if len(extracted_norm) > max_chars:
+        extracted_norm = extracted_norm[:max_chars]
+
+    preview = extracted_norm[:4000]
+
+    def _summarize_sync() -> str:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url)
+        res = client.chat.completions.create(
+            model=str(settings.ai_model or "").strip() or "gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "你是法律文书/材料分析助手。请用简洁中文输出：1) 摘要 2) 关键信息要点 3) 风险与建议。",
+                },
+                {
+                    "role": "user",
+                    "content": f"请分析以下文件内容：\n\n{extracted_norm}",
+                },
+            ],
+            temperature=0.2,
+            max_tokens=800,
+        )
+        choices = getattr(res, "choices", None)
+        if not choices:
+            return ""
+        msg = getattr(choices[0], "message", None)
+        return str(getattr(msg, "content", "") or "")
+
+    try:
+        summary = await asyncio.to_thread(_summarize_sync)
+    except Exception:
+        ai_metrics.record_error(
+            endpoint="file_analyze",
+            request_id=request_id,
+            error_code=ERROR_AI_INTERNAL_ERROR,
+            status_code=500,
+            message="summarize_failed",
+        )
+        return _make_error_response(
+            status_code=500,
+            error_code=ERROR_AI_INTERNAL_ERROR,
+            message="文件分析失败",
+            request_id=request_id,
+        )
+
+    summary_norm = str(summary or "").strip()
+    if not summary_norm:
+        return _make_error_response(
+            status_code=500,
+            error_code=ERROR_AI_INTERNAL_ERROR,
+            message="文件分析失败",
+            request_id=request_id,
+        )
+
+    _audit_event(
+        "file_analyze_ok",
+        {
+            "request_id": request_id,
+            "endpoint": "file_analyze",
+            "user_id": user_id_str,
+            "ip": client_ip,
+            "duration_ms": int((time.time() - started_at) * 1000),
+            "text_len": len(extracted_norm),
+        },
+    )
+
+    response.headers["X-Request-Id"] = request_id
+    return FileAnalyzeResponse(
+        filename=filename,
+        content_type=content_type,
+        text_chars=len(extracted_norm),
+        text_preview=preview,
+        summary=summary_norm,
+    )
 
 
 @router.post("/quick-replies", response_model=QuickRepliesResponse)

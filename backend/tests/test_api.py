@@ -1272,6 +1272,20 @@ class TestAIConsultationAPI:
         assert isinstance(res.headers.get("X-Request-Id"), str)
 
     @pytest.mark.asyncio
+    async def test_ai_files_analyze_supports_e2e_mock(self, client: AsyncClient):
+        res = await client.post(
+            "/api/ai/files/analyze",
+            files={"file": ("test.txt", b"hello", "text/plain")},
+            headers={"X-E2E-Mock-AI": "1"},
+        )
+        assert res.status_code == 200
+        payload = _json_dict(res)
+        assert payload.get("filename") == "test.txt"
+        assert payload.get("summary") == "这是一个E2E mock 的文件分析结果"
+        assert isinstance(payload.get("text_chars"), int)
+        assert isinstance(res.headers.get("X-Request-Id"), str)
+
+    @pytest.mark.asyncio
     async def test_ai_consultation_report_sets_rfc5987_filename(
         self,
         client: AsyncClient,

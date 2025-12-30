@@ -28,6 +28,7 @@ import {
   ThumbsDown,
   Mic,
   MicOff,
+  Paperclip,
 } from "lucide-react";
 import api from "../api/client";
 import { useAppMutation, useToast } from "../hooks";
@@ -104,11 +105,13 @@ export default function ChatPage() {
   const [loading, setLoading] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const [analyzingFile, setAnalyzingFile] = useState(false);
   const streamingAssistantIndexRef = useRef<number | null>(null);
   const streamingAbortRef = useRef<AbortController | null>(null);
   const skipNextLoadSessionIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recordingStreamRef = useRef<MediaStream | null>(null);
   const recordingChunksRef = useRef<BlobPart[]>([]);
@@ -134,6 +137,13 @@ export default function ChatPage() {
     } catch {}
     recordingStreamRef.current = null;
   }, []);
+
+  const scrollToBottom = useCallback(
+    (behavior: ScrollBehavior = "smooth") => {
+      messagesEndRef.current?.scrollIntoView({ behavior });
+    },
+    []
+  );
 
   const toggleRecording = useCallback(async () => {
     if (recording) {
@@ -235,6 +245,42 @@ export default function ChatPage() {
       stopRecordingTracks();
     };
   }, [stopRecordingTracks]);
+
+  const handleAnalyzeFile = useCallback(
+    async (file: File) => {
+      if (!file) return;
+      if (loading || streaming || transcribing || analyzingFile) return;
+
+      try {
+        setAnalyzingFile(true);
+        const fd = new FormData();
+        fd.append("file", file, file.name);
+        const res = await api.post("/ai/files/analyze", fd, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+        const filename = String(res?.data?.filename ?? file.name).trim() || file.name;
+        const summary = String(res?.data?.summary ?? "").trim();
+        if (!summary) {
+          toast.error("文件分析失败，请重试");
+          return;
+        }
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: "assistant",
+            content: `【文件分析：${filename}】\n${summary}`,
+          },
+        ]);
+        requestAnimationFrame(() => scrollToBottom());
+      } catch (e) {
+        toast.error(getApiErrorMessage(e, "文件分析失败，请稍后再试"));
+      } finally {
+        setAnalyzingFile(false);
+      }
+    },
+    [analyzingFile, loading, scrollToBottom, streaming, toast, transcribing]
+  );
 
   const loadSession = useCallback(async (sid: string) => {
     try {
@@ -342,13 +388,9 @@ export default function ChatPage() {
     []
   );
 
-  const scrollToBottom = (behavior: ScrollBehavior = "smooth") => {
-    messagesEndRef.current?.scrollIntoView({ behavior });
-  };
-
   useEffect(() => {
     scrollToBottom(streaming ? "auto" : "smooth");
-  }, [messages, streaming]);
+  }, [messages, scrollToBottom, streaming]);
 
   useEffect(() => {
     resizeInput();
@@ -1028,10 +1070,34 @@ export default function ChatPage() {
                 placeholder="输入您的法律问题..."
                 rows={1}
                 disabled={loading || streaming}
-                className="w-full px-5 py-4 pr-28 rounded-3xl bg-transparent text-slate-900 dark:text-white placeholder:text-slate-400 outline-none resize-none max-h-48 text-sm leading-relaxed"
+                className="w-full px-5 py-4 pr-40 rounded-3xl bg-transparent text-slate-900 dark:text-white placeholder:text-slate-400 outline-none resize-none max-h-48 text-sm leading-relaxed"
                 style={{ minHeight: "56px" }}
               />
               <div className="absolute right-2 bottom-2 flex items-center gap-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  data-testid="chat-file-input"
+                  accept=".pdf,.docx,.txt,.md,.csv,.json,application/pdf,text/plain,text/markdown,text/csv,application/json,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  onChange={(e) => {
+                    const picked = e.target.files?.[0];
+                    e.target.value = "";
+                    if (!picked) return;
+                    void handleAnalyzeFile(picked);
+                  }}
+                />
+                <Button
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={loading || streaming || transcribing || analyzingFile}
+                  isLoading={analyzingFile}
+                  loadingText=""
+                  size="sm"
+                  aria-label="上传文件"
+                  className="w-10 h-10 p-0 rounded-full transition-all bg-slate-100 hover:bg-slate-200 text-slate-600 shadow-md hover:shadow-lg dark:bg-slate-700 dark:hover:bg-slate-600 dark:text-slate-200"
+                >
+                  <Paperclip className="h-4 w-4" />
+                </Button>
                 <Button
                   onClick={toggleRecording}
                   disabled={loading || streaming || transcribing}
