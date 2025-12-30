@@ -2,6 +2,7 @@
 import base64
 import json
 import pytest
+from collections.abc import AsyncGenerator
 from httpx import AsyncClient, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import cast
@@ -1023,6 +1024,43 @@ class TestSystemAPI:
         assert response.status_code == 401
 
 
+class TestSystemAIOpsStatus:
+    @pytest.mark.asyncio
+    async def test_get_ai_ops_status_admin(self, client: AsyncClient, test_session: AsyncSession):
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        admin = User(
+            username="a_ai_ops",
+            email="a_ai_ops@example.com",
+            nickname="a_ai_ops",
+            hashed_password=hash_password("Test123456"),
+            role="admin",
+            is_active=True,
+        )
+        test_session.add(admin)
+        await test_session.commit()
+        await test_session.refresh(admin)
+
+        token = create_access_token({"sub": str(admin.id)})
+
+        res = await client.get(
+            "/api/system/ai/status",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 200
+        data = _json_dict(res)
+        assert "ai_router_enabled" in data
+        assert "openai_api_key_configured" in data
+        assert "chat_requests_total" in data
+        assert "chat_stream_requests_total" in data
+        assert "errors_total" in data
+        assert "top_error_codes" in data
+        assert "top_endpoints" in data
+        assert isinstance(data.get("top_error_codes"), list)
+        assert isinstance(data.get("top_endpoints"), list)
+
+
 class TestAIConsultationAPI:
     @pytest.mark.asyncio
     async def test_ai_chat_seeds_history_and_enforces_permission(
@@ -1079,7 +1117,13 @@ class TestAIConsultationAPI:
         await test_session.commit()
 
         class FakeAssistant:
-            async def chat(self, *, message: str, session_id: str | None = None, initial_history=None):
+            async def chat(
+                self,
+                *,
+                message: str,
+                session_id: str | None = None,
+                initial_history: list[dict[str, str]] | None = None,
+            ) -> tuple[str, str, list[object]]:
                 _ = message
                 assert session_id == sid
                 assert isinstance(initial_history, list)
@@ -1096,6 +1140,9 @@ class TestAIConsultationAPI:
             headers={"Authorization": f"Bearer {token_u1}"},
         )
         assert res.status_code == 200
+        req_id = res.headers.get("X-Request-Id")
+        assert isinstance(req_id, str)
+        assert req_id.strip() != ""
         data = _json_dict(res)
         assert data.get("session_id") == sid
         assert data.get("answer") == "OK"
@@ -1108,3 +1155,290 @@ class TestAIConsultationAPI:
             headers={"Authorization": f"Bearer {token_u2}"},
         )
         assert res2.status_code == 403
+        assert isinstance(res2.headers.get("X-Request-Id"), str)
+        assert isinstance(res2.headers.get("X-Error-Code"), str)
+        payload2 = _json_dict(res2)
+        assert payload2.get("error_code") == "AI_FORBIDDEN"
+        assert isinstance(payload2.get("request_id"), str)
+
+    @pytest.mark.asyncio
+    async def test_ai_consultations_list_supports_q_search(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        from app.models.consultation import Consultation, ChatMessage
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        u1 = User(
+            username="ai_search_u1",
+            email="ai_search_u1@example.com",
+            nickname="ai_search_u1",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        u2 = User(
+            username="ai_search_u2",
+            email="ai_search_u2@example.com",
+            nickname="ai_search_u2",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add_all([u1, u2])
+        await test_session.commit()
+        await test_session.refresh(u1)
+        await test_session.refresh(u2)
+
+        token_u1 = create_access_token({"sub": str(u1.id)})
+
+        c1 = Consultation(user_id=u1.id, session_id="s_search_1", title="劳动纠纷咨询")
+        c2 = Consultation(user_id=u1.id, session_id="s_search_2", title="合同纠纷")
+        c_other = Consultation(user_id=u2.id, session_id="s_search_3", title="劳动相关")
+        test_session.add_all([c1, c2, c_other])
+        await test_session.commit()
+        await test_session.refresh(c1)
+        await test_session.refresh(c2)
+        await test_session.refresh(c_other)
+
+        test_session.add_all(
+            [
+                ChatMessage(consultation_id=c1.id, role="user", content="我被拖欠工资怎么办"),
+                ChatMessage(consultation_id=c2.id, role="user", content="Contract breach details"),
+                ChatMessage(consultation_id=c_other.id, role="user", content="工资"),
+            ]
+        )
+        await test_session.commit()
+
+        res1 = await client.get(
+            "/api/ai/consultations",
+            params={"q": "劳动"},
+            headers={"Authorization": f"Bearer {token_u1}"},
+        )
+        assert res1.status_code == 200
+        items1 = cast(object, res1.json())
+        assert isinstance(items1, list)
+        sids1 = {str(x.get("session_id")) for x in cast(list[dict[str, object]], items1)}
+        assert "s_search_1" in sids1
+        assert "s_search_2" not in sids1
+        assert "s_search_3" not in sids1
+
+        res2 = await client.get(
+            "/api/ai/consultations",
+            params={"q": "CONTRACT"},
+            headers={"Authorization": f"Bearer {token_u1}"},
+        )
+        assert res2.status_code == 200
+        items2 = cast(object, res2.json())
+        assert isinstance(items2, list)
+        sids2 = {str(x.get("session_id")) for x in cast(list[dict[str, object]], items2)}
+        assert "s_search_2" in sids2
+        assert "s_search_1" not in sids2
+
+        res3 = await client.get(
+            "/api/ai/consultations",
+            params={"q": "工资"},
+            headers={"Authorization": f"Bearer {token_u1}"},
+        )
+        assert res3.status_code == 200
+        items3 = cast(object, res3.json())
+        assert isinstance(items3, list)
+        sids3 = {str(x.get("session_id")) for x in cast(list[dict[str, object]], items3)}
+        assert "s_search_1" in sids3
+        assert "s_search_2" not in sids3
+
+        res4 = await client.get(
+            "/api/ai/consultations",
+            params={"q": "no_such_keyword"},
+            headers={"Authorization": f"Bearer {token_u1}"},
+        )
+        assert res4.status_code == 200
+        items4 = cast(object, res4.json())
+        assert isinstance(items4, list)
+        assert len(items4) == 0
+
+    @pytest.mark.asyncio
+    async def test_ai_chat_stream_always_emits_done_on_stream_error(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+        monkeypatch: MonkeyPatch,
+    ):
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        import app.routers.ai as ai_router
+
+        monkeypatch.setattr(ai_router.settings, "openai_api_key", "test", raising=True)
+
+        user = User(
+            username="ai_stream_u1",
+            email="ai_stream_u1@example.com",
+            nickname="ai_stream_u1",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        token = create_access_token({"sub": str(user.id)})
+
+        sid = "stream_error_sid"
+
+        class FakeAssistant:
+            async def chat_stream(
+                self,
+                *,
+                message: str,
+                session_id: str | None = None,
+                initial_history: list[dict[str, str]] | None = None,
+            ) -> AsyncGenerator[tuple[str, dict[str, object]], None]:
+                _ = message
+                _ = initial_history
+                yield ("session", {"session_id": cast(str, session_id)})
+                yield ("content", {"text": "hi"})
+                raise RuntimeError("boom")
+
+        monkeypatch.setattr(ai_router, "_try_get_ai_assistant", lambda: FakeAssistant(), raising=True)
+
+        async with client.stream(
+            "POST",
+            "/api/ai/chat/stream",
+            json={"message": "hello", "session_id": sid},
+            headers={"Authorization": f"Bearer {token}"},
+        ) as res:
+            assert res.status_code == 200
+            req_id = res.headers.get("X-Request-Id")
+            assert isinstance(req_id, str)
+            assert req_id.strip() != ""
+            raw = ""
+            async for chunk in res.aiter_text():
+                raw += chunk
+
+        def _extract_done_payload(text: str) -> dict[str, object]:
+            blocks = [b for b in text.split("\n\n") if b.strip()]
+            for block in reversed(blocks):
+                lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+                event_type = "message"
+                data_line = ""
+                for ln in lines:
+                    if ln.startswith("event:"):
+                        event_type = ln[6:].strip()
+                    elif ln.startswith("data:"):
+                        data_line += ln[5:].strip()
+                if event_type != "done" or not data_line:
+                    continue
+                parsed = json.loads(data_line)
+                assert isinstance(parsed, dict)
+                return cast(dict[str, object], parsed)
+            raise AssertionError("done event not found")
+
+        done_payload = _extract_done_payload(raw)
+        assert done_payload.get("session_id") == sid
+        assert done_payload.get("persist_error") == "stream_failed"
+        done_req_id = done_payload.get("request_id")
+        assert isinstance(done_req_id, str)
+        assert done_req_id.strip() != ""
+
+    @pytest.mark.asyncio
+    async def test_ai_chat_stream_always_emits_done_on_persist_forbidden(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+        monkeypatch: MonkeyPatch,
+    ):
+        from app.models.consultation import Consultation
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        import app.routers.ai as ai_router
+
+        monkeypatch.setattr(ai_router.settings, "openai_api_key", "test", raising=True)
+
+        u1 = User(
+            username="ai_stream_owner",
+            email="ai_stream_owner@example.com",
+            nickname="ai_stream_owner",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        u2 = User(
+            username="ai_stream_other",
+            email="ai_stream_other@example.com",
+            nickname="ai_stream_other",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add_all([u1, u2])
+        await test_session.commit()
+        await test_session.refresh(u1)
+        await test_session.refresh(u2)
+
+        token_u2 = create_access_token({"sub": str(u2.id)})
+
+        sid = "persist_forbidden_sid"
+        cons = Consultation(user_id=u1.id, session_id=sid, title="t")
+        test_session.add(cons)
+        await test_session.commit()
+
+        class FakeAssistant:
+            async def chat_stream(
+                self,
+                *,
+                message: str,
+                session_id: str | None = None,
+                initial_history: list[dict[str, str]] | None = None,
+            ) -> AsyncGenerator[tuple[str, dict[str, object]], None]:
+                _ = message
+                _ = session_id
+                _ = initial_history
+                yield ("session", {"session_id": sid})
+                yield ("content", {"text": "ok"})
+                yield ("done", {"session_id": sid})
+
+        monkeypatch.setattr(ai_router, "_try_get_ai_assistant", lambda: FakeAssistant(), raising=True)
+
+        async with client.stream(
+            "POST",
+            "/api/ai/chat/stream",
+            json={"message": "hello"},
+            headers={"Authorization": f"Bearer {token_u2}"},
+        ) as res:
+            assert res.status_code == 200
+            req_id = res.headers.get("X-Request-Id")
+            assert isinstance(req_id, str)
+            assert req_id.strip() != ""
+            raw = ""
+            async for chunk in res.aiter_text():
+                raw += chunk
+
+        def _extract_done_payload(text: str) -> dict[str, object]:
+            blocks = [b for b in text.split("\n\n") if b.strip()]
+            for block in reversed(blocks):
+                lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+                event_type = "message"
+                data_line = ""
+                for ln in lines:
+                    if ln.startswith("event:"):
+                        event_type = ln[6:].strip()
+                    elif ln.startswith("data:"):
+                        data_line += ln[5:].strip()
+                if event_type != "done" or not data_line:
+                    continue
+                parsed = json.loads(data_line)
+                assert isinstance(parsed, dict)
+                return cast(dict[str, object], parsed)
+            raise AssertionError("done event not found")
+
+        done_payload = _extract_done_payload(raw)
+        assert done_payload.get("session_id") == sid
+        assert done_payload.get("persist_error") == "persist_forbidden"
+        done_req_id = done_payload.get("request_id")
+        assert isinstance(done_req_id, str)
+        assert done_req_id.strip() != ""

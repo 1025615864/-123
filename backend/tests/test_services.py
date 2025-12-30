@@ -1,7 +1,6 @@
 """服务层单元测试"""
 import json
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 
 class TestEmailService:
@@ -190,7 +189,7 @@ class TestSecurity:
         """测试JWT创建和解码"""
         from app.utils.security import create_access_token, decode_token
         
-        data = {"sub": "123"}
+        data: dict[str, object] = {"sub": "123"}
         token = create_access_token(data)
         
         decoded = decode_token(token)

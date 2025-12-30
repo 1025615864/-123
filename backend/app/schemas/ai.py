@@ -77,3 +77,13 @@ class RatingResponse(BaseModel):
     """评价响应"""
     success: bool = True
     message: str = "评价成功"
+
+
+class QuickRepliesRequest(BaseModel):
+    user_message: str = Field(..., min_length=1, max_length=2000, description="用户消息")
+    assistant_answer: str = Field(..., min_length=1, max_length=8000, description="AI回复")
+    references: Annotated[list[LawReference], Field(default_factory=list, description="引用的法律条文")]
+
+
+class QuickRepliesResponse(BaseModel):
+    replies: Annotated[list[str], Field(default_factory=list, description="快捷回复候选")]

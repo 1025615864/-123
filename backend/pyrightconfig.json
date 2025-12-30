@@ -1,14 +1,35 @@
 {
-  "include": ["app"],
-  "exclude": [".venv", "tests", "alembic", "scripts"],
-  "pythonVersion": "3.10",
+  "include": ["app", "tests"],
+  "exclude": [".venv", "alembic", "scripts"],
+  "pythonVersion": "3.13",
+  "typeCheckingMode": "basic",
   "executionEnvironments": [
+    {
+      "root": "./tests",
+      "extraPaths": ["./"],
+      "reportGeneralTypeIssues": "none",
+      "reportMissingParameterType": "none",
+      "reportMissingTypeArgument": "none",
+      "reportUnknownArgumentType": "none",
+      "reportUnknownMemberType": "none",
+      "reportUnknownParameterType": "none",
+      "reportUnknownVariableType": "none",
+      "reportUnusedImport": "none",
+      "reportUnusedVariable": "none"
+    },
+    {
+      "root": "./app",
+      "extraPaths": ["./"]
+    },
     {
       "root": "./",
       "extraPaths": ["./"]
     }
   ],
   "reportCallInDefaultInitializer": "none",
+  "reportPrivateUsage": "none",
+  "reportUnusedVariable": "none",
+  "reportUnusedImport": "none",
   "reportMissingImports": "none",
   "reportMissingModuleSource": "none"
 }

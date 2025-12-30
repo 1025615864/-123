@@ -33,3 +33,4 @@ redis>=5.0.0
 # Document Processing
 pypdf==3.17.1
 docx2txt==0.8
+reportlab>=4.0.0

@@ -2,6 +2,7 @@
 import uuid
 import logging
 import time
+from collections.abc import AsyncGenerator
 from typing import cast
 
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
@@ -12,6 +13,9 @@ from pydantic import SecretStr
 
 from ..config import get_settings
 from ..schemas.ai import LawReference
+from .ai_response_strategy import ResponseStrategy, ResponseStrategyDecider, SearchQuality
+from .content_safety import ContentSafetyFilter, RiskLevel
+from .disclaimer import DisclaimerManager
 
 settings = get_settings()
 
@@ -20,6 +24,10 @@ logger = logging.getLogger(__name__)
 
 class LegalKnowledgeBase:
     """法律知识库管理"""
+
+    RELEVANCE_THRESHOLD: float = 0.75
+    MIN_REFERENCES: int = 1
+    MAX_REFERENCES: int = 5
     
     def __init__(self):
         self.embeddings: OpenAIEmbeddings | None = None
@@ -103,11 +111,64 @@ class LegalKnowledgeBase:
                 metadata_raw = getattr(doc_obj, "metadata", {})
                 if not isinstance(metadata_raw, dict):
                     metadata_raw = {}
-                packed.append((content, cast(dict[str, object], metadata_raw), float(score)))
+                similarity = self._score_to_similarity(float(score))
+                packed.append((content, cast(dict[str, object], metadata_raw), similarity))
             return packed
         except Exception:
             logger.exception("搜索失败")
             return []
+
+    def search_with_quality_control(
+        self,
+        query: str,
+        *,
+        k: int = 5,
+        threshold: float | None = None,
+    ) -> tuple[list[tuple[str, dict[str, object], float]], SearchQuality]:
+        th = float(self.RELEVANCE_THRESHOLD if threshold is None else threshold)
+
+        candidates = self.search(query, k=k)
+        filtered = [r for r in candidates if float(r[2]) >= th]
+        filtered = filtered[: int(self.MAX_REFERENCES)]
+
+        if filtered:
+            avg_similarity = sum(float(r[2]) for r in filtered) / float(len(filtered))
+        else:
+            avg_similarity = 0.0
+
+        confidence = self._calculate_confidence(filtered)
+        return (
+            filtered,
+            SearchQuality(
+                total_candidates=len(candidates),
+                qualified_count=len(filtered),
+                avg_similarity=float(avg_similarity),
+                confidence=str(confidence),
+            ),
+        )
+
+    def _calculate_confidence(self, results: list[tuple[str, dict[str, object], float]]) -> str:
+        if not results:
+            return "low"
+        avg = sum(float(r[2]) for r in results) / float(len(results))
+        if avg >= 0.85 and len(results) >= 2:
+            return "high"
+        if avg >= 0.7:
+            return "medium"
+        return "low"
+
+    def _score_to_similarity(self, score: float) -> float:
+        if score <= 0:
+            return 1.0
+        if score <= 1:
+            sim = 1.0 - score
+        else:
+            sim = 1.0 / (1.0 + score)
+        if sim < 0:
+            return 0.0
+        if sim > 1:
+            return 1.0
+        return float(sim)
 
 
 class AILegalAssistant:
@@ -175,6 +236,9 @@ class AILegalAssistant:
         )
         self.knowledge_base: LegalKnowledgeBase = LegalKnowledgeBase()
         self.knowledge_base.initialize()
+        self.safety_filter: ContentSafetyFilter = ContentSafetyFilter()
+        self.strategy_decider: ResponseStrategyDecider = ResponseStrategyDecider()
+        self.disclaimer_manager: DisclaimerManager = DisclaimerManager()
         self.conversation_histories: dict[str, list[dict[str, str]]] = {}
         self._last_seen: dict[str, float] = {}
         self._max_sessions: int = 5000
@@ -214,9 +278,18 @@ class AILegalAssistant:
                 law_name=str(metadata.get('law_name', '未知法律')),
                 article=str(metadata.get('article', '未知条款')),
                 content=content,
-                relevance=round(1 - score, 2) if score < 1 else round(score, 2)
+                relevance=round(float(score), 2)
             ))
         return result
+
+    def _append_disclaimer(self, answer: str, *, risk_level: RiskLevel, strategy: ResponseStrategy) -> str:
+        disclaimer = self.disclaimer_manager.get_disclaimer(risk_level=risk_level, strategy=strategy)
+        if not str(disclaimer or "").strip():
+            return answer
+
+        if "仅供参考" in str(answer):
+            return answer
+        return str(answer) + str(disclaimer)
 
     def _normalize_history(self, history: list[dict[str, str]]) -> list[dict[str, str]]:
         normalized: list[dict[str, str]] = []
@@ -259,6 +332,10 @@ class AILegalAssistant:
         self._last_seen[new_session_id] = time.time()
         self._evict_if_needed()
         return new_session_id
+
+    def clear_session(self, session_id: str) -> None:
+        _ = self.conversation_histories.pop(str(session_id), None)
+        _ = self._last_seen.pop(str(session_id), None)
     
     async def chat(
         self, 
@@ -278,30 +355,53 @@ class AILegalAssistant:
             (session_id, answer, references)
         """
         session_id = self.get_or_create_session(session_id, initial_history=initial_history)
-        
-        references = self.knowledge_base.search(message, k=5)
+
+        safety = self.safety_filter.check_input(message)
+        if safety.risk_level == RiskLevel.BLOCKED:
+            answer = str(safety.suggestion or "很抱歉，我无法回答这类问题。如需帮助，请联系专业机构。")
+            answer = self._append_disclaimer(answer, risk_level=safety.risk_level, strategy=ResponseStrategy.REFUSE_ANSWER)
+            answer = self.safety_filter.sanitize_output(answer)
+            history = self.conversation_histories.get(session_id, [])
+            history.append({'role': 'user', 'content': message})
+            history.append({'role': 'assistant', 'content': answer})
+            self.conversation_histories[session_id] = history[-self._max_messages_per_session:]
+            self._last_seen[session_id] = time.time()
+            self._evict_if_needed()
+            return session_id, answer, []
+
+        references, quality = self.knowledge_base.search_with_quality_control(message, k=5)
+        decision = self.strategy_decider.decide(message, quality, risk_level=safety.risk_level)
         context = self._build_context(references)
-        
+
         history = self.conversation_histories.get(session_id, [])
-        
-        messages: list[BaseMessage] = [
-            SystemMessage(content=self.SYSTEM_PROMPT.format(context=context))
-        ]
-        
-        for msg in history[-10:]:
-            if msg['role'] == 'user':
-                messages.append(HumanMessage(content=msg['content']))
-            else:
-                messages.append(AIMessage(content=msg['content']))
-        
-        messages.append(HumanMessage(content=message))
-        
-        try:
-            response = await self.llm.agenerate([messages])
-            answer = response.generations[0][0].text
-        except Exception:
-            logger.exception("AI服务调用失败")
-            answer = "抱歉，AI服务暂时不可用。您可以稍后重试，或直接联系我们的在线律师获取帮助。"
+
+        answer: str
+        if decision.strategy == ResponseStrategy.REDIRECT:
+            answer = "您的问题可能涉及较高风险或需要结合具体案情，建议您尽快咨询专业律师获取针对性意见。"
+        elif decision.strategy == ResponseStrategy.REFUSE_ANSWER:
+            answer = str(safety.suggestion or "很抱歉，我无法回答这类问题。")
+        else:
+            messages: list[BaseMessage] = [
+                SystemMessage(content=self.SYSTEM_PROMPT.format(context=context))
+            ]
+
+            for msg in history[-10:]:
+                if msg['role'] == 'user':
+                    messages.append(HumanMessage(content=msg['content']))
+                else:
+                    messages.append(AIMessage(content=msg['content']))
+
+            messages.append(HumanMessage(content=message))
+
+            try:
+                response = await self.llm.agenerate([messages])
+                answer = response.generations[0][0].text
+            except Exception:
+                logger.exception("AI服务调用失败")
+                answer = "抱歉，AI服务暂时不可用。您可以稍后重试，或直接联系我们的在线律师获取帮助。"
+
+        answer = self._append_disclaimer(answer, risk_level=safety.risk_level, strategy=decision.strategy)
+        answer = self.safety_filter.sanitize_output(answer)
         
         history.append({'role': 'user', 'content': message})
         history.append({'role': 'assistant', 'content': answer})
@@ -313,19 +413,13 @@ class AILegalAssistant:
         
         return session_id, answer, parsed_refs
     
-    def clear_session(self, session_id: str):
-        """清除会话历史"""
-        if session_id in self.conversation_histories:
-            del self.conversation_histories[session_id]
-        _ = self._last_seen.pop(session_id, None)
-    
     async def chat_stream(
         self, 
         message: str, 
         session_id: str | None = None,
         *,
         initial_history: list[dict[str, str]] | None = None,
-    ):
+    ) -> AsyncGenerator[tuple[str, dict[str, object]], None]:
         """
         流式对话
         
@@ -337,57 +431,116 @@ class AILegalAssistant:
             (event_type, data) - 事件类型和数据
         """
         session_id = self.get_or_create_session(session_id, initial_history=initial_history)
-        
-        references = self.knowledge_base.search(message, k=5)
+
+        safety = self.safety_filter.check_input(message)
+        if safety.risk_level == RiskLevel.BLOCKED:
+            yield ("session", {"session_id": session_id})
+            yield ("references", {"references": []})
+
+            full_answer = str(safety.suggestion or "很抱歉，我无法回答这类问题。如需帮助，请联系专业机构。")
+            full_answer = self._append_disclaimer(
+                full_answer,
+                risk_level=safety.risk_level,
+                strategy=ResponseStrategy.REFUSE_ANSWER,
+            )
+            full_answer = self.safety_filter.sanitize_output(full_answer)
+            yield ("content", {"text": full_answer})
+
+            history = self.conversation_histories.get(session_id, [])
+            history.append({"role": "user", "content": message})
+            history.append({"role": "assistant", "content": full_answer})
+            self.conversation_histories[session_id] = history[-self._max_messages_per_session:]
+            self._last_seen[session_id] = time.time()
+            self._evict_if_needed()
+            yield ("done", {"session_id": session_id})
+            return
+
+        references, quality = self.knowledge_base.search_with_quality_control(message, k=5)
+        decision = self.strategy_decider.decide(message, quality, risk_level=safety.risk_level)
         context = self._build_context(references)
         parsed_refs = self._parse_references(references)
-        
-        # 先发送session_id和引用
+
         yield ("session", {"session_id": session_id})
         yield ("references", {"references": [ref.model_dump() for ref in parsed_refs]})
-        
+
         history = self.conversation_histories.get(session_id, [])
-        
+
         messages: list[BaseMessage] = [
             SystemMessage(content=self.SYSTEM_PROMPT.format(context=context))
         ]
-        
+
         for msg in history[-10:]:
-            if msg['role'] == 'user':
-                messages.append(HumanMessage(content=msg['content']))
+            if msg["role"] == "user":
+                messages.append(HumanMessage(content=msg["content"]))
             else:
-                messages.append(AIMessage(content=msg['content']))
-        
+                messages.append(AIMessage(content=msg["content"]))
+
         messages.append(HumanMessage(content=message))
-        
+
         full_answer = ""
-        try:
-            async for chunk in self.llm.astream(messages):
-                raw = cast(object | None, getattr(chunk, "content", None))
-                if raw is None:
-                    continue
-                if isinstance(raw, str):
-                    content = raw
-                elif isinstance(raw, list):
-                    content = "".join(str(item) for item in cast(list[object], raw))
-                else:
-                    content = str(raw)
-                if content:
+
+        if decision.strategy == ResponseStrategy.REDIRECT:
+            full_answer = "您的问题可能涉及较高风险或需要结合具体案情，建议您尽快咨询专业律师获取针对性意见。"
+            full_answer = self._append_disclaimer(
+                full_answer,
+                risk_level=safety.risk_level,
+                strategy=decision.strategy,
+            )
+            full_answer = self.safety_filter.sanitize_output(full_answer)
+            yield ("content", {"text": full_answer})
+        elif decision.strategy == ResponseStrategy.REFUSE_ANSWER:
+            full_answer = str(safety.suggestion or "很抱歉，我无法回答这类问题。")
+            full_answer = self._append_disclaimer(
+                full_answer,
+                risk_level=safety.risk_level,
+                strategy=decision.strategy,
+            )
+            full_answer = self.safety_filter.sanitize_output(full_answer)
+            yield ("content", {"text": full_answer})
+        else:
+            try:
+                async for chunk in self.llm.astream(messages):
+                    raw = cast(object | None, getattr(chunk, "content", None))
+                    if raw is None:
+                        continue
+                    if isinstance(raw, str):
+                        content = raw
+                    elif isinstance(raw, list):
+                        content = "".join(str(item) for item in cast(list[object], raw))
+                    else:
+                        content = str(raw)
+                    if not content:
+                        continue
+                    content = self.safety_filter.sanitize_output(content)
                     full_answer += content
                     yield ("content", {"text": content})
-        except Exception:
-            logger.exception("AI服务调用失败")
-            error_msg = "抱歉，AI服务暂时不可用。"
-            yield ("content", {"text": error_msg})
-            full_answer = error_msg
-        
-        # 更新历史
-        history.append({'role': 'user', 'content': message})
-        history.append({'role': 'assistant', 'content': full_answer})
+            except Exception:
+                logger.exception("AI服务调用失败")
+                error_msg = "抱歉，AI服务暂时不可用。"
+                error_msg = self.safety_filter.sanitize_output(error_msg)
+                full_answer = error_msg
+                yield ("content", {"text": error_msg})
+
+            with_disclaimer = self._append_disclaimer(
+                full_answer,
+                risk_level=safety.risk_level,
+                strategy=decision.strategy,
+            )
+            if with_disclaimer.startswith(full_answer):
+                suffix = with_disclaimer[len(full_answer) :]
+                suffix = self.safety_filter.sanitize_output(suffix)
+                if suffix:
+                    full_answer += suffix
+                    yield ("content", {"text": suffix})
+            else:
+                full_answer = self.safety_filter.sanitize_output(with_disclaimer)
+
+        history.append({"role": "user", "content": message})
+        history.append({"role": "assistant", "content": full_answer})
         self.conversation_histories[session_id] = history[-self._max_messages_per_session:]
         self._last_seen[session_id] = time.time()
         self._evict_if_needed()
-        
+
         yield ("done", {"session_id": session_id})
 
 

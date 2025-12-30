@@ -59,19 +59,21 @@ def _news_ai_providers_config_contains_api_key(decoded_json: str) -> bool:
     if not s:
         return False
     try:
-        obj: object = json.loads(s)
-        if isinstance(obj, list):
-            for item in obj:
-                if not isinstance(item, dict):
+        obj_raw: object = cast(object, json.loads(s))
+        if isinstance(obj_raw, list):
+            for item_obj in cast(list[object], obj_raw):
+                if not isinstance(item_obj, dict):
                     continue
-                for k in item.keys():
-                    kk = str(k or "").strip().lower()
+                item_dict = cast(dict[object, object], item_obj)
+                for k_obj in item_dict.keys():
+                    kk = str(k_obj or "").strip().lower()
                     if kk in {"api_key", "apikey"}:
                         return True
             return False
-        if isinstance(obj, dict):
-            for k in obj.keys():
-                kk = str(k or "").strip().lower()
+        if isinstance(obj_raw, dict):
+            obj_dict = cast(dict[object, object], obj_raw)
+            for k_obj in obj_dict.keys():
+                kk = str(k_obj or "").strip().lower()
                 if kk in {"api_key", "apikey"}:
                     return True
             return False
@@ -415,6 +417,181 @@ async def get_news_ai_status(
         top_errors=top_errors,
         recent_errors=recent_errors,
         config_overrides={k: (_mask_config_value(k, v) or "") for k, v in cfg_overrides.items()},
+    )
+
+
+class AiOpsRecentError(BaseModel):
+    at: str
+    request_id: str
+    endpoint: str
+    error_code: str
+    status_code: int | None
+    message: str | None
+
+
+class AiOpsTopErrorCode(BaseModel):
+    error_code: str
+    count: int
+
+
+class AiOpsTopEndpoint(BaseModel):
+    endpoint: str
+    count: int
+
+
+class AiOpsStatusResponse(BaseModel):
+    ai_router_enabled: bool
+    openai_api_key_configured: bool
+    openai_base_url: str
+    ai_model: str
+    chroma_persist_dir: str
+    started_at: float
+    started_at_iso: str
+    chat_requests_total: int
+    chat_stream_requests_total: int
+    errors_total: int
+    recent_errors: list[AiOpsRecentError]
+    top_error_codes: list[AiOpsTopErrorCode]
+    top_endpoints: list[AiOpsTopEndpoint]
+
+
+@router.get("/ai/status", response_model=AiOpsStatusResponse)
+async def get_ai_ops_status(
+    _current_user: Annotated[User, Depends(require_admin)],
+):
+    from ..config import get_settings
+    from ..services.ai_metrics import ai_metrics
+
+    settings = get_settings()
+
+    ai_router_enabled = False
+    try:
+        from ..routers import ai as _ai_router
+
+        _ = _ai_router
+        ai_router_enabled = True
+    except Exception:
+        ai_router_enabled = False
+
+    snap = ai_metrics.snapshot()
+
+    recent_errors_obj = snap.get("recent_errors")
+    recent_errors: list[AiOpsRecentError] = []
+    if isinstance(recent_errors_obj, list):
+        for row_obj in cast(list[object], recent_errors_obj):
+            if not isinstance(row_obj, dict):
+                continue
+            row = cast(dict[str, object], row_obj)
+            at = str(row.get("at") or "")
+            request_id = str(row.get("request_id") or "")
+            endpoint = str(row.get("endpoint") or "")
+            error_code = str(row.get("error_code") or "")
+            status_code_obj = row.get("status_code")
+
+            status_code: int | None = None
+            if isinstance(status_code_obj, int):
+                status_code = int(status_code_obj)
+            elif isinstance(status_code_obj, float):
+                status_code = int(status_code_obj)
+            elif isinstance(status_code_obj, str):
+                s2 = status_code_obj.strip()
+                if s2.isdigit():
+                    status_code = int(s2)
+
+            msg_obj = row.get("message")
+            msg = str(msg_obj) if msg_obj is not None else None
+            recent_errors.append(
+                AiOpsRecentError(
+                    at=at,
+                    request_id=request_id,
+                    endpoint=endpoint,
+                    error_code=error_code,
+                    status_code=status_code,
+                    message=msg,
+                )
+            )
+
+    top_error_codes_obj = snap.get("top_error_codes")
+    top_error_codes: list[AiOpsTopErrorCode] = []
+    if isinstance(top_error_codes_obj, list):
+        for row_obj in cast(list[object], top_error_codes_obj):
+            if not isinstance(row_obj, dict):
+                continue
+            row = cast(dict[str, object], row_obj)
+            error_code = str(row.get("error_code") or "").strip()
+            if not error_code:
+                continue
+            count_obj = row.get("count")
+            count = 0
+            if isinstance(count_obj, int):
+                count = int(count_obj)
+            elif isinstance(count_obj, float):
+                count = int(count_obj)
+            elif isinstance(count_obj, str):
+                s3 = count_obj.strip()
+                if s3.isdigit():
+                    count = int(s3)
+            top_error_codes.append(AiOpsTopErrorCode(error_code=error_code, count=int(count)))
+
+    top_endpoints_obj = snap.get("top_endpoints")
+    top_endpoints: list[AiOpsTopEndpoint] = []
+    if isinstance(top_endpoints_obj, list):
+        for row_obj in cast(list[object], top_endpoints_obj):
+            if not isinstance(row_obj, dict):
+                continue
+            row = cast(dict[str, object], row_obj)
+            endpoint = str(row.get("endpoint") or "").strip()
+            if not endpoint:
+                continue
+            count_obj = row.get("count")
+            count = 0
+            if isinstance(count_obj, int):
+                count = int(count_obj)
+            elif isinstance(count_obj, float):
+                count = int(count_obj)
+            elif isinstance(count_obj, str):
+                s4 = count_obj.strip()
+                if s4.isdigit():
+                    count = int(s4)
+            top_endpoints.append(AiOpsTopEndpoint(endpoint=endpoint, count=int(count)))
+
+    started_at_obj = snap.get("started_at")
+    started_at = 0.0
+    if isinstance(started_at_obj, (int, float)):
+        started_at = float(started_at_obj)
+    elif isinstance(started_at_obj, str):
+        try:
+            started_at = float(started_at_obj)
+        except Exception:
+            started_at = 0.0
+
+    started_at_iso = str(snap.get("started_at_iso") or "")
+
+    chat_requests_total_obj = snap.get("chat_requests_total")
+    chat_requests_total = int(chat_requests_total_obj) if isinstance(chat_requests_total_obj, int) else 0
+
+    chat_stream_requests_total_obj = snap.get("chat_stream_requests_total")
+    chat_stream_requests_total = (
+        int(chat_stream_requests_total_obj) if isinstance(chat_stream_requests_total_obj, int) else 0
+    )
+
+    errors_total_obj = snap.get("errors_total")
+    errors_total = int(errors_total_obj) if isinstance(errors_total_obj, int) else 0
+
+    return AiOpsStatusResponse(
+        ai_router_enabled=bool(ai_router_enabled),
+        openai_api_key_configured=bool(str(settings.openai_api_key or "").strip()),
+        openai_base_url=str(settings.openai_base_url),
+        ai_model=str(settings.ai_model),
+        chroma_persist_dir=str(settings.chroma_persist_dir),
+        started_at=started_at,
+        started_at_iso=started_at_iso,
+        chat_requests_total=chat_requests_total,
+        chat_stream_requests_total=chat_stream_requests_total,
+        errors_total=errors_total,
+        recent_errors=recent_errors,
+        top_error_codes=top_error_codes,
+        top_endpoints=top_endpoints,
     )
 
 
