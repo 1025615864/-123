@@ -26,6 +26,8 @@ import {
   Square,
   ThumbsUp,
   ThumbsDown,
+  Mic,
+  MicOff,
 } from "lucide-react";
 import api from "../api/client";
 import { useAppMutation, useToast } from "../hooks";
@@ -100,11 +102,16 @@ export default function ChatPage() {
   const [showTemplateSelector, setShowTemplateSelector] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const streamingAssistantIndexRef = useRef<number | null>(null);
   const streamingAbortRef = useRef<AbortController | null>(null);
   const skipNextLoadSessionIdRef = useRef<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
+  const recordingChunksRef = useRef<BlobPart[]>([]);
   const toast = useToast();
 
   const resizeInput = useCallback(() => {
@@ -114,6 +121,120 @@ export default function ChatPage() {
     const next = Math.min(el.scrollHeight, 200);
     el.style.height = `${next}px`;
   }, []);
+
+  const stopRecordingTracks = useCallback(() => {
+    const stream = recordingStreamRef.current;
+    if (!stream) return;
+    try {
+      stream.getTracks().forEach((t) => {
+        try {
+          t.stop();
+        } catch {}
+      });
+    } catch {}
+    recordingStreamRef.current = null;
+  }, []);
+
+  const toggleRecording = useCallback(async () => {
+    if (recording) {
+      try {
+        recorderRef.current?.stop();
+      } catch {}
+      setRecording(false);
+      return;
+    }
+
+    if (loading || streaming || transcribing) return;
+
+    if (!(navigator as any)?.mediaDevices?.getUserMedia) {
+      toast.error("当前浏览器不支持语音输入");
+      return;
+    }
+    if (!(window as any)?.MediaRecorder) {
+      toast.error("当前浏览器不支持语音输入");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      recordingStreamRef.current = stream;
+
+      const recorder = new MediaRecorder(stream);
+      recorderRef.current = recorder;
+      recordingChunksRef.current = [];
+
+      recorder.ondataavailable = (evt: any) => {
+        try {
+          const data = evt?.data;
+          if (data && typeof data.size === "number" && data.size > 0) {
+            recordingChunksRef.current.push(data);
+          }
+        } catch {}
+      };
+
+      recorder.onstop = () => {
+        const mimeType = String((recorder as any)?.mimeType || "audio/webm");
+        const chunks = recordingChunksRef.current;
+        recordingChunksRef.current = [];
+        recorderRef.current = null;
+        stopRecordingTracks();
+
+        const blob = new Blob(chunks, { type: mimeType || "audio/webm" });
+        if (!blob || blob.size <= 0) {
+          toast.error("录音失败，请重试");
+          return;
+        }
+
+        void (async () => {
+          try {
+            setTranscribing(true);
+            const fd = new FormData();
+            const ext = mimeType.includes("wav")
+              ? "wav"
+              : mimeType.includes("ogg")
+              ? "ogg"
+              : "webm";
+            fd.append("file", blob, `recording.${ext}`);
+            const res = await api.post("/ai/transcribe", fd, {
+              headers: { "Content-Type": "multipart/form-data" },
+            });
+            const text = String(res?.data?.text ?? "").trim();
+            if (!text) {
+              toast.error("语音转写失败，请重试");
+              return;
+            }
+            setInput((prev) => {
+              const base = String(prev ?? "").trim();
+              return base ? `${base}\n${text}` : text;
+            });
+            requestAnimationFrame(() => inputRef.current?.focus());
+          } catch (e) {
+            toast.error(getApiErrorMessage(e, "语音转写失败，请稍后再试"));
+          } finally {
+            setTranscribing(false);
+          }
+        })();
+      };
+
+      recorder.start();
+      setRecording(true);
+    } catch (e) {
+      stopRecordingTracks();
+      recorderRef.current = null;
+      setRecording(false);
+      toast.error(getApiErrorMessage(e, "无法开始录音"));
+    }
+  }, [loading, recording, stopRecordingTracks, streaming, toast, transcribing]);
+
+  useEffect(() => {
+    return () => {
+      try {
+        recorderRef.current?.stop();
+      } catch {}
+      recorderRef.current = null;
+      stopRecordingTracks();
+    };
+  }, [stopRecordingTracks]);
 
   const loadSession = useCallback(async (sid: string) => {
     try {
@@ -310,7 +431,10 @@ export default function ChatPage() {
       });
     };
 
-    const requestQuickReplies = async (answer: string, refs: LawReference[]) => {
+    const requestQuickReplies = async (
+      answer: string,
+      refs: LawReference[]
+    ) => {
       try {
         const res = await api.post("/ai/quick-replies", {
           user_message: userMessage,
@@ -364,8 +488,10 @@ export default function ChatPage() {
       });
 
       if (!res.ok) {
-        const headerRequestId = res.headers.get("X-Request-Id") || res.headers.get("x-request-id");
-        const headerErrorCode = res.headers.get("X-Error-Code") || res.headers.get("x-error-code");
+        const headerRequestId =
+          res.headers.get("X-Request-Id") || res.headers.get("x-request-id");
+        const headerErrorCode =
+          res.headers.get("X-Error-Code") || res.headers.get("x-error-code");
         let message = "";
         let bodyRequestId: string | undefined;
         let bodyErrorCode: string | undefined;
@@ -520,7 +646,9 @@ export default function ChatPage() {
                 `本次回答已生成，但无权限保存到该会话，历史记录可能不会显示。${suffix}`
               );
             } else if (persistError === "stream_failed") {
-              toast.warning(`本次回答可能未完整生成或未能保存（可稍后重试）。${suffix}`);
+              toast.warning(
+                `本次回答可能未完整生成或未能保存（可稍后重试）。${suffix}`
+              );
             } else {
               toast.warning(
                 `本次回答已生成，但保存状态异常，历史记录可能不会显示。${suffix}`
@@ -690,7 +818,9 @@ export default function ChatPage() {
 
         void requestQuickReplies(
           String(response.answer ?? ""),
-          Array.isArray(response.references) ? (response.references as LawReference[]) : []
+          Array.isArray(response.references)
+            ? (response.references as LawReference[])
+            : []
         );
       } catch (e) {
         toast.error(getApiErrorMessage(e, "请求失败，请稍后再试。"));
@@ -898,10 +1028,29 @@ export default function ChatPage() {
                 placeholder="输入您的法律问题..."
                 rows={1}
                 disabled={loading || streaming}
-                className="w-full px-5 py-4 pr-14 rounded-3xl bg-transparent text-slate-900 dark:text-white placeholder:text-slate-400 outline-none resize-none max-h-48 text-sm leading-relaxed"
+                className="w-full px-5 py-4 pr-28 rounded-3xl bg-transparent text-slate-900 dark:text-white placeholder:text-slate-400 outline-none resize-none max-h-48 text-sm leading-relaxed"
                 style={{ minHeight: "56px" }}
               />
-              <div className="absolute right-2 bottom-2">
+              <div className="absolute right-2 bottom-2 flex items-center gap-2">
+                <Button
+                  onClick={toggleRecording}
+                  disabled={loading || streaming || transcribing}
+                  isLoading={transcribing}
+                  loadingText=""
+                  size="sm"
+                  aria-label={recording ? "停止录音" : "语音输入"}
+                  className={`w-10 h-10 p-0 rounded-full transition-all ${
+                    recording
+                      ? "bg-red-600 hover:bg-red-700 text-white shadow-md hover:shadow-lg"
+                      : "bg-slate-100 hover:bg-slate-200 text-slate-600 shadow-md hover:shadow-lg dark:bg-slate-700 dark:hover:bg-slate-600 dark:text-slate-200"
+                  }`}
+                >
+                  {recording ? (
+                    <MicOff className="h-4 w-4" />
+                  ) : (
+                    <Mic className="h-4 w-4" />
+                  )}
+                </Button>
                 <Button
                   onClick={streaming ? stopStreaming : sendMessage}
                   disabled={loading || (!streaming && !input.trim())}
@@ -962,9 +1111,12 @@ function ThinkingProcess({
   };
 
   const stepColor = (type: ThinkingStep["type"]) => {
-    if (type === "intent") return "text-purple-700 bg-purple-50 dark:text-purple-200 dark:bg-purple-900/30";
-    if (type === "retrieval") return "text-blue-700 bg-blue-50 dark:text-blue-200 dark:bg-blue-900/30";
-    if (type === "analysis") return "text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-900/30";
+    if (type === "intent")
+      return "text-purple-700 bg-purple-50 dark:text-purple-200 dark:bg-purple-900/30";
+    if (type === "retrieval")
+      return "text-blue-700 bg-blue-50 dark:text-blue-200 dark:bg-blue-900/30";
+    if (type === "analysis")
+      return "text-emerald-700 bg-emerald-50 dark:text-emerald-200 dark:bg-emerald-900/30";
     return "text-amber-700 bg-amber-50 dark:text-amber-200 dark:bg-amber-900/30";
   };
 
@@ -985,7 +1137,11 @@ function ThinkingProcess({
             思考中...
           </span>
         )}
-        {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        {expanded ? (
+          <ChevronUp className="w-4 h-4" />
+        ) : (
+          <ChevronDown className="w-4 h-4" />
+        )}
       </button>
 
       {expanded && (
@@ -1056,7 +1212,9 @@ function AssistantMessage({
     try {
       const raw = localStorage.getItem(FAVORITES_KEY);
       const parsed = raw ? JSON.parse(raw) : {};
-      const isFav = Boolean(parsed && typeof parsed === "object" && parsed[String(messageId)]);
+      const isFav = Boolean(
+        parsed && typeof parsed === "object" && parsed[String(messageId)]
+      );
       setFavorited(isFav);
     } catch {
       setFavorited(false);
@@ -1068,7 +1226,8 @@ function AssistantMessage({
     try {
       const raw = localStorage.getItem(FAVORITES_KEY);
       const parsed = raw ? JSON.parse(raw) : {};
-      const next: Record<string, any> = parsed && typeof parsed === "object" ? parsed : {};
+      const next: Record<string, any> =
+        parsed && typeof parsed === "object" ? parsed : {};
       const key = String(messageId);
       if (next[key]) {
         delete next[key];
@@ -1218,7 +1377,8 @@ function AssistantMessage({
     const renderInline = (text: string): ReactNode => {
       const nodes: ReactNode[] = [];
 
-      const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const escapeRegExp = (s: string) =>
+        s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const buildLoose = (s: string) => {
         const compact = String(s ?? "").replace(/\s+/g, "");
         return compact
@@ -1240,7 +1400,10 @@ function AssistantMessage({
         })
         .filter(Boolean) as Array<{ ref: LawReference; re: RegExp }>;
 
-      const parseLawRefs = (segment: string, keyPrefix: string): ReactNode[] => {
+      const parseLawRefs = (
+        segment: string,
+        keyPrefix: string
+      ): ReactNode[] => {
         if (!patterns.length) return [segment];
         const out: ReactNode[] = [];
         let remaining = segment;
@@ -1310,7 +1473,10 @@ function AssistantMessage({
         while ((m = emRe.exec(segment)) !== null) {
           if (m.index > last) {
             out.push(
-              ...parseLawRefs(segment.slice(last, m.index), `${keyPrefix}-t-${idx}`)
+              ...parseLawRefs(
+                segment.slice(last, m.index),
+                `${keyPrefix}-t-${idx}`
+              )
             );
           }
           out.push(
@@ -1322,9 +1488,7 @@ function AssistantMessage({
           idx += 1;
         }
         if (last < segment.length) {
-          out.push(
-            ...parseLawRefs(segment.slice(last), `${keyPrefix}-tail`)
-          );
+          out.push(...parseLawRefs(segment.slice(last), `${keyPrefix}-tail`));
         }
         return out;
       };
@@ -1510,7 +1674,9 @@ function AssistantMessage({
         onClose={() => setActiveRef(null)}
         title={
           activeRef
-            ? `《${String(activeRef.law_name ?? "")}》${String(activeRef.article ?? "")}`
+            ? `《${String(activeRef.law_name ?? "")}》${String(
+                activeRef.article ?? ""
+              )}`
             : undefined
         }
         size="lg"
