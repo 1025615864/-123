@@ -9,6 +9,7 @@ from .lawfirm import LawFirm, Lawyer, LawyerConsultation, LawyerReview
 from .knowledge import LegalKnowledge, ConsultationTemplate
 from .notification import Notification
 from .system import SystemConfig, AdminLog
+from .calendar import CalendarReminder
 
 __all__ = [
     "User", 
@@ -37,4 +38,5 @@ __all__ = [
     "Notification",
     "SystemConfig",
     "AdminLog",
+    "CalendarReminder",
 ]

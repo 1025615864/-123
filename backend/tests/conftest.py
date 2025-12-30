@@ -31,6 +31,7 @@ async def test_engine():
         "app.models.notification",
         "app.models.payment",
         "app.models.system",
+        "app.models.calendar",
     ):
         _ = importlib.import_module(module_name)
 

@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from . import admin, document, forum, knowledge, lawfirm, news, notification, payment, search, system, upload, user
+from . import admin, calendar, document, forum, knowledge, lawfirm, news, notification, payment, search, system, upload, user
 
 try:
     from . import ai
@@ -25,3 +25,4 @@ api_router.include_router(system.router)
 api_router.include_router(document.router)
 api_router.include_router(search.router)
 api_router.include_router(payment.router)
+api_router.include_router(calendar.router)

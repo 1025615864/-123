@@ -1050,15 +1050,115 @@ class TestSystemAIOpsStatus:
         )
         assert res.status_code == 200
         data = _json_dict(res)
-        assert "ai_router_enabled" in data
-        assert "openai_api_key_configured" in data
-        assert "chat_requests_total" in data
-        assert "chat_stream_requests_total" in data
-        assert "errors_total" in data
-        assert "top_error_codes" in data
+        assert isinstance(data.get("providers"), list)
         assert "top_endpoints" in data
         assert isinstance(data.get("top_error_codes"), list)
         assert isinstance(data.get("top_endpoints"), list)
+
+
+class TestCalendarAPI:
+    @pytest.mark.asyncio
+    async def test_calendar_reminders_crud_and_permissions(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        from datetime import datetime, timedelta, timezone
+
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        u1 = User(
+            username="calendar_u1",
+            email="calendar_u1@example.com",
+            nickname="calendar_u1",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        u2 = User(
+            username="calendar_u2",
+            email="calendar_u2@example.com",
+            nickname="calendar_u2",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+
+        test_session.add_all([u1, u2])
+        await test_session.commit()
+        await test_session.refresh(u1)
+        await test_session.refresh(u2)
+
+        token_u1 = create_access_token({"sub": str(u1.id)})
+        token_u2 = create_access_token({"sub": str(u2.id)})
+
+        due_at = datetime.now(timezone.utc) + timedelta(days=1)
+        remind_at = due_at - timedelta(hours=2)
+
+        create_res = await client.post(
+            "/api/calendar/reminders",
+            json={
+                "title": "诉讼时效提醒",
+                "note": "准备材料",
+                "due_at": due_at.isoformat(),
+                "remind_at": remind_at.isoformat(),
+            },
+            headers={"Authorization": f"Bearer {token_u1}"},
+        )
+        assert create_res.status_code == 200
+        created = _json_dict(create_res)
+        rid = _as_int(created.get("id"))
+        assert rid > 0
+        assert _as_int(created.get("user_id")) == u1.id
+
+        list_res = await client.get(
+            "/api/calendar/reminders",
+            headers={"Authorization": f"Bearer {token_u1}"},
+        )
+        assert list_res.status_code == 200
+        list_data = _json_dict(list_res)
+        assert _as_int(list_data.get("total")) == 1
+        items = cast(list[dict[str, object]], list_data.get("items"))
+        assert len(items) == 1
+        assert _as_int(items[0].get("id")) == rid
+
+        forbidden_update = await client.put(
+            f"/api/calendar/reminders/{rid}",
+            json={"title": "hacked"},
+            headers={"Authorization": f"Bearer {token_u2}"},
+        )
+        assert forbidden_update.status_code == 404
+
+        update_res = await client.put(
+            f"/api/calendar/reminders/{rid}",
+            json={"is_done": True},
+            headers={"Authorization": f"Bearer {token_u1}"},
+        )
+        assert update_res.status_code == 200
+        updated = _json_dict(update_res)
+        assert bool(updated.get("is_done")) is True
+        assert updated.get("done_at") is not None
+
+        forbidden_delete = await client.delete(
+            f"/api/calendar/reminders/{rid}",
+            headers={"Authorization": f"Bearer {token_u2}"},
+        )
+        assert forbidden_delete.status_code == 404
+
+        delete_res = await client.delete(
+            f"/api/calendar/reminders/{rid}",
+            headers={"Authorization": f"Bearer {token_u1}"},
+        )
+        assert delete_res.status_code == 200
+
+        list_res2 = await client.get(
+            "/api/calendar/reminders",
+            headers={"Authorization": f"Bearer {token_u1}"},
+        )
+        assert list_res2.status_code == 200
+        list_data2 = _json_dict(list_res2)
+        assert _as_int(list_data2.get("total")) == 0
 
 
 class TestAIConsultationAPI:

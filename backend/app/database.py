@@ -59,6 +59,7 @@ async def init_db() -> None:
         "app.models.notification",
         "app.models.payment",
         "app.models.system",
+        "app.models.calendar",
     ):
         _ = importlib.import_module(module_name)
     async with engine.begin() as conn:

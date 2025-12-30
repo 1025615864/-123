@@ -6,11 +6,21 @@ from .ai import (
     ConsultationResponse,
     MessageResponse
 )
+from .calendar import (
+    CalendarReminderCreate,
+    CalendarReminderUpdate,
+    CalendarReminderResponse,
+    CalendarReminderListResponse,
+)
 
 __all__ = [
     "ChatRequest", 
     "ChatResponse", 
     "ConsultationCreate",
     "ConsultationResponse",
-    "MessageResponse"
+    "MessageResponse",
+    "CalendarReminderCreate",
+    "CalendarReminderUpdate",
+    "CalendarReminderResponse",
+    "CalendarReminderListResponse",
 ]
