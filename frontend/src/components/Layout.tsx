@@ -15,6 +15,7 @@ import {
   Mail,
   Calculator,
   Clock,
+  Calendar,
   FileText,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
@@ -49,6 +50,7 @@ export default function Layout() {
     { path: "/lawfirm", label: "律所", icon: Building2 },
     { path: "/calculator", label: "费用计算", icon: Calculator },
     { path: "/limitations", label: "时效计算", icon: Clock },
+    { path: "/calendar", label: "日历", icon: Calendar },
     { path: "/documents", label: "文书生成", icon: FileText },
   ];
 

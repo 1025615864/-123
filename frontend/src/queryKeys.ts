@@ -4,6 +4,8 @@ export const queryKeys = {
   notificationsPreview: (pageSize: number = 10) =>
     ["notifications-preview", { pageSize }] as const,
   adminSystemNotifications: () => ["admin-system-notifications"] as const,
+  calendarReminders: (page: number, pageSize: number, done: boolean | null) =>
+    ["calendar-reminders", { page, pageSize, done }] as const,
   aiConsultationsBase: () => ["ai-consultations"] as const,
   aiConsultations: (q: string = "") => ["ai-consultations", { q }] as const,
   adminDashboardStats: () => ["admin-dashboard-stats"] as const,

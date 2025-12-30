@@ -1,6 +1,6 @@
 // 移动端底部导航组件
 import { Link, useLocation } from 'react-router-dom';
-import { Home, MessageSquare, Newspaper, Scale, User, Search } from 'lucide-react';
+import { Home, MessageSquare, Newspaper, Scale, User, Search, Calendar } from 'lucide-react';
 
 interface NavItem {
   path: string;
@@ -14,6 +14,7 @@ const navItems: NavItem[] = [
   { path: '/search', label: '搜索', icon: Search },
   { path: '/news', label: '资讯', icon: Newspaper },
   { path: '/chat', label: '咨询', icon: Scale },
+  { path: '/calendar', label: '日历', icon: Calendar },
   { path: '/profile', label: '我的', icon: User },
 ];
 

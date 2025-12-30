@@ -35,6 +35,7 @@ const FeeCalculatorPage = lazy(() => import("./pages/FeeCalculatorPage"));
 const LimitationsCalculatorPage = lazy(
   () => import("./pages/LimitationsCalculatorPage")
 );
+const CalendarPage = lazy(() => import("./pages/CalendarPage"));
 const DocumentGeneratorPage = lazy(
   () => import("./pages/DocumentGeneratorPage")
 );
@@ -140,6 +141,7 @@ function App() {
                 <Route path="lawfirm/:firmId" element={<LawFirmDetailPage />} />
                 <Route path="calculator" element={<FeeCalculatorPage />} />
                 <Route path="limitations" element={<LimitationsCalculatorPage />} />
+                <Route path="calendar" element={<CalendarPage />} />
                 <Route path="documents" element={<DocumentGeneratorPage />} />
                 <Route path="login" element={<LoginPage />} />
                 <Route path="register" element={<RegisterPage />} />
