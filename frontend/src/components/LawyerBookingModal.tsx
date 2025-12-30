@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { X, Calendar, Phone, FileText, Send } from 'lucide-react'
 import api from '../api/client'
 import { useAppMutation, useToast } from '../hooks'
@@ -27,6 +28,7 @@ const CASE_TYPES = [
 export default function LawyerBookingModal({ lawyer, onClose, onSuccess }: LawyerBookingModalProps) {
   const { isAuthenticated } = useAuth()
   const toast = useToast()
+  const navigate = useNavigate()
   
   const [formData, setFormData] = useState({
     subject: '',
@@ -50,8 +52,12 @@ export default function LawyerBookingModal({ lawyer, onClose, onSuccess }: Lawye
     successMessage: '预约成功！律师会尽快与您联系',
     errorMessageFallback: '预约失败，请稍后重试',
     onSuccess: () => {
+      const go = window.confirm('预约成功！去查看我的预约吗？')
       onSuccess?.()
       onClose()
+      if (go) {
+        navigate('/lawfirm/consultations')
+      }
     },
   })
 

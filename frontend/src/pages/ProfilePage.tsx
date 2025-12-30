@@ -595,6 +595,19 @@ export default function ProfilePage() {
                   <span className="text-xs">正常</span>
                 </div>
               </div>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Calendar className="h-4 w-4 text-slate-400 dark:text-white/40" />
+                  <span className="text-sm text-slate-700 dark:text-white/70">律师预约</span>
+                </div>
+                <Link
+                  to="/lawfirm/consultations"
+                  className="text-amber-600 text-xs hover:text-amber-700 flex items-center gap-1 dark:text-amber-400 dark:hover:text-amber-300"
+                >
+                  查看
+                  <ExternalLink className="h-3 w-3" />
+                </Link>
+              </div>
             </div>
           </Card>
         </div>
