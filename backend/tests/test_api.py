@@ -1260,6 +1260,66 @@ class TestAIConsultationAPI:
         assert len(items4) == 0
 
     @pytest.mark.asyncio
+    async def test_ai_consultation_report_sets_rfc5987_filename(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+        monkeypatch: MonkeyPatch,
+    ):
+        from app.models.consultation import Consultation, ChatMessage
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        import app.routers.ai as ai_router
+
+        def fake_generate(_report: object) -> bytes:
+            return b"%PDF-1.4\n%\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"
+
+        monkeypatch.setattr(ai_router, "generate_consultation_report_pdf", fake_generate, raising=True)
+
+        u1 = User(
+            username="ai_report_u1",
+            email="ai_report_u1@example.com",
+            nickname="ai_report_u1",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(u1)
+        await test_session.commit()
+        await test_session.refresh(u1)
+
+        token_u1 = create_access_token({"sub": str(u1.id)})
+
+        sid = "s_report_\u6d4b\u8bd5 1"
+        cons = Consultation(user_id=u1.id, session_id=sid, title="t")
+        test_session.add(cons)
+        await test_session.commit()
+        await test_session.refresh(cons)
+
+        test_session.add_all(
+            [
+                ChatMessage(consultation_id=cons.id, role="user", content="hello"),
+                ChatMessage(consultation_id=cons.id, role="assistant", content="hi"),
+            ]
+        )
+        await test_session.commit()
+
+        import urllib.parse
+
+        sid_q = urllib.parse.quote(sid, safe="")
+        res = await client.get(
+            f"/api/ai/consultations/{sid_q}/report",
+            headers={"Authorization": f"Bearer {token_u1}"},
+        )
+        assert res.status_code == 200
+        cd = res.headers.get("Content-Disposition")
+        assert isinstance(cd, str)
+        assert "attachment" in cd.lower()
+        assert "filename=" in cd
+        assert "filename*=" in cd
+
+    @pytest.mark.asyncio
     async def test_ai_chat_stream_always_emits_done_on_stream_error(
         self,
         client: AsyncClient,

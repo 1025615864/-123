@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import time
+import urllib.parse
 from typing import Annotated, cast
 from datetime import datetime
 
@@ -1082,12 +1083,23 @@ async def consultation_report(
             raise HTTPException(status_code=501, detail="PDF 报告生成依赖未安装")
         raise
 
-    filename = f"法律咨询报告_{session_id}.pdf"
+    safe_sid = "".join(
+        ch
+        if (ch.isascii() and (ch.isalnum() or ch in ("-", "_")))
+        else "_"
+        for ch in str(session_id or "")
+    )
+    ascii_filename = f"report_{safe_sid or 'session'}.pdf"
+    utf8_filename = f"法律咨询报告_{session_id}.pdf"
+    quoted_utf8 = urllib.parse.quote(utf8_filename, safe="")
+    content_disposition = (
+        f"attachment; filename=\"{ascii_filename}\"; filename*=UTF-8''{quoted_utf8}"
+    )
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
         headers={
-            "Content-Disposition": f"attachment; filename=\"{filename}\"",
+            "Content-Disposition": content_disposition,
         },
     )
 
