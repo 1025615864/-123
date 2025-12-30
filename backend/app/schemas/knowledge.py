@@ -117,6 +117,11 @@ class ConsultationTemplateResponse(BaseModel):
 
 
 # 知识库统计
+class KnowledgeCategoryCount(BaseModel):
+    category: str = Field(..., description="分类")
+    count: int = Field(..., description="数量")
+
+
 class KnowledgeStats(BaseModel):
     """知识库统计"""
     total_laws: int = Field(..., description="法条总数")
@@ -124,7 +129,7 @@ class KnowledgeStats(BaseModel):
     total_regulations: int = Field(..., description="法规总数")
     total_interpretations: int = Field(..., description="司法解释总数")
     vectorized_count: int = Field(..., description="已向量化数量")
-    categories: list[dict[str, int]] = Field(..., description="分类统计")
+    categories: list[KnowledgeCategoryCount] = Field(..., description="分类统计")
 
 
 # 批量操作

@@ -1168,6 +1168,235 @@ class TestSystemAIOpsStatus:
         assert isinstance(data.get("top_endpoints"), list)
 
 
+class TestSystemAiFeedbackStats:
+    @pytest.mark.asyncio
+    async def test_ai_feedback_stats_requires_admin(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        from datetime import datetime, timedelta, timezone
+
+        from app.models.consultation import Consultation, ChatMessage
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        user = User(
+            username="ai_fb_user",
+            email="ai_fb_user@example.com",
+            nickname="ai_fb_user",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        admin = User(
+            username="ai_fb_admin",
+            email="ai_fb_admin@example.com",
+            nickname="ai_fb_admin",
+            hashed_password=hash_password("Test123456"),
+            role="admin",
+            is_active=True,
+        )
+        test_session.add_all([user, admin])
+        await test_session.commit()
+        await test_session.refresh(user)
+        await test_session.refresh(admin)
+
+        token_user = create_access_token({"sub": str(user.id)})
+        token_admin = create_access_token({"sub": str(admin.id)})
+
+        now = datetime.now(timezone.utc)
+
+        cons = Consultation(
+            user_id=user.id,
+            session_id="ai_fb_sid_1",
+            title="t",
+            created_at=now - timedelta(days=1),
+        )
+        test_session.add(cons)
+        await test_session.commit()
+        await test_session.refresh(cons)
+
+        m_user = ChatMessage(
+            consultation_id=cons.id,
+            role="user",
+            content="hi",
+            created_at=now - timedelta(hours=3),
+        )
+        m_good = ChatMessage(
+            consultation_id=cons.id,
+            role="assistant",
+            content="a1",
+            rating=3,
+            feedback="不错",
+            created_at=now - timedelta(hours=2),
+        )
+        m_bad = ChatMessage(
+            consultation_id=cons.id,
+            role="assistant",
+            content="a2",
+            rating=1,
+            feedback=None,
+            created_at=now - timedelta(hours=1),
+        )
+        test_session.add_all([m_user, m_good, m_bad])
+        await test_session.commit()
+        await test_session.refresh(m_good)
+        await test_session.refresh(m_bad)
+
+        res_anon = await client.get("/api/system/stats/ai-feedback")
+        assert res_anon.status_code == 401
+
+        res_user = await client.get(
+            "/api/system/stats/ai-feedback",
+            headers={"Authorization": f"Bearer {token_user}"},
+        )
+        assert res_user.status_code == 403
+
+        res_admin = await client.get(
+            "/api/system/stats/ai-feedback",
+            params={"days": 30, "limit": 10},
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+        assert res_admin.status_code == 200
+        data = _json_dict(res_admin)
+
+        assert _as_int(data.get("days")) == 30
+        assert isinstance(data.get("since"), str)
+        assert _as_int(data.get("consultations_total")) == 1
+        assert _as_int(data.get("messages_total")) == 3
+        assert _as_int(data.get("assistant_messages_total")) == 2
+        assert _as_int(data.get("total_rated")) == 2
+        assert _as_int(data.get("good")) == 1
+        assert _as_int(data.get("neutral")) == 0
+        assert _as_int(data.get("bad")) == 1
+        assert abs(float(data.get("satisfaction_rate") or 0.0) - 50.0) < 1e-6
+        assert abs(float(data.get("rating_rate") or 0.0) - 100.0) < 1e-6
+
+        rr = data.get("recent_ratings")
+        assert isinstance(rr, list)
+        assert len(rr) == 2
+        first = cast(dict[str, object], rr[0])
+        assert _as_int(first.get("message_id")) == m_bad.id
+        assert _as_int(first.get("consultation_id")) == cons.id
+        assert _as_int(first.get("rating")) == 1
+        assert first.get("feedback") is None
+
+
+class TestSystemFaqAutogen:
+    @pytest.mark.asyncio
+    async def test_faq_generate_and_public_read(self, client: AsyncClient, test_session: AsyncSession):
+        from datetime import datetime, timedelta, timezone
+
+        from sqlalchemy import select
+
+        from app.models.consultation import Consultation, ChatMessage
+        from app.models.system import SystemConfig
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        user = User(
+            username="faq_u",
+            email="faq_u@example.com",
+            nickname="faq_u",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        admin = User(
+            username="faq_admin",
+            email="faq_admin@example.com",
+            nickname="faq_admin",
+            hashed_password=hash_password("Test123456"),
+            role="admin",
+            is_active=True,
+        )
+        test_session.add_all([user, admin])
+        await test_session.commit()
+        await test_session.refresh(user)
+        await test_session.refresh(admin)
+
+        token_user = create_access_token({"sub": str(user.id)})
+        token_admin = create_access_token({"sub": str(admin.id)})
+
+        now = datetime.now(timezone.utc)
+        cons = Consultation(
+            user_id=user.id,
+            session_id="faq_sid_1",
+            title="t",
+            created_at=now - timedelta(days=1),
+        )
+        test_session.add(cons)
+        await test_session.commit()
+        await test_session.refresh(cons)
+
+        q_msg = ChatMessage(
+            consultation_id=cons.id,
+            role="user",
+            content="劳动合同试用期最长多久？",
+            created_at=now - timedelta(hours=2),
+        )
+        a_msg = ChatMessage(
+            consultation_id=cons.id,
+            role="assistant",
+            content="一般情况下，试用期最长不超过六个月...",
+            rating=3,
+            feedback="很有用",
+            created_at=now - timedelta(hours=1),
+        )
+        test_session.add_all([q_msg, a_msg])
+        await test_session.commit()
+
+        res_public_before = await client.get("/api/system/public/faq")
+        assert res_public_before.status_code == 200
+        data_before = _json_dict(res_public_before)
+        items_before = data_before.get("items")
+        assert isinstance(items_before, list)
+
+        res_gen_anon = await client.post("/api/system/faq/generate")
+        assert res_gen_anon.status_code == 401
+
+        res_gen_user = await client.post(
+            "/api/system/faq/generate",
+            headers={"Authorization": f"Bearer {token_user}"},
+        )
+        assert res_gen_user.status_code == 403
+
+        res_gen_admin = await client.post(
+            "/api/system/faq/generate",
+            params={"days": 30, "max_items": 10, "scan_limit": 50},
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+        assert res_gen_admin.status_code == 200
+        gen = _json_dict(res_gen_admin)
+        assert gen.get("key") == "FAQ_PUBLIC_ITEMS_JSON"
+        assert _as_int(gen.get("generated")) == 1
+        items_obj = gen.get("items")
+        assert isinstance(items_obj, list)
+        assert len(items_obj) == 1
+        first = cast(dict[str, object], items_obj[0])
+        assert "劳动合同" in str(first.get("question") or "")
+        assert "试用期" in str(first.get("answer") or "")
+
+        cfg_res = await test_session.execute(
+            select(SystemConfig).where(SystemConfig.key == "FAQ_PUBLIC_ITEMS_JSON")
+        )
+        cfg = cfg_res.scalar_one_or_none()
+        assert cfg is not None
+        assert isinstance(cfg.value, str)
+        assert cfg.value.strip() != ""
+
+        res_public_after = await client.get("/api/system/public/faq")
+        assert res_public_after.status_code == 200
+        data_after = _json_dict(res_public_after)
+        items_after = data_after.get("items")
+        assert isinstance(items_after, list)
+        assert len(items_after) == 1
+        row0 = cast(dict[str, object], items_after[0])
+        assert "劳动合同" in str(row0.get("question") or "")
+        assert "试用期" in str(row0.get("answer") or "")
+
+
 class TestCalendarAPI:
     @pytest.mark.asyncio
     async def test_calendar_reminders_crud_and_permissions(
@@ -1271,6 +1500,113 @@ class TestCalendarAPI:
         assert list_res2.status_code == 200
         list_data2 = _json_dict(list_res2)
         assert _as_int(list_data2.get("total")) == 0
+
+
+class TestKnowledgeAPI:
+    @pytest.mark.asyncio
+    async def test_knowledge_templates_active_is_public(self, client: AsyncClient):
+        res = await client.get("/api/knowledge/templates", params={"is_active": True})
+        assert res.status_code == 200
+        data = cast(object, res.json())
+        assert isinstance(data, list)
+
+    @pytest.mark.asyncio
+    async def test_knowledge_templates_all_requires_admin(
+        self,
+        client: AsyncClient,
+    ):
+        res = await client.get("/api/knowledge/templates", params={"is_active": ""})
+        assert res.status_code in {401, 403}
+
+    @pytest.mark.asyncio
+    async def test_knowledge_laws_requires_admin(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        user = User(
+            username="kb_user",
+            email="kb_user@example.com",
+            nickname="kb_user",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        admin = User(
+            username="kb_admin",
+            email="kb_admin@example.com",
+            nickname="kb_admin",
+            hashed_password=hash_password("Test123456"),
+            role="admin",
+            is_active=True,
+        )
+        test_session.add_all([user, admin])
+        await test_session.commit()
+        await test_session.refresh(user)
+        await test_session.refresh(admin)
+
+        token_user = create_access_token({"sub": str(user.id)})
+        token_admin = create_access_token({"sub": str(admin.id)})
+
+        payload = {
+            "knowledge_type": "law",
+            "title": "民法典",
+            "article_number": "第一条",
+            "content": "为了保护民事主体的合法权益...",
+            "summary": None,
+            "category": "民法",
+            "keywords": None,
+            "source": "全国人大",
+            "effective_date": "2021-01-01",
+            "weight": 1.0,
+            "is_active": True,
+        }
+
+        res_user = await client.post(
+            "/api/knowledge/laws",
+            json=payload,
+            headers={"Authorization": f"Bearer {token_user}"},
+        )
+        assert res_user.status_code == 403
+
+        res_admin = await client.post(
+            "/api/knowledge/laws",
+            json=payload,
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+        assert res_admin.status_code == 200
+        created = _json_dict(res_admin)
+        assert _as_int(created.get("id")) > 0
+        assert created.get("title") == "民法典"
+
+        list_admin = await client.get(
+            "/api/knowledge/laws",
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+        assert list_admin.status_code == 200
+        list_data = _json_dict(list_admin)
+        assert _as_int(list_data.get("total")) >= 1
+
+        stats_user = await client.get(
+            "/api/knowledge/stats",
+            headers={"Authorization": f"Bearer {token_user}"},
+        )
+        assert stats_user.status_code == 403
+
+        stats_admin = await client.get(
+            "/api/knowledge/stats",
+            headers={"Authorization": f"Bearer {token_admin}"},
+        )
+        assert stats_admin.status_code == 200
+
+        categories_user = await client.get(
+            "/api/knowledge/categories",
+            headers={"Authorization": f"Bearer {token_user}"},
+        )
+        assert categories_user.status_code == 403
 
 
 class TestAIConsultationAPI:
@@ -1421,6 +1757,9 @@ class TestAIConsultationAPI:
                         "strategy_reason": "未找到直接相关法条",
                         "confidence": "low",
                         "risk_level": "safe",
+                        "model_used": "test-model-b",
+                        "fallback_used": True,
+                        "model_attempts": ["test-model-a", "test-model-b"],
                         "intent": "labor",
                         "needs_clarification": True,
                         "clarifying_questions": ["q1"],
@@ -1450,6 +1789,9 @@ class TestAIConsultationAPI:
         assert data.get("confidence") == "low"
         assert data.get("risk_level") == "safe"
         assert data.get("disclaimer") == "d"
+        assert data.get("model_used") == "test-model-b"
+        assert data.get("fallback_used") is True
+        assert data.get("model_attempts") == ["test-model-a", "test-model-b"]
         assert data.get("intent") == "labor"
         assert data.get("needs_clarification") is True
         assert data.get("clarifying_questions") == ["q1"]
@@ -1458,6 +1800,238 @@ class TestAIConsultationAPI:
         assert isinstance(sq_obj, dict)
         assert sq_obj.get("qualified_count") == 0
         assert sq_obj.get("confidence") == "low"
+
+    @pytest.mark.asyncio
+    async def test_ai_chat_passes_user_profile_when_supported(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+        monkeypatch: MonkeyPatch,
+    ):
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        import app.routers.ai as ai_router
+
+        monkeypatch.setattr(ai_router.settings, "openai_api_key", "test", raising=True)
+
+        user = User(
+            username="ai_profile_u1",
+            email="ai_profile_u1@example.com",
+            nickname="小明",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        token = create_access_token({"sub": str(user.id)})
+
+        expected_profile = "\n".join(["昵称：小明", "用户名：ai_profile_u1", "身份：user"])
+
+        class FakeAssistant:
+            async def chat(
+                self,
+                *,
+                message: str,
+                session_id: str | None = None,
+                initial_history: list[dict[str, str]] | None = None,
+                user_profile: str | None = None,
+            ) -> tuple[str, str, list[object], dict[str, object]]:
+                _ = message
+                _ = initial_history
+                assert session_id is None
+                assert user_profile == expected_profile
+                return ("s_profile_1", "OK", [], {})
+
+        monkeypatch.setattr(ai_router, "_try_get_ai_assistant", lambda: FakeAssistant(), raising=True)
+
+        res = await client.post(
+            "/api/ai/chat",
+            json={"message": "hello"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 200
+        data = _json_dict(res)
+        assert data.get("session_id") == "s_profile_1"
+        assert data.get("answer") == "OK"
+
+
+class TestAIShareAPI:
+    @pytest.mark.asyncio
+    async def test_share_link_create_and_public_read(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        from datetime import datetime, timedelta, timezone
+
+        from app.models.consultation import Consultation, ChatMessage
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        u1 = User(
+            username="share_u1",
+            email="share_u1@example.com",
+            nickname="share_u1",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        u2 = User(
+            username="share_u2",
+            email="share_u2@example.com",
+            nickname="share_u2",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add_all([u1, u2])
+        await test_session.commit()
+        await test_session.refresh(u1)
+        await test_session.refresh(u2)
+
+        token_u1 = create_access_token({"sub": str(u1.id)})
+        token_u2 = create_access_token({"sub": str(u2.id)})
+
+        now = datetime.now(timezone.utc)
+        sid = "share_sid_1"
+        cons = Consultation(
+            user_id=u1.id,
+            session_id=sid,
+            title="share_test",
+            created_at=now - timedelta(hours=3),
+        )
+        test_session.add(cons)
+        await test_session.commit()
+        await test_session.refresh(cons)
+
+        m1 = ChatMessage(
+            consultation_id=cons.id,
+            role="user",
+            content="q",
+            created_at=now - timedelta(hours=2),
+        )
+        m2 = ChatMessage(
+            consultation_id=cons.id,
+            role="assistant",
+            content="a",
+            created_at=now - timedelta(hours=1),
+        )
+        test_session.add_all([m1, m2])
+        await test_session.commit()
+
+        res_anon = await client.post(f"/api/ai/consultations/{sid}/share")
+        assert res_anon.status_code == 401
+
+        res_forbidden = await client.post(
+            f"/api/ai/consultations/{sid}/share",
+            headers={"Authorization": f"Bearer {token_u2}"},
+        )
+        assert res_forbidden.status_code == 403
+
+        res_ok = await client.post(
+            f"/api/ai/consultations/{sid}/share",
+            params={"expires_days": 7},
+            headers={"Authorization": f"Bearer {token_u1}"},
+        )
+        assert res_ok.status_code == 200
+        payload = _json_dict(res_ok)
+        token = str(payload.get("token") or "")
+        assert token.strip() != ""
+        share_path = str(payload.get("share_path") or "")
+        assert share_path.startswith("/share/")
+        assert "expires_at" in payload
+
+        res_shared = await client.get(f"/api/ai/share/{token}")
+        assert res_shared.status_code == 200
+        shared = _json_dict(res_shared)
+        assert shared.get("session_id") == sid
+        msgs = shared.get("messages")
+        assert isinstance(msgs, list)
+        assert len(msgs) == 2
+        m0 = cast(dict[str, object], msgs[0])
+        assert m0.get("role") == "user"
+        assert m0.get("content") == "q"
+
+        res_bad = await client.get("/api/ai/share/not_a_token")
+        assert res_bad.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_ai_chat_stream_passes_user_profile_when_supported(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+        monkeypatch: MonkeyPatch,
+    ):
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        import app.routers.ai as ai_router
+
+        monkeypatch.setattr(ai_router.settings, "openai_api_key", "test", raising=True)
+
+        user = User(
+            username="ai_profile_stream_u1",
+            email="ai_profile_stream_u1@example.com",
+            nickname=None,
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        token = create_access_token({"sub": str(user.id)})
+
+        expected_profile = "\n".join(["用户名：ai_profile_stream_u1", "身份：user"])
+
+        class FakeAssistant:
+            async def chat_stream(
+                self,
+                *,
+                message: str,
+                session_id: str | None = None,
+                initial_history: list[dict[str, str]] | None = None,
+                user_profile: str | None = None,
+            ):
+                _ = message
+                _ = initial_history
+                assert session_id is None
+                assert user_profile == expected_profile
+                yield ("session", {"session_id": "s_profile_stream_1"})
+                yield ("references", {"references": []})
+                yield ("meta", {"strategy_used": "general_legal"})
+                yield ("content", {"text": "OK"})
+                yield ("done", {"session_id": "s_profile_stream_1"})
+
+        monkeypatch.setattr(ai_router, "_try_get_ai_assistant", lambda: FakeAssistant(), raising=True)
+
+        async with client.stream(
+            "POST",
+            "/api/ai/chat/stream",
+            json={"message": "hello"},
+            headers={"Authorization": f"Bearer {token}"},
+        ) as res:
+            assert res.status_code == 200
+
+            events: list[tuple[str, dict]] = []
+            async for line in res.aiter_lines():
+                if not line:
+                    continue
+                if line.startswith("event:"):
+                    event_type = line.split(":", 1)[1].strip()
+                    events.append((event_type, {}))
+                    continue
+                if line.startswith("data:"):
+                    payload = json.loads(line.split(":", 1)[1].strip())
+                    last_event, _ = events[-1]
+                    events[-1] = (last_event, payload)
+
+            assert any(t == "done" for t, _ in events)
 
     @pytest.mark.asyncio
     async def test_ai_consultations_list_supports_q_search(

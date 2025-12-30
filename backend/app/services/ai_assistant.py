@@ -225,6 +225,8 @@ class AILegalAssistant:
 ## 相关法律参考：
 {context}
 
+{user_profile_prompt}
+
 请基于以上信息和格式规范回答用户的问题。"""
 
     def __init__(self):
@@ -245,6 +247,31 @@ class AILegalAssistant:
         self._last_seen: dict[str, float] = {}
         self._max_sessions: int = 5000
         self._max_messages_per_session: int = 50
+
+    def _llm_for_model(self, model: str) -> ChatOpenAI:
+        return ChatOpenAI(
+            model=str(model or "").strip(),
+            api_key=SecretStr(settings.openai_api_key),
+            base_url=settings.openai_base_url,
+            temperature=0.7,
+            model_kwargs={"max_completion_tokens": 2000},
+        )
+
+    def _model_candidates(self) -> list[str]:
+        primary = str(getattr(settings, "ai_model", "") or "").strip()
+        fallbacks = getattr(settings, "ai_fallback_models", [])
+        cleaned_fallbacks = [str(m or "").strip() for m in fallbacks if str(m or "").strip()]
+        candidates = [primary] + cleaned_fallbacks
+        out: list[str] = []
+        seen: set[str] = set()
+        for item in candidates:
+            if not item:
+                continue
+            if item in seen:
+                continue
+            seen.add(item)
+            out.append(item)
+        return out
 
     def _evict_if_needed(self) -> None:
         if len(self.conversation_histories) <= self._max_sessions:
@@ -345,6 +372,7 @@ class AILegalAssistant:
         session_id: str | None = None,
         *,
         initial_history: list[dict[str, str]] | None = None,
+        user_profile: str | None = None,
     ) -> tuple[str, str, list[LawReference], dict[str, object]]:
         """
         与AI助手对话
@@ -391,6 +419,9 @@ class AILegalAssistant:
                     "confidence": "low",
                 },
                 "disclaimer": str(disclaimer),
+                "model_used": None,
+                "fallback_used": False,
+                "model_attempts": [],
             }
             return session_id, answer, [], meta
 
@@ -401,14 +432,28 @@ class AILegalAssistant:
 
         history = self.conversation_histories.get(session_id, [])
 
+        model_used_out: str | None = None
+        fallback_used_out: bool = False
+        model_attempts_out: list[str] = []
+
         answer: str
         if decision.strategy == ResponseStrategy.REDIRECT:
             answer = "您的问题可能涉及较高风险或需要结合具体案情，建议您尽快咨询专业律师获取针对性意见。"
         elif decision.strategy == ResponseStrategy.REFUSE_ANSWER:
             answer = str(safety.suggestion or "很抱歉，我无法回答这类问题。")
         else:
+            user_profile_prompt = ""
+            user_profile_text = str(user_profile or "").strip()
+            if user_profile_text:
+                user_profile_prompt = "## 用户信息\n" + user_profile_text
+
             messages: list[BaseMessage] = [
-                SystemMessage(content=self.SYSTEM_PROMPT.format(context=context))
+                SystemMessage(
+                    content=self.SYSTEM_PROMPT.format(
+                        context=context,
+                        user_profile_prompt=user_profile_prompt,
+                    )
+                )
             ]
 
             for msg in history[-10:]:
@@ -419,12 +464,32 @@ class AILegalAssistant:
 
             messages.append(HumanMessage(content=message))
 
-            try:
-                response = await self.llm.agenerate([messages])
-                answer = response.generations[0][0].text
-            except Exception:
-                logger.exception("AI服务调用失败")
+            answer = ""
+            model_candidates = self._model_candidates()
+            primary_model = str(getattr(settings, "ai_model", "") or "").strip()
+            model_used: str | None = None
+            fallback_used: bool = False
+            model_attempts: list[str] = []
+
+            for model in model_candidates:
+                model_attempts.append(model)
+                llm = self.llm if model == primary_model else self._llm_for_model(model)
+                try:
+                    response = await llm.agenerate([messages])
+                    answer = response.generations[0][0].text
+                    model_used = model
+                    fallback_used = model != primary_model
+                    break
+                except Exception:
+                    logger.exception("AI服务调用失败 model=%s", str(model))
+                    continue
+
+            if not str(answer).strip():
                 answer = "抱歉，AI服务暂时不可用。您可以稍后重试，或直接联系我们的在线律师获取帮助。"
+
+            model_used_out = model_used
+            fallback_used_out = bool(fallback_used)
+            model_attempts_out = list(model_attempts)
 
         answer = self._append_disclaimer(answer, risk_level=safety.risk_level, strategy=decision.strategy)
         answer = self.safety_filter.sanitize_output(answer)
@@ -452,6 +517,9 @@ class AILegalAssistant:
                 "confidence": str(quality.confidence),
             },
             "disclaimer": str(disclaimer),
+            "model_used": model_used_out,
+            "fallback_used": bool(fallback_used_out),
+            "model_attempts": list(model_attempts_out),
         }
         
         return session_id, answer, parsed_refs, meta2
@@ -462,6 +530,7 @@ class AILegalAssistant:
         session_id: str | None = None,
         *,
         initial_history: list[dict[str, str]] | None = None,
+        user_profile: str | None = None,
     ) -> AsyncGenerator[tuple[str, dict[str, object]], None]:
         """
         流式对话
@@ -500,6 +569,9 @@ class AILegalAssistant:
                         "confidence": "low",
                     },
                     "disclaimer": str(disclaimer),
+                    "model_used": None,
+                    "fallback_used": False,
+                    "model_attempts": [],
                 },
             )
 
@@ -528,6 +600,9 @@ class AILegalAssistant:
                     "risk_level": str(safety.risk_level.value),
                     "intent": str(intent_result.intent),
                     "needs_clarification": bool(intent_result.needs_clarification),
+                    "model_used": None,
+                    "fallback_used": False,
+                    "model_attempts": [],
                 },
             )
             return
@@ -540,30 +615,21 @@ class AILegalAssistant:
 
         yield ("session", {"session_id": session_id})
         yield ("references", {"references": [ref.model_dump() for ref in parsed_refs]})
-        yield (
-            "meta",
-            {
-                "strategy_used": str(decision.strategy.value),
-                "strategy_reason": str(decision.reason),
-                "confidence": str(decision.confidence),
-                "risk_level": str(safety.risk_level.value),
-                "intent": str(intent_result.intent),
-                "needs_clarification": bool(intent_result.needs_clarification),
-                "clarifying_questions": list(intent_result.clarifying_questions),
-                "search_quality": {
-                    "total_candidates": int(quality.total_candidates),
-                    "qualified_count": int(quality.qualified_count),
-                    "avg_similarity": float(quality.avg_similarity),
-                    "confidence": str(quality.confidence),
-                },
-                "disclaimer": str(disclaimer),
-            },
-        )
 
         history = self.conversation_histories.get(session_id, [])
 
+        user_profile_prompt = ""
+        user_profile_text = str(user_profile or "").strip()
+        if user_profile_text:
+            user_profile_prompt = "## 用户信息\n" + user_profile_text
+
         messages: list[BaseMessage] = [
-            SystemMessage(content=self.SYSTEM_PROMPT.format(context=context))
+            SystemMessage(
+                content=self.SYSTEM_PROMPT.format(
+                    context=context,
+                    user_profile_prompt=user_profile_prompt,
+                )
+            )
         ]
 
         for msg in history[-10:]:
@@ -584,6 +650,28 @@ class AILegalAssistant:
                 strategy=decision.strategy,
             )
             full_answer = self.safety_filter.sanitize_output(full_answer)
+            yield (
+                "meta",
+                {
+                    "strategy_used": str(decision.strategy.value),
+                    "strategy_reason": str(decision.reason),
+                    "confidence": str(decision.confidence),
+                    "risk_level": str(safety.risk_level.value),
+                    "intent": str(intent_result.intent),
+                    "needs_clarification": bool(intent_result.needs_clarification),
+                    "clarifying_questions": list(intent_result.clarifying_questions),
+                    "search_quality": {
+                        "total_candidates": int(quality.total_candidates),
+                        "qualified_count": int(quality.qualified_count),
+                        "avg_similarity": float(quality.avg_similarity),
+                        "confidence": str(quality.confidence),
+                    },
+                    "disclaimer": str(disclaimer),
+                    "model_used": None,
+                    "fallback_used": False,
+                    "model_attempts": [],
+                },
+            )
             yield ("content", {"text": full_answer})
         elif decision.strategy == ResponseStrategy.REFUSE_ANSWER:
             full_answer = str(safety.suggestion or "很抱歉，我无法回答这类问题。")
@@ -593,24 +681,126 @@ class AILegalAssistant:
                 strategy=decision.strategy,
             )
             full_answer = self.safety_filter.sanitize_output(full_answer)
+            yield (
+                "meta",
+                {
+                    "strategy_used": str(decision.strategy.value),
+                    "strategy_reason": str(decision.reason),
+                    "confidence": str(decision.confidence),
+                    "risk_level": str(safety.risk_level.value),
+                    "intent": str(intent_result.intent),
+                    "needs_clarification": bool(intent_result.needs_clarification),
+                    "clarifying_questions": list(intent_result.clarifying_questions),
+                    "search_quality": {
+                        "total_candidates": int(quality.total_candidates),
+                        "qualified_count": int(quality.qualified_count),
+                        "avg_similarity": float(quality.avg_similarity),
+                        "confidence": str(quality.confidence),
+                    },
+                    "disclaimer": str(disclaimer),
+                    "model_used": None,
+                    "fallback_used": False,
+                    "model_attempts": [],
+                },
+            )
             yield ("content", {"text": full_answer})
         else:
+            model_candidates = self._model_candidates()
+            primary_model = str(getattr(settings, "ai_model", "") or "").strip()
+            model_used: str | None = None
+            fallback_used: bool = False
+            model_attempts: list[str] = []
+            stream_selected: bool = False
+
+            aiter = None
+            first_chunk: object | None = None
+            for model in model_candidates:
+                model_attempts.append(model)
+                llm = self.llm if model == primary_model else self._llm_for_model(model)
+                try:
+                    stream = llm.astream(messages)
+                    aiter = stream.__aiter__()
+                    first_chunk = await aiter.__anext__()
+                    model_used = model
+                    fallback_used = model != primary_model
+                    stream_selected = True
+                    break
+                except StopAsyncIteration:
+                    model_used = model
+                    fallback_used = model != primary_model
+                    first_chunk = None
+                    aiter = None
+                    stream_selected = True
+                    break
+                except Exception:
+                    logger.exception("AI服务调用失败 model=%s", str(model))
+                    aiter = None
+                    first_chunk = None
+                    continue
+
+            yield (
+                "meta",
+                {
+                    "strategy_used": str(decision.strategy.value),
+                    "strategy_reason": str(decision.reason),
+                    "confidence": str(decision.confidence),
+                    "risk_level": str(safety.risk_level.value),
+                    "intent": str(intent_result.intent),
+                    "needs_clarification": bool(intent_result.needs_clarification),
+                    "clarifying_questions": list(intent_result.clarifying_questions),
+                    "search_quality": {
+                        "total_candidates": int(quality.total_candidates),
+                        "qualified_count": int(quality.qualified_count),
+                        "avg_similarity": float(quality.avg_similarity),
+                        "confidence": str(quality.confidence),
+                    },
+                    "disclaimer": str(disclaimer),
+                    "model_used": model_used,
+                    "fallback_used": bool(fallback_used),
+                    "model_attempts": list(model_attempts),
+                },
+            )
+
             try:
-                async for chunk in self.llm.astream(messages):
-                    raw = cast(object | None, getattr(chunk, "content", None))
-                    if raw is None:
-                        continue
-                    if isinstance(raw, str):
-                        content = raw
-                    elif isinstance(raw, list):
-                        content = "".join(str(item) for item in cast(list[object], raw))
+                if first_chunk is not None:
+                    raw_first = cast(object | None, getattr(first_chunk, "content", None))
+                    if isinstance(raw_first, str):
+                        first_text = raw_first
+                    elif isinstance(raw_first, list):
+                        first_text = "".join(str(item) for item in cast(list[object], raw_first))
+                    elif raw_first is None:
+                        first_text = ""
                     else:
-                        content = str(raw)
-                    if not content:
-                        continue
-                    content = self.safety_filter.sanitize_output(content)
-                    full_answer += content
-                    yield ("content", {"text": content})
+                        first_text = str(raw_first)
+                    if first_text:
+                        first_text = self.safety_filter.sanitize_output(first_text)
+                        full_answer += first_text
+                        yield ("content", {"text": first_text})
+
+                if aiter is not None:
+                    while True:
+                        try:
+                            chunk = await aiter.__anext__()
+                        except StopAsyncIteration:
+                            break
+                        raw = cast(object | None, getattr(chunk, "content", None))
+                        if raw is None:
+                            continue
+                        if isinstance(raw, str):
+                            content = raw
+                        elif isinstance(raw, list):
+                            content = "".join(str(item) for item in cast(list[object], raw))
+                        else:
+                            content = str(raw)
+                        if not content:
+                            continue
+                        content = self.safety_filter.sanitize_output(content)
+                        full_answer += content
+                        yield ("content", {"text": content})
+                elif stream_selected:
+                    pass
+                else:
+                    raise RuntimeError("ai_stream_failed")
             except Exception:
                 logger.exception("AI服务调用失败")
                 error_msg = "抱歉，AI服务暂时不可用。"
@@ -648,6 +838,9 @@ class AILegalAssistant:
                 "risk_level": str(safety.risk_level.value),
                 "intent": str(intent_result.intent),
                 "needs_clarification": bool(intent_result.needs_clarification),
+                "model_used": cast(str | None, locals().get("model_used")),
+                "fallback_used": bool(locals().get("fallback_used") or False),
+                "model_attempts": list(locals().get("model_attempts") or []),
             },
         )
 

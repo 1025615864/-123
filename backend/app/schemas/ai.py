@@ -37,6 +37,9 @@ class ChatResponse(BaseModel):
     risk_level: str | None = Field(None, description="风险等级")
     search_quality: SearchQualityInfo | None = Field(None, description="检索质量信息")
     disclaimer: str | None = Field(None, description="免责声明")
+    model_used: str | None = Field(None, description="实际使用的模型")
+    fallback_used: bool | None = Field(None, description="是否发生模型降级")
+    model_attempts: list[str] | None = Field(None, description="尝试过的模型列表")
     intent: str | None = Field(None, description="识别到的意图类别")
     needs_clarification: bool | None = Field(None, description="是否需要追问补充信息")
     clarifying_questions: list[str] | None = Field(None, description="建议追问的问题列表")
@@ -57,6 +60,26 @@ class MessageResponse(BaseModel):
     created_at: datetime
     
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
+
+
+class ShareLinkResponse(BaseModel):
+    token: str
+    share_path: str
+    expires_at: datetime
+
+
+class SharedMessageResponse(BaseModel):
+    role: str
+    content: str
+    references: str | None = None
+    created_at: datetime
+
+
+class SharedConsultationResponse(BaseModel):
+    session_id: str
+    title: str | None
+    created_at: datetime
+    messages: list[SharedMessageResponse] = []
 
 
 class ConsultationResponse(BaseModel):

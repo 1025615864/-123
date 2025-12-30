@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, Navigate, useLocation } from 'react-router-dom'
-import { MessageSquare, Clock, Trash2, Download, ArrowRight, Search, X } from 'lucide-react'
+import { MessageSquare, Clock, Trash2, Download, ArrowRight, Search, X, Share2 } from 'lucide-react'
 import api from '../api/client'
 import { useAppMutation, useToast } from '../hooks'
 import { Card, Button, Loading, EmptyState, Input } from '../components/ui'
@@ -34,6 +34,12 @@ interface ExportData {
   session_id: string
   created_at: string
   messages: ExportMessage[]
+}
+
+interface ShareLinkResponse {
+  token: string
+  share_path: string
+  expires_at: string
 }
 
  function sanitizeDownloadFilename(filename: string): string {
@@ -97,9 +103,38 @@ export default function ChatHistoryPage() {
     invalidateQueryKeys: [queryKeys.aiConsultationsBase()],
   })
 
+  const shareMutation = useAppMutation<ShareLinkResponse, string>({
+    mutationFn: async (sid: string) => {
+      const res = await api.post(`/ai/consultations/${sid}/share`, null, {
+        params: { expires_days: 7 },
+      })
+      return res.data as ShareLinkResponse
+    },
+    errorMessageFallback: '生成分享链接失败，请稍后重试',
+  })
+
   const handleDelete = async (sessionId: string) => {
     if (!confirm('确定要删除这条咨询记录吗？')) return
     deleteMutation.mutate(sessionId)
+  }
+
+  const handleShare = async (sessionId: string) => {
+    if (shareMutation.isPending) return
+    shareMutation.mutate(sessionId, {
+      onSuccess: async (data) => {
+        const sharePath = String(data?.share_path || '').trim()
+        const url = sharePath.startsWith('http')
+          ? sharePath
+          : `${window.location.origin}${sharePath}`
+
+        try {
+          await navigator.clipboard.writeText(url)
+          toast.success('已复制分享链接')
+        } catch {
+          window.prompt('复制分享链接', url)
+        }
+      },
+    })
   }
 
   const handleExport = async (consultation: ConsultationItem) => {
@@ -340,6 +375,7 @@ export default function ChatHistoryPage() {
                   <Button
                     variant="ghost"
                     size="sm"
+                    type="button"
                     onClick={() => handleExport(item)}
                     className="p-2 hover:text-slate-900 dark:hover:text-white"
                     aria-label="导出报告"
@@ -349,6 +385,17 @@ export default function ChatHistoryPage() {
                   <Button
                     variant="ghost"
                     size="sm"
+                    type="button"
+                    onClick={() => handleShare(item.session_id)}
+                    className="p-2 hover:text-slate-900 dark:hover:text-white"
+                    aria-label="分享链接"
+                  >
+                    <Share2 className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    type="button"
                     onClick={() => handleDelete(item.session_id)}
                     className="p-2 hover:text-red-600 dark:hover:text-red-400"
                   >

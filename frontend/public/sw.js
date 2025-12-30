@@ -1,12 +1,14 @@
 // Service Worker for 百姓法律助手 PWA
-const CACHE_NAME = 'baixing-law-v1';
-const STATIC_CACHE = 'baixing-static-v1';
+const CACHE_VERSION = 'v2';
+const CACHE_NAME = `baixing-law-${CACHE_VERSION}`;
+const STATIC_CACHE = `baixing-static-${CACHE_VERSION}`;
 
 // 需要缓存的静态资源
 const STATIC_ASSETS = [
   '/',
   '/index.html',
   '/manifest.json',
+  '/vite.svg',
 ];
 
 // 安装事件
@@ -54,6 +56,50 @@ self.addEventListener('fetch', (event) => {
 
   // 跳过外部请求
   if (url.origin !== self.location.origin) {
+    return;
+  }
+
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response && response.status === 200) {
+            const responseClone = response.clone();
+            caches.open(STATIC_CACHE).then((cache) => {
+              cache.put('/index.html', responseClone);
+            });
+          }
+          return response;
+        })
+        .catch(async () => {
+          const cached = await caches.match('/index.html');
+          return cached || caches.match('/');
+        })
+    );
+    return;
+  }
+
+  const isStaticAsset =
+    url.pathname.startsWith('/assets/') ||
+    /\.(?:js|css|png|jpg|jpeg|gif|webp|svg|ico|woff2?)$/i.test(url.pathname);
+
+  if (isStaticAsset) {
+    event.respondWith(
+      caches.open(CACHE_NAME).then(async (cache) => {
+        const cachedResponse = await cache.match(request);
+        if (cachedResponse) return cachedResponse;
+
+        try {
+          const response = await fetch(request);
+          if (response && response.status === 200) {
+            cache.put(request, response.clone());
+          }
+          return response;
+        } catch {
+          return cachedResponse || new Response('Offline', { status: 503 });
+        }
+      })
+    );
     return;
   }
 

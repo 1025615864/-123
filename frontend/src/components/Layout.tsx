@@ -17,6 +17,7 @@ import {
   Clock,
   Calendar,
   FileText,
+  HelpCircle,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
@@ -33,6 +34,8 @@ export default function Layout() {
   const { actualTheme } = useTheme();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const isMobile = useIsMobile();
+
+  const mobileMenuId = "layout-mobile-menu";
 
   const isChatRoute = location.pathname === "/chat" || location.pathname.startsWith("/chat/");
 
@@ -52,6 +55,7 @@ export default function Layout() {
     { path: "/limitations", label: "时效计算", icon: Clock },
     { path: "/calendar", label: "日历", icon: Calendar },
     { path: "/documents", label: "文书生成", icon: FileText },
+    { path: "/faq", label: "FAQ", icon: HelpCircle },
   ];
 
   return (
@@ -79,6 +83,7 @@ export default function Layout() {
                   <Link
                     key={path}
                     to={path}
+                    aria-current={location.pathname === path ? "page" : undefined}
                     className={`text-sm font-medium transition-colors relative py-1 ${
                       location.pathname === path
                         ? "text-blue-600 dark:text-blue-400"
@@ -150,7 +155,11 @@ export default function Layout() {
               )}
 
               <button
+                type="button"
                 onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+                aria-label={mobileMenuOpen ? "关闭菜单" : "打开菜单"}
+                aria-expanded={mobileMenuOpen}
+                aria-controls={mobileMenuId}
                 className="lg:hidden p-2 rounded-lg text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
               >
                 {mobileMenuOpen ? (
@@ -165,6 +174,7 @@ export default function Layout() {
 
         {mobileMenuOpen && (
           <div
+            id={mobileMenuId}
             className="lg:hidden border-t animate-fade-in border-slate-200 bg-white/95 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/95"
           >
             <div className="px-6 py-6 space-y-2">
@@ -173,6 +183,7 @@ export default function Layout() {
                   key={path}
                   to={path}
                   onClick={() => setMobileMenuOpen(false)}
+                  aria-current={location.pathname === path ? "page" : undefined}
                   className={`flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
                     location.pathname === path
                       ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400'

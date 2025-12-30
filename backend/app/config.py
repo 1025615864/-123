@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
     ai_model: str = "deepseek-chat"
+    ai_fallback_models: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("AI_FALLBACK_MODELS", "OPENAI_FALLBACK_MODELS"),
+    )
     
     # 向量数据库配置
     chroma_persist_dir: str = "./chroma_db"
@@ -66,6 +70,28 @@ class Settings(BaseSettings):
             parts = [p.strip() for p in value.replace("，", ",").split(",")]
             return [p for p in parts if p]
         return value
+
+    @field_validator("ai_fallback_models", mode="before")
+    @classmethod
+    def _parse_ai_fallback_models(cls, value: object):
+        if value is None:
+            return []
+        if isinstance(value, str):
+            parts = [p.strip() for p in value.replace("，", ",").split(",")]
+            cleaned = [p for p in parts if p]
+        elif isinstance(value, list):
+            cleaned = [str(v).strip() for v in value if str(v).strip()]
+        else:
+            cleaned = [str(value).strip()] if str(value).strip() else []
+
+        seen: set[str] = set()
+        out: list[str] = []
+        for item in cleaned:
+            if item in seen:
+                continue
+            seen.add(item)
+            out.append(item)
+        return out
 
     @field_validator("debug", mode="before")
     @classmethod

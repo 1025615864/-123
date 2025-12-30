@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Search,
   Plus,
@@ -27,6 +27,20 @@ import { getApiErrorMessage } from "../../utils";
 import { queryKeys } from "../../queryKeys";
 
 type KnowledgeType = "law" | "case" | "regulation" | "interpretation";
+
+interface KnowledgeUpsertPayload {
+  knowledge_type: KnowledgeType;
+  title: string;
+  article_number: string | null;
+  content: string;
+  summary: string | null;
+  category: string;
+  keywords: string | null;
+  source: string | null;
+  effective_date: string | null;
+  weight: number;
+  is_active: boolean;
+}
 
 interface LegalKnowledge {
   id: number;
@@ -142,7 +156,7 @@ export default function KnowledgeManagePage() {
   const total = listQuery.data?.total ?? 0;
   const loading = listQuery.isLoading;
 
-  const createMutation = useAppMutation<void, FormData>({
+  const createMutation = useAppMutation<void, KnowledgeUpsertPayload>({
     mutationFn: async (payload) => {
       await api.post("/knowledge/laws", payload);
     },
@@ -154,7 +168,10 @@ export default function KnowledgeManagePage() {
     },
   });
 
-  const editMutation = useAppMutation<void, { id: number; payload: FormData }>({
+  const editMutation = useAppMutation<
+    void,
+    { id: number; payload: KnowledgeUpsertPayload }
+  >({
     mutationFn: async ({ id, payload }) => {
       await api.put(`/knowledge/laws/${id}`, payload);
     },
@@ -209,15 +226,40 @@ export default function KnowledgeManagePage() {
     is_active: true,
   });
 
+  const normalizePayload = useCallback(
+    (raw: typeof formData): KnowledgeUpsertPayload => {
+      const title = String(raw.title ?? "").trim();
+      const content = String(raw.content ?? "").trim();
+      const category = String(raw.category ?? "").trim();
+      return {
+        knowledge_type: raw.knowledge_type,
+        title,
+        article_number: String(raw.article_number ?? "").trim() || null,
+        content,
+        summary: String(raw.summary ?? "").trim() || null,
+        category,
+        keywords: String(raw.keywords ?? "").trim() || null,
+        source: String(raw.source ?? "").trim() || null,
+        effective_date: String(raw.effective_date ?? "").trim() || null,
+        weight: Number(raw.weight) || 1,
+        is_active: Boolean(raw.is_active),
+      };
+    },
+    []
+  );
+
   const handleCreate = async () => {
     if (createMutation.isPending) return;
-    createMutation.mutate(formData);
+    createMutation.mutate(normalizePayload(formData));
   };
 
   const handleEdit = async () => {
     if (!editingItem) return;
     if (editMutation.isPending) return;
-    editMutation.mutate({ id: editingItem.id, payload: formData });
+    editMutation.mutate({
+      id: editingItem.id,
+      payload: normalizePayload(formData),
+    });
   };
 
   const handleDelete = async (id: number) => {

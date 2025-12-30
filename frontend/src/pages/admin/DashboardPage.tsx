@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react'
-import { Users, Newspaper, MessageSquare, Building2, TrendingUp, Eye, Activity, BarChart3, PieChart } from 'lucide-react'
+import { Users, Newspaper, MessageSquare, Building2, TrendingUp, Eye, Activity, BarChart3, PieChart, Sparkles } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { Card, Button, Loading, EmptyState } from '../../components/ui'
 import api from '../../api/client'
@@ -84,6 +84,30 @@ interface NewsDashboardStats {
   trends: NewsTrendItem[]
   categories: NewsCategoryItem[]
   hot: NewsHotItem[]
+}
+
+interface AiFeedbackRecentRating {
+  message_id: number
+  consultation_id: number
+  user_id: number | null
+  rating: number | null
+  feedback: string | null
+  created_at: string | null
+}
+
+interface AiFeedbackStats {
+  days: number
+  since: string
+  consultations_total: number
+  messages_total: number
+  assistant_messages_total: number
+  total_rated: number
+  good: number
+  neutral: number
+  bad: number
+  satisfaction_rate: number
+  rating_rate: number
+  recent_ratings: AiFeedbackRecentRating[]
 }
 
 // 简单柱状图组件
@@ -262,12 +286,28 @@ export default function DashboardPage() {
     placeholderData: (prev) => prev,
   })
 
+  const aiFeedbackDays = 30
+  const aiFeedbackLimit = 8
+  const aiFeedbackQuery = useQuery({
+    queryKey: queryKeys.aiFeedbackStats(aiFeedbackDays, aiFeedbackLimit),
+    queryFn: async () => {
+      const res = await api.get('/system/stats/ai-feedback', {
+        params: { days: aiFeedbackDays, limit: aiFeedbackLimit },
+      })
+      return res.data as AiFeedbackStats
+    },
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  })
+
   const stats = statsQuery.data ?? { users: 0, news: 0, posts: 0, lawfirms: 0 }
   const weeklyData = trendsQuery.data ?? []
   const categoryData = categoryQuery.data ?? []
   const recentActivities = activityQuery.data ?? []
   const hotContent = hotQuery.data ?? []
   const newsStats = newsStatsQuery.data ?? { total: 0, published: 0, drafts: 0, days: 7, trends: [], categories: [], hot: [] }
+  const aiFeedback = aiFeedbackQuery.data ?? null
 
   const statsLoading = statsQuery.isLoading
   const statsError = statsQuery.isError ? getApiErrorMessage(statsQuery.error, '统计数据加载失败') : null
@@ -287,12 +327,15 @@ export default function DashboardPage() {
   const newsStatsLoading = newsStatsQuery.isLoading
   const newsStatsError = newsStatsQuery.isError ? getApiErrorMessage(newsStatsQuery.error, '新闻统计加载失败') : null
 
+  const aiFeedbackLoading = aiFeedbackQuery.isLoading
+  const aiFeedbackError = aiFeedbackQuery.isError ? getApiErrorMessage(aiFeedbackQuery.error, 'AI反馈统计加载失败') : null
+
   // 统一错误 toast（不影响原有错误区域展示）
   useEffect(() => {
-    const err = statsQuery.error || trendsQuery.error || categoryQuery.error || activityQuery.error || hotQuery.error || newsStatsQuery.error
+    const err = statsQuery.error || trendsQuery.error || categoryQuery.error || activityQuery.error || hotQuery.error || newsStatsQuery.error || aiFeedbackQuery.error
     if (!err) return
     toast.error(getApiErrorMessage(err))
-  }, [activityQuery.error, categoryQuery.error, hotQuery.error, newsStatsQuery.error, statsQuery.error, toast, trendsQuery.error])
+  }, [activityQuery.error, aiFeedbackQuery.error, categoryQuery.error, hotQuery.error, newsStatsQuery.error, statsQuery.error, toast, trendsQuery.error])
 
   const newsTrendData = useMemo(() => {
     const trends = Array.isArray(newsStats?.trends) ? newsStats.trends : []
@@ -527,6 +570,96 @@ export default function DashboardPage() {
                 </span>
               </div>
             ))}
+          </div>
+        )}
+      </Card>
+
+      <Card variant="surface" padding="lg">
+        <div className="flex items-center justify-between mb-6">
+          <h3 className="text-lg font-semibold text-slate-900 flex items-center gap-2 dark:text-white">
+            <Sparkles className="h-5 w-5 text-purple-600 dark:text-purple-400" />
+            AI 质量
+          </h3>
+          <Button variant="outline" onClick={() => aiFeedbackQuery.refetch()} disabled={aiFeedbackQuery.isFetching}>
+            刷新
+          </Button>
+        </div>
+
+        {aiFeedbackLoading ? (
+          <Loading text="加载中..." tone={actualTheme} />
+        ) : aiFeedbackError ? (
+          <div className="flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
+            <div>{aiFeedbackError}</div>
+            <Button variant="outline" onClick={() => aiFeedbackQuery.refetch()}>重试</Button>
+          </div>
+        ) : !aiFeedback ? (
+          <EmptyState
+            icon={Sparkles}
+            title="暂无AI反馈统计"
+            description="稍后再试或检查数据来源"
+            tone={actualTheme}
+          />
+        ) : (
+          <div className="space-y-6">
+            <div className="grid sm:grid-cols-3 gap-3">
+              <div className="rounded-xl bg-slate-900/5 px-4 py-3 dark:bg-white/5">
+                <div className="text-xs text-slate-600 dark:text-white/45">满意度</div>
+                <div className="text-xl font-semibold text-slate-900 mt-1 dark:text-white">{Number(aiFeedback.satisfaction_rate || 0).toFixed(1)}%</div>
+              </div>
+              <div className="rounded-xl bg-slate-900/5 px-4 py-3 dark:bg-white/5">
+                <div className="text-xs text-slate-600 dark:text-white/45">评价率</div>
+                <div className="text-xl font-semibold text-slate-900 mt-1 dark:text-white">{Number(aiFeedback.rating_rate || 0).toFixed(1)}%</div>
+              </div>
+              <div className="rounded-xl bg-slate-900/5 px-4 py-3 dark:bg-white/5">
+                <div className="text-xs text-slate-600 dark:text-white/45">评价数</div>
+                <div className="text-xl font-semibold text-slate-900 mt-1 dark:text-white">{Number(aiFeedback.total_rated || 0).toLocaleString()}</div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-3 py-1 text-xs text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-200">
+                好评 {Number(aiFeedback.good || 0).toLocaleString()}
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full bg-slate-500/10 px-3 py-1 text-xs text-slate-700 dark:bg-white/10 dark:text-white/70">
+                一般 {Number(aiFeedback.neutral || 0).toLocaleString()}
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-3 py-1 text-xs text-red-700 dark:bg-red-500/15 dark:text-red-200">
+                差评 {Number(aiFeedback.bad || 0).toLocaleString()}
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full bg-slate-900/5 px-3 py-1 text-xs text-slate-600 dark:bg-white/5 dark:text-white/45">
+                最近 {aiFeedback.days} 天
+              </span>
+            </div>
+
+            <div>
+              <div className="text-sm font-semibold text-slate-900 mb-3 dark:text-white">最近反馈</div>
+              {Array.isArray(aiFeedback.recent_ratings) && aiFeedback.recent_ratings.length > 0 ? (
+                <div className="space-y-3">
+                  {aiFeedback.recent_ratings.map((row) => {
+                    const rating = Number(row.rating || 0)
+                    const ratingText = rating === 3 ? '好评' : rating === 2 ? '一般' : rating === 1 ? '差评' : '未评价'
+                    const feedback = String(row.feedback || '').trim() || '（无文字反馈）'
+                    const atIso = row.created_at ? String(row.created_at) : ''
+                    return (
+                      <div key={row.message_id} className="flex items-start justify-between gap-4 rounded-xl border border-slate-200/70 bg-white/60 px-4 py-3 dark:border-white/10 dark:bg-white/5">
+                        <div className="min-w-0">
+                          <div className="text-sm text-slate-900 dark:text-white">{feedback}</div>
+                          <div className="mt-1 text-xs text-slate-500 dark:text-white/40">
+                            会话 #{row.consultation_id} · 消息 #{row.message_id}
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-1">
+                          <span className="text-xs font-medium text-slate-700 dark:text-white/70">{ratingText}</span>
+                          <span className="text-xs text-slate-500 dark:text-white/40">{atIso ? toRelativeTime(atIso) : ''}</span>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="text-sm text-slate-500 dark:text-white/40">暂无反馈</div>
+              )}
+            </div>
           </div>
         )}
       </Card>

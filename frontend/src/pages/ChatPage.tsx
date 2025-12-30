@@ -19,6 +19,7 @@ import {
   Search,
   FileText,
   Lightbulb,
+  Info,
   ChevronDown,
   ChevronUp,
   Sparkles,
@@ -54,6 +55,13 @@ interface ThinkingStep {
   metadata?: Record<string, any>;
 }
 
+interface SearchQualityInfo {
+  total_candidates: number;
+  qualified_count: number;
+  avg_similarity: number;
+  confidence: string;
+}
+
 interface Message {
   id?: number;
   role: "user" | "assistant";
@@ -65,6 +73,12 @@ interface Message {
   intent?: string;
   needsClarification?: boolean;
   clarifyingQuestions?: string[];
+  strategyUsed?: string;
+  strategyReason?: string;
+  confidence?: string;
+  riskLevel?: string;
+  searchQuality?: SearchQualityInfo;
+  disclaimer?: string;
 }
 
 const GUEST_AI_LIMIT = 5;
@@ -518,6 +532,12 @@ export default function ChatPage() {
             intent: undefined,
             needsClarification: undefined,
             clarifyingQuestions: undefined,
+            strategyUsed: undefined,
+            strategyReason: undefined,
+            confidence: undefined,
+            riskLevel: undefined,
+            searchQuality: undefined,
+            disclaimer: undefined,
           },
         ];
       });
@@ -631,6 +651,13 @@ export default function ChatPage() {
           const needs = data?.needs_clarification;
           const questions = data?.clarifying_questions;
 
+          const strategyUsed = data?.strategy_used;
+          const strategyReason = data?.strategy_reason;
+          const confidence = data?.confidence;
+          const riskLevel = data?.risk_level;
+          const searchQuality = data?.search_quality;
+          const disclaimer = data?.disclaimer;
+
           const cleanedQuestions = Array.isArray(questions)
             ? questions
                 .filter((q) => typeof q === "string" && q.trim())
@@ -638,12 +665,35 @@ export default function ChatPage() {
                 .slice(0, 6)
             : undefined;
 
+          const cleanedSearchQuality =
+            searchQuality && typeof searchQuality === "object"
+              ? {
+                  total_candidates: Number(searchQuality.total_candidates ?? 0),
+                  qualified_count: Number(searchQuality.qualified_count ?? 0),
+                  avg_similarity: Number(searchQuality.avg_similarity ?? 0),
+                  confidence: String(searchQuality.confidence ?? ""),
+                }
+              : undefined;
+
           applyAssistantUpdate((m) => ({
             ...m,
             intent: typeof intent === "string" ? intent : m.intent,
             needsClarification:
               typeof needs === "boolean" ? needs : m.needsClarification,
             clarifyingQuestions: cleanedQuestions ?? m.clarifyingQuestions,
+            strategyUsed:
+              typeof strategyUsed === "string" ? strategyUsed : m.strategyUsed,
+            strategyReason:
+              typeof strategyReason === "string"
+                ? strategyReason
+                : m.strategyReason,
+            confidence:
+              typeof confidence === "string" ? confidence : m.confidence,
+            riskLevel:
+              typeof riskLevel === "string" ? riskLevel : m.riskLevel,
+            searchQuality: cleanedSearchQuality ?? m.searchQuality,
+            disclaimer:
+              typeof disclaimer === "string" ? disclaimer : m.disclaimer,
           }));
           return;
         }
@@ -874,6 +924,41 @@ export default function ChatPage() {
                       .map((q: any) => String(q).trim())
                       .slice(0, 6)
                   : undefined,
+                strategyUsed:
+                  typeof response.strategy_used === "string"
+                    ? response.strategy_used
+                    : undefined,
+                strategyReason:
+                  typeof response.strategy_reason === "string"
+                    ? response.strategy_reason
+                    : undefined,
+                confidence:
+                  typeof response.confidence === "string"
+                    ? response.confidence
+                    : undefined,
+                riskLevel:
+                  typeof response.risk_level === "string"
+                    ? response.risk_level
+                    : undefined,
+                searchQuality:
+                  response.search_quality && typeof response.search_quality === "object"
+                    ? {
+                        total_candidates: Number(
+                          response.search_quality.total_candidates ?? 0
+                        ),
+                        qualified_count: Number(
+                          response.search_quality.qualified_count ?? 0
+                        ),
+                        avg_similarity: Number(
+                          response.search_quality.avg_similarity ?? 0
+                        ),
+                        confidence: String(response.search_quality.confidence ?? ""),
+                      }
+                    : undefined,
+                disclaimer:
+                  typeof response.disclaimer === "string"
+                    ? response.disclaimer
+                    : undefined,
               },
             ];
           }
@@ -897,6 +982,41 @@ export default function ChatPage() {
                   .map((q: any) => String(q).trim())
                   .slice(0, 6)
               : current.clarifyingQuestions,
+            strategyUsed:
+              typeof response.strategy_used === "string"
+                ? response.strategy_used
+                : current.strategyUsed,
+            strategyReason:
+              typeof response.strategy_reason === "string"
+                ? response.strategy_reason
+                : current.strategyReason,
+            confidence:
+              typeof response.confidence === "string"
+                ? response.confidence
+                : current.confidence,
+            riskLevel:
+              typeof response.risk_level === "string"
+                ? response.risk_level
+                : current.riskLevel,
+            searchQuality:
+              response.search_quality && typeof response.search_quality === "object"
+                ? {
+                    total_candidates: Number(
+                      response.search_quality.total_candidates ?? 0
+                    ),
+                    qualified_count: Number(
+                      response.search_quality.qualified_count ?? 0
+                    ),
+                    avg_similarity: Number(
+                      response.search_quality.avg_similarity ?? 0
+                    ),
+                    confidence: String(response.search_quality.confidence ?? ""),
+                  }
+                : current.searchQuality,
+            disclaimer:
+              typeof response.disclaimer === "string"
+                ? response.disclaimer
+                : current.disclaimer,
             id:
               typeof response.assistant_message_id === "number"
                 ? response.assistant_message_id
@@ -1049,6 +1169,12 @@ export default function ChatPage() {
                       intent={message.intent}
                       needsClarification={message.needsClarification}
                       clarifyingQuestions={message.clarifyingQuestions}
+                      strategyUsed={message.strategyUsed}
+                      strategyReason={message.strategyReason}
+                      confidence={message.confidence}
+                      riskLevel={message.riskLevel}
+                      searchQuality={message.searchQuality}
+                      disclaimer={message.disclaimer}
                       onQuickReplySelect={(text) => {
                         setInput(text);
                         requestAnimationFrame(() => inputRef.current?.focus());
@@ -1307,6 +1433,12 @@ function AssistantMessage({
   intent,
   needsClarification,
   clarifyingQuestions,
+  strategyUsed,
+  strategyReason,
+  confidence,
+  riskLevel,
+  searchQuality,
+  disclaimer,
   onQuickReplySelect,
   isStreaming,
 }: {
@@ -1319,6 +1451,12 @@ function AssistantMessage({
   intent?: string;
   needsClarification?: boolean;
   clarifyingQuestions?: string[];
+  strategyUsed?: string;
+  strategyReason?: string;
+  confidence?: string;
+  riskLevel?: string;
+  searchQuality?: SearchQualityInfo;
+  disclaimer?: string;
   onQuickReplySelect?: (text: string) => void;
   isStreaming?: boolean;
 }) {
@@ -1327,6 +1465,7 @@ function AssistantMessage({
   const [favorited, setFavorited] = useState(false);
   const toast = useToast();
   const [rated, setRated] = useState<number | null>(null);
+  const [showMeta, setShowMeta] = useState(false);
 
   const FAVORITES_KEY = "chat_favorite_messages_v1";
 
@@ -1456,6 +1595,51 @@ function AssistantMessage({
 
     return items;
   }, [content]);
+
+  const normalizedQuickReplies = useMemo(() => {
+    const raw = Array.isArray(quickReplies) ? quickReplies : [];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const item of raw) {
+      if (typeof item !== "string") continue;
+      const cleaned = item.trim().replace(/\s+/g, " ");
+      if (!cleaned) continue;
+      const key = cleaned.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(cleaned);
+      if (out.length >= 6) break;
+    }
+    return out;
+  }, [quickReplies]);
+
+  const normalizedClarifyingQuestions = useMemo(() => {
+    const raw = Array.isArray(clarifyingQuestions) ? clarifyingQuestions : [];
+    const seen = new Set<string>();
+    const qrKeys = new Set(normalizedQuickReplies.map((t) => t.toLowerCase()));
+    const out: string[] = [];
+    for (const item of raw) {
+      if (typeof item !== "string") continue;
+      const cleaned = item.trim().replace(/\s+/g, " ");
+      if (!cleaned) continue;
+      const key = cleaned.toLowerCase();
+      if (seen.has(key)) continue;
+      if (qrKeys.has(key)) continue;
+      seen.add(key);
+      out.push(cleaned);
+      if (out.length >= 6) break;
+    }
+    return out;
+  }, [clarifyingQuestions, normalizedQuickReplies]);
+
+  const hasMeta = Boolean(
+    (typeof strategyUsed === "string" && strategyUsed.trim()) ||
+      (typeof confidence === "string" && confidence.trim()) ||
+      (typeof riskLevel === "string" && riskLevel.trim()) ||
+      (searchQuality && typeof searchQuality === "object") ||
+      (typeof disclaimer === "string" && disclaimer.trim()) ||
+      (typeof strategyReason === "string" && strategyReason.trim())
+  );
 
   const rate = async (value: number) => {
     if (!messageId) return;
@@ -1837,12 +2021,91 @@ function AssistantMessage({
         <div className="space-y-3 text-[15px] leading-7">{renderedBlocks}</div>
       )}
 
-      {Array.isArray(quickReplies) && quickReplies.length > 0 && (
+      {hasMeta && (
+        <div className="pt-1">
+          <button
+            type="button"
+            onClick={() => setShowMeta((v) => !v)}
+            className="flex items-center gap-2 text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
+          >
+            <Info className="h-3.5 w-3.5" />
+            <span>回答信息</span>
+            {showMeta ? (
+              <ChevronUp className="h-3.5 w-3.5" />
+            ) : (
+              <ChevronDown className="h-3.5 w-3.5" />
+            )}
+          </button>
+          {showMeta && (
+            <div className="mt-2 space-y-2 rounded-xl bg-slate-50 border border-slate-200 p-3 text-xs text-slate-600 dark:bg-slate-800/50 dark:border-slate-700 dark:text-slate-300">
+              {typeof strategyUsed === "string" && strategyUsed.trim() && (
+                <div>
+                  <span className="font-medium text-slate-700 dark:text-slate-200">
+                    策略
+                  </span>
+                  <span className="ml-2">{strategyUsed.trim()}</span>
+                </div>
+              )}
+              {typeof strategyReason === "string" && strategyReason.trim() && (
+                <div>
+                  <span className="font-medium text-slate-700 dark:text-slate-200">
+                    原因
+                  </span>
+                  <span className="ml-2 whitespace-pre-wrap">
+                    {strategyReason.trim()}
+                  </span>
+                </div>
+              )}
+              {typeof confidence === "string" && confidence.trim() && (
+                <div>
+                  <span className="font-medium text-slate-700 dark:text-slate-200">
+                    置信度
+                  </span>
+                  <span className="ml-2">{confidence.trim()}</span>
+                </div>
+              )}
+              {typeof riskLevel === "string" && riskLevel.trim() && (
+                <div>
+                  <span className="font-medium text-slate-700 dark:text-slate-200">
+                    风险
+                  </span>
+                  <span className="ml-2">{riskLevel.trim()}</span>
+                </div>
+              )}
+              {searchQuality && typeof searchQuality === "object" && (
+                <div>
+                  <span className="font-medium text-slate-700 dark:text-slate-200">
+                    检索质量
+                  </span>
+                  <span className="ml-2">
+                    候选 {Number(searchQuality.total_candidates ?? 0)}，通过
+                    {" "}
+                    {Number(searchQuality.qualified_count ?? 0)}，平均相似度
+                    {" "}
+                    {Number(searchQuality.avg_similarity ?? 0).toFixed(3)}，置信
+                    {" "}
+                    {String(searchQuality.confidence ?? "")}
+                  </span>
+                </div>
+              )}
+              {typeof disclaimer === "string" && disclaimer.trim() && (
+                <div>
+                  <span className="font-medium text-slate-700 dark:text-slate-200">
+                    免责声明
+                  </span>
+                  <div className="mt-1 whitespace-pre-wrap">
+                    {disclaimer.trim()}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {normalizedQuickReplies.length > 0 && (
         <div className="flex flex-wrap gap-2 pt-1">
-          {quickReplies
-            .filter((t) => typeof t === "string" && t.trim())
-            .slice(0, 6)
-            .map((text, idx) => (
+          {normalizedQuickReplies.map((text, idx) => (
               <button
                 key={`qr-${idx}`}
                 type="button"
@@ -1855,9 +2118,7 @@ function AssistantMessage({
         </div>
       )}
 
-      {(needsClarification ?? true) &&
-        Array.isArray(clarifyingQuestions) &&
-        clarifyingQuestions.length > 0 && (
+      {normalizedClarifyingQuestions.length > 0 && (
         <div className="pt-1">
           <div className="flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
             <Lightbulb className="h-3.5 w-3.5" />
@@ -1868,11 +2129,13 @@ function AssistantMessage({
               </span>
             )}
           </div>
+          {needsClarification === true && (
+            <div className="mt-2 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs text-indigo-700 dark:border-indigo-800 dark:bg-indigo-900/20 dark:text-indigo-200">
+              为了更准确判断，请补充以下信息（可直接点选）：
+            </div>
+          )}
           <div className="flex flex-wrap gap-2 pt-2">
-            {clarifyingQuestions
-              .filter((t) => typeof t === "string" && t.trim())
-              .slice(0, 6)
-              .map((text, idx) => (
+            {normalizedClarifyingQuestions.map((text, idx) => (
                 <button
                   key={`cq-${idx}`}
                   type="button"

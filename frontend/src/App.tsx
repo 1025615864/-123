@@ -42,6 +42,8 @@ const CalendarPage = lazy(() => import("./pages/CalendarPage"));
 const DocumentGeneratorPage = lazy(
   () => import("./pages/DocumentGeneratorPage")
 );
+const FaqPage = lazy(() => import("./pages/FaqPage"));
+const SharePage = lazy(() => import("./pages/SharePage"));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
 
 // 懒加载管理后台页面
@@ -150,6 +152,8 @@ function App() {
                 <Route path="limitations" element={<LimitationsCalculatorPage />} />
                 <Route path="calendar" element={<CalendarPage />} />
                 <Route path="documents" element={<DocumentGeneratorPage />} />
+                <Route path="faq" element={<FaqPage />} />
+                <Route path="share/:token" element={<SharePage />} />
                 <Route path="login" element={<LoginPage />} />
                 <Route path="register" element={<RegisterPage />} />
                 <Route path="profile" element={<ProfilePage />} />

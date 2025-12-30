@@ -19,6 +19,13 @@ export const queryKeys = {
   adminDashboardNewsStats: (days: number, limit: number) =>
     ["admin-dashboard-news-stats", { days, limit }] as const,
 
+  aiFeedbackStats: (days: number, limit: number) =>
+    ["ai-feedback-stats", { days, limit }] as const,
+
+  publicFaq: () => ["public-faq"] as const,
+
+  sharedConsultation: (token: string) => ["shared-consultation", { token }] as const,
+
   lawFirms: (keyword: string, city: string) =>
     ["lawfirms", { keyword, city }] as const,
   lawFirm: (firmId: string | undefined) => ["lawfirm", { firmId }] as const,

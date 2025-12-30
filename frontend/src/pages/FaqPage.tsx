@@ -1,0 +1,142 @@
+import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { HelpCircle, ChevronDown, ChevronUp, ArrowRight } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { Card, Button, EmptyState, Loading } from '../components/ui'
+import PageHeader from '../components/PageHeader'
+import api from '../api/client'
+import { queryKeys } from '../queryKeys'
+import { useTheme } from '../contexts/ThemeContext'
+import { getApiErrorMessage } from '../utils'
+
+interface FaqItem {
+  question: string
+  answer: string
+}
+
+interface FaqPublicResponse {
+  items: FaqItem[]
+  updated_at: string | null
+}
+
+export default function FaqPage() {
+  const { actualTheme } = useTheme()
+  const [expanded, setExpanded] = useState<number | null>(null)
+
+  const faqQuery = useQuery({
+    queryKey: queryKeys.publicFaq(),
+    queryFn: async () => {
+      const res = await api.get('/system/public/faq')
+      return res.data as FaqPublicResponse
+    },
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  })
+
+  const items = useMemo(() => {
+    const data = faqQuery.data
+    if (!data || !Array.isArray(data.items)) return []
+    return data.items
+      .map((it) => ({
+        question: String((it as any)?.question || '').trim(),
+        answer: String((it as any)?.answer || '').trim(),
+      }))
+      .filter((it) => it.question && it.answer)
+  }, [faqQuery.data])
+
+  const updatedAtText = useMemo(() => {
+    const raw = String(faqQuery.data?.updated_at || '').trim()
+    if (!raw) return ''
+    const t = new Date(raw).getTime()
+    if (Number.isNaN(t)) return raw
+    return new Date(t).toLocaleString('zh-CN')
+  }, [faqQuery.data?.updated_at])
+
+  const errorText = faqQuery.isError ? getApiErrorMessage(faqQuery.error, 'FAQ 加载失败') : null
+
+  return (
+    <div className="space-y-10">
+      <PageHeader
+        eyebrow="帮助中心"
+        title="常见问题（FAQ）"
+        description="来自真实咨询反馈的高频问答，帮助你更快了解常见法律问题"
+        tone={actualTheme}
+        right={
+          <Link to="/chat">
+            <Button icon={ArrowRight} className="bg-emerald-600 hover:bg-emerald-700 text-white focus-visible:ring-emerald-500/25">
+              去咨询 AI
+            </Button>
+          </Link>
+        }
+      />
+
+      {faqQuery.isLoading ? (
+        <Loading text="加载中..." tone={actualTheme} />
+      ) : errorText ? (
+        <div className="flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
+          <div>{errorText}</div>
+          <Button variant="outline" onClick={() => faqQuery.refetch()} isLoading={faqQuery.isFetching}>
+            重试
+          </Button>
+        </div>
+      ) : items.length === 0 ? (
+        <EmptyState
+          icon={HelpCircle}
+          title="暂无 FAQ"
+          description="管理员尚未生成 FAQ。你可以直接使用 AI 咨询获取帮助。"
+          tone={actualTheme}
+        />
+      ) : (
+        <div className="space-y-6">
+          <Card variant="surface" padding="lg">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-lg font-semibold text-slate-900 dark:text-white">FAQ 列表</div>
+                <div className="text-sm text-slate-600 mt-1 dark:text-white/50">
+                  {updatedAtText ? `更新时间：${updatedAtText}` : '更新时间：—'}
+                </div>
+              </div>
+              <Button variant="outline" onClick={() => faqQuery.refetch()} isLoading={faqQuery.isFetching}>
+                刷新
+              </Button>
+            </div>
+          </Card>
+
+          <div className="space-y-3">
+            {items.map((faq, idx) => (
+              <div
+                key={`${idx}-${faq.question}`}
+                className="rounded-xl border border-slate-200 overflow-hidden dark:border-white/10"
+              >
+                <button
+                  type="button"
+                  onClick={() => setExpanded(expanded === idx ? null : idx)}
+                  aria-expanded={expanded === idx}
+                  aria-controls={`faq-panel-${idx}`}
+                  className="w-full p-4 flex items-center justify-between text-left hover:bg-slate-50 transition-colors dark:hover:bg-white/5"
+                >
+                  <span className="text-slate-900 dark:text-white text-sm font-medium pr-4">
+                    {faq.question}
+                  </span>
+                  {expanded === idx ? (
+                    <ChevronUp className="h-4 w-4 text-slate-400 dark:text-white/40 flex-shrink-0" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 text-slate-400 dark:text-white/40 flex-shrink-0" />
+                  )}
+                </button>
+                {expanded === idx && (
+                  <div id={`faq-panel-${idx}`} className="px-4 pb-4">
+                    <p className="text-sm text-slate-600 leading-relaxed dark:text-white/60">
+                      {faq.answer}
+                    </p>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}

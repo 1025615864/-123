@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
+from ..models.user import User
 from ..schemas.knowledge import (
     KnowledgeType,
     LegalKnowledgeCreate,
@@ -20,6 +21,7 @@ from ..schemas.knowledge import (
     BatchOperationResponse,
 )
 from ..services.knowledge_service import get_knowledge_service, KnowledgeService
+from ..utils.deps import require_admin, get_current_user_optional
 
 router = APIRouter(prefix="/knowledge", tags=["知识库管理"])
 
@@ -31,6 +33,7 @@ async def create_knowledge(
     data: LegalKnowledgeCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    current_user: Annotated[User, Depends(require_admin)],
 ):
     """
     创建法律知识条目
@@ -41,6 +44,7 @@ async def create_knowledge(
     - **content**: 内容
     - **category**: 分类（如：民法、刑法、劳动法）
     """
+    _ = current_user
     knowledge = await service.create_knowledge(db, data)
     return knowledge
 
@@ -49,6 +53,7 @@ async def create_knowledge(
 async def list_knowledge(
     db: Annotated[AsyncSession, Depends(get_db)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    current_user: Annotated[User, Depends(require_admin)],
     page: Annotated[int, Query(ge=1, description="页码")] = 1,
     page_size: Annotated[int, Query(ge=1, le=100, description="每页数量")] = 20,
     knowledge_type: Annotated[str | None, Query(description="知识类型过滤")] = None,
@@ -61,6 +66,7 @@ async def list_knowledge(
     
     支持分页、类型过滤、分类过滤、关键词搜索
     """
+    _ = current_user
     items, total = await service.list_knowledge(
         db, page, page_size, knowledge_type, category, keyword, is_active
     )
@@ -77,8 +83,10 @@ async def get_knowledge(
     knowledge_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    current_user: Annotated[User, Depends(require_admin)],
 ):
     """获取单条法律知识详情"""
+    _ = current_user
     knowledge = await service.get_knowledge(db, knowledge_id)
     if not knowledge:
         raise HTTPException(status_code=404, detail="知识条目不存在")
@@ -91,8 +99,10 @@ async def update_knowledge(
     data: LegalKnowledgeUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    current_user: Annotated[User, Depends(require_admin)],
 ):
     """更新法律知识"""
+    _ = current_user
     knowledge = await service.update_knowledge(db, knowledge_id, data)
     if not knowledge:
         raise HTTPException(status_code=404, detail="知识条目不存在")
@@ -104,8 +114,10 @@ async def delete_knowledge(
     knowledge_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    current_user: Annotated[User, Depends(require_admin)],
 ):
     """删除法律知识"""
+    _ = current_user
     success = await service.delete_knowledge(db, knowledge_id)
     if not success:
         raise HTTPException(status_code=404, detail="知识条目不存在")
@@ -117,8 +129,10 @@ async def batch_delete_knowledge(
     data: BatchDeleteRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    current_user: Annotated[User, Depends(require_admin)],
 ):
     """批量删除法律知识"""
+    _ = current_user
     success, failed = await service.batch_delete_knowledge(db, data.ids)
     return BatchOperationResponse(
         success_count=success,
@@ -134,8 +148,10 @@ async def vectorize_knowledge(
     knowledge_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    current_user: Annotated[User, Depends(require_admin)],
 ):
     """将单条知识向量化到向量库"""
+    _ = current_user
     success = await service.vectorize_knowledge(db, knowledge_id)
     if not success:
         raise HTTPException(status_code=400, detail="向量化失败，请检查知识条目是否存在或AI服务是否配置")
@@ -147,8 +163,10 @@ async def batch_vectorize(
     data: BatchVectorizeRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    current_user: Annotated[User, Depends(require_admin)],
 ):
     """批量向量化知识"""
+    _ = current_user
     success, failed = await service.batch_vectorize(db, data.ids)
     return BatchOperationResponse(
         success_count=success,
@@ -161,8 +179,10 @@ async def batch_vectorize(
 async def sync_vector_store(
     db: Annotated[AsyncSession, Depends(get_db)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    current_user: Annotated[User, Depends(require_admin)],
 ):
     """同步所有未向量化的知识到向量库"""
+    _ = current_user
     success, failed = await service.sync_all_to_vector_store(db)
     return BatchOperationResponse(
         success_count=success,
@@ -177,17 +197,21 @@ async def sync_vector_store(
 async def get_stats(
     db: Annotated[AsyncSession, Depends(get_db)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    current_user: Annotated[User, Depends(require_admin)],
 ):
     """获取知识库统计信息"""
+    _ = current_user
     return await service.get_stats(db)
 
 
-@router.get("/categories", response_model=list[str])
-async def get_categories(
+@router.get("/laws/distinct-categories", response_model=list[str])
+async def get_distinct_law_categories(
     db: Annotated[AsyncSession, Depends(get_db)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    current_user: Annotated[User, Depends(require_admin)],
 ):
     """获取所有分类列表"""
+    _ = current_user
     return await service.get_categories(db)
 
 
@@ -198,6 +222,7 @@ async def create_template(
     data: ConsultationTemplateCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    current_user: Annotated[User, Depends(require_admin)],
 ):
     """
     创建咨询模板
@@ -206,6 +231,7 @@ async def create_template(
     - **category**: 分类
     - **questions**: 预设问题列表
     """
+    _ = current_user
     template = await service.create_template(db, data)
     questions = service.parse_template_questions(template)
     return ConsultationTemplateResponse(
@@ -228,6 +254,7 @@ async def list_templates(
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
     category: Annotated[str | None, Query(description="分类过滤")] = None,
     is_active: Annotated[str | None, Query(description="是否启用（true/false，为空表示不筛选）")] = None,
+    current_user: Annotated[User | None, Depends(get_current_user_optional)] = None,
 ):
     """获取咨询模板列表"""
 
@@ -244,6 +271,10 @@ async def list_templates(
             parsed_is_active = False
         else:
             raise HTTPException(status_code=422, detail="is_active 参数无效，应为 true/false")
+
+    if parsed_is_active is not True:
+        if current_user is None or not (current_user.role in {"admin", "super_admin"}):
+            raise HTTPException(status_code=403, detail="需要管理员权限")
 
     templates = await service.list_templates(db, category, parsed_is_active)
     result: list[ConsultationTemplateResponse] = []
@@ -269,8 +300,10 @@ async def get_template(
     template_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    current_user: Annotated[User, Depends(require_admin)],
 ):
     """获取单个咨询模板"""
+    _ = current_user
     template = await service.get_template(db, template_id)
     if not template:
         raise HTTPException(status_code=404, detail="模板不存在")
@@ -296,8 +329,10 @@ async def update_template(
     data: ConsultationTemplateUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    current_user: Annotated[User, Depends(require_admin)],
 ):
     """更新咨询模板"""
+    _ = current_user
     template = await service.update_template(db, template_id, data)
     if not template:
         raise HTTPException(status_code=404, detail="模板不存在")
@@ -322,8 +357,10 @@ async def delete_template(
     template_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    current_user: Annotated[User, Depends(require_admin)],
 ):
     """删除咨询模板"""
+    _ = current_user
     success = await service.delete_template(db, template_id)
     if not success:
         raise HTTPException(status_code=404, detail="模板不存在")
@@ -370,9 +407,11 @@ class CategoryResponse(BaseModel):
 @router.get("/categories", response_model=list[CategoryResponse])
 async def list_categories(
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(require_admin)],
     include_inactive: bool = False,
 ):
     """获取所有分类"""
+    _ = current_user
     query = select(KnowledgeCategory).order_by(KnowledgeCategory.sort_order)
     if not include_inactive:
         query = query.where(KnowledgeCategory.is_active == True)
@@ -385,8 +424,10 @@ async def list_categories(
 async def create_category(
     data: CategoryCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(require_admin)],
 ):
     """创建分类"""
+    _ = current_user
     # 检查名称是否已存在
     existing = await db.execute(
         select(KnowledgeCategory).where(KnowledgeCategory.name == data.name)
@@ -412,8 +453,10 @@ async def update_category(
     category_id: int,
     data: CategoryUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(require_admin)],
 ):
     """更新分类"""
+    _ = current_user
     result = await db.execute(
         select(KnowledgeCategory).where(KnowledgeCategory.id == category_id)
     )
@@ -443,8 +486,10 @@ async def update_category(
 async def delete_category(
     category_id: int,
     db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(require_admin)],
 ):
     """删除分类"""
+    _ = current_user
     result = await db.execute(
         select(KnowledgeCategory).where(KnowledgeCategory.id == category_id)
     )
@@ -487,12 +532,14 @@ async def batch_import_knowledge(
     data: BatchImportRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    current_user: Annotated[User, Depends(require_admin)],
 ):
     """
     批量导入法律知识
     
     接收JSON格式的数据列表进行批量导入
     """
+    _ = current_user
     success_count = 0
     failed_items: list[dict[str, object]] = []
     
@@ -534,6 +581,7 @@ async def import_csv(
     file: Annotated[UploadFile, File(...)],
     db: Annotated[AsyncSession, Depends(get_db)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    current_user: Annotated[User, Depends(require_admin)],
 ):
     """
     从CSV文件导入法律知识
@@ -549,6 +597,8 @@ async def import_csv(
     - source: 来源（可选）
     - effective_date: 生效日期（可选）
     """
+    _ = current_user
+
     if not file.filename or not file.filename.endswith('.csv'):
         raise HTTPException(status_code=400, detail="请上传CSV文件")
     

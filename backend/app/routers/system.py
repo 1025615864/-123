@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, and_, or_
 from pydantic import BaseModel, ConfigDict, Field, AliasChoices
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from ..database import get_db
 from ..models.system import SystemConfig, AdminLog, LogAction, LogModule
@@ -966,39 +966,274 @@ async def get_daily_stats(
 async def get_ai_feedback_stats(
     _current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    days: Annotated[int, Query(ge=1, le=365, description="统计天数")] = 30,
+    limit: Annotated[int, Query(ge=1, le=50, description="最近反馈条数")] = 20,
 ):
     """获取AI反馈统计"""
+    since_dt = datetime.now(timezone.utc) - timedelta(days=int(days))
+
+    consultations_total = await db.scalar(
+        select(func.count()).select_from(Consultation).where(Consultation.created_at >= since_dt)
+    )
+
+    messages_total = await db.scalar(
+        select(func.count()).select_from(ChatMessage).where(ChatMessage.created_at >= since_dt)
+    )
+
+    assistant_messages_total = await db.scalar(
+        select(func.count()).select_from(ChatMessage).where(
+            and_(
+                ChatMessage.created_at >= since_dt,
+                ChatMessage.role == "assistant",
+            )
+        )
+    )
+
+    rated_filter = and_(
+        ChatMessage.created_at >= since_dt,
+        ChatMessage.role == "assistant",
+        ChatMessage.rating.isnot(None),
+    )
+
     total_rated = await db.scalar(
-        select(func.count()).select_from(ChatMessage).where(
-            ChatMessage.rating.isnot(None)
-        )
+        select(func.count()).select_from(ChatMessage).where(rated_filter)
     )
-    
+
     good_count = await db.scalar(
-        select(func.count()).select_from(ChatMessage).where(
-            ChatMessage.rating == 3
-        )
+        select(func.count()).select_from(ChatMessage).where(and_(rated_filter, ChatMessage.rating == 3))
     )
-    
+
     neutral_count = await db.scalar(
-        select(func.count()).select_from(ChatMessage).where(
-            ChatMessage.rating == 2
-        )
+        select(func.count()).select_from(ChatMessage).where(and_(rated_filter, ChatMessage.rating == 2))
     )
-    
+
     bad_count = await db.scalar(
-        select(func.count()).select_from(ChatMessage).where(
-            ChatMessage.rating == 1
-        )
+        select(func.count()).select_from(ChatMessage).where(and_(rated_filter, ChatMessage.rating == 1))
     )
-    
+
+    recent_rows = await db.execute(
+        select(
+            ChatMessage.id,
+            ChatMessage.consultation_id,
+            ChatMessage.rating,
+            ChatMessage.feedback,
+            ChatMessage.created_at,
+            Consultation.user_id,
+        )
+        .join(Consultation, ChatMessage.consultation_id == Consultation.id)
+        .where(rated_filter)
+        .order_by(desc(ChatMessage.created_at))
+        .limit(int(limit))
+    )
+
+    recent_ratings: list[dict[str, object]] = []
+    for row in recent_rows.all():
+        message_id, consultation_id, rating, feedback, created_at, user_id = row
+        created_at_iso = None
+        if created_at is not None:
+            try:
+                created_at_iso = created_at.isoformat()
+            except Exception:
+                created_at_iso = str(created_at)
+        recent_ratings.append(
+            {
+                "message_id": int(message_id),
+                "consultation_id": int(consultation_id),
+                "user_id": int(user_id) if user_id is not None else None,
+                "rating": int(rating) if rating is not None else None,
+                "feedback": str(feedback) if feedback is not None else None,
+                "created_at": created_at_iso,
+            }
+        )
+
+    total_rated_i = int(total_rated or 0)
+    good_i = int(good_count or 0)
+    assistant_total_i = int(assistant_messages_total or 0)
+    satisfaction_rate = round(good_i / max(total_rated_i, 1) * 100, 1)
+    rating_rate = round(total_rated_i / max(assistant_total_i, 1) * 100, 1)
+
     return {
-        "total_rated": total_rated or 0,
-        "good": good_count or 0,
-        "neutral": neutral_count or 0,
-        "bad": bad_count or 0,
-        "satisfaction_rate": round((good_count or 0) / (total_rated or 1) * 100, 1)
+        "days": int(days),
+        "since": since_dt.isoformat(),
+        "consultations_total": int(consultations_total or 0),
+        "messages_total": int(messages_total or 0),
+        "assistant_messages_total": assistant_total_i,
+        "total_rated": total_rated_i,
+        "good": int(good_count or 0),
+        "neutral": int(neutral_count or 0),
+        "bad": int(bad_count or 0),
+        "satisfaction_rate": float(satisfaction_rate),
+        "rating_rate": float(rating_rate),
+        "recent_ratings": recent_ratings,
     }
+
+
+# ============ FAQ 自动生成（最小可用）===========
+
+FAQ_PUBLIC_ITEMS_KEY = "FAQ_PUBLIC_ITEMS_JSON"
+
+
+class FaqItem(BaseModel):
+    question: str
+    answer: str
+
+
+class FaqPublicResponse(BaseModel):
+    items: list[FaqItem]
+    updated_at: str | None = None
+
+
+class FaqGenerateResponse(BaseModel):
+    key: str
+    generated: int
+    saved: int
+    items: list[FaqItem]
+
+
+@router.get("/public/faq", response_model=FaqPublicResponse)
+async def get_public_faq(
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    result = await db.execute(select(SystemConfig).where(SystemConfig.key == FAQ_PUBLIC_ITEMS_KEY))
+    config = result.scalar_one_or_none()
+
+    items: list[FaqItem] = []
+    updated_at: str | None = None
+    if config is not None:
+        if config.updated_at is not None:
+            try:
+                updated_at = config.updated_at.isoformat()
+            except Exception:
+                updated_at = str(config.updated_at)
+
+        raw = str(config.value or "").strip()
+        if raw:
+            try:
+                obj = cast(object, json.loads(raw))
+                if isinstance(obj, list):
+                    for row_obj in cast(list[object], obj):
+                        if not isinstance(row_obj, dict):
+                            continue
+                        row = cast(dict[str, object], row_obj)
+                        q = str(row.get("question") or "").strip()
+                        a = str(row.get("answer") or "").strip()
+                        if not q or not a:
+                            continue
+                        items.append(FaqItem(question=q, answer=a))
+            except Exception:
+                items = []
+
+    return FaqPublicResponse(items=items, updated_at=updated_at)
+
+
+@router.post("/faq/generate", response_model=FaqGenerateResponse)
+async def generate_faq(
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
+    days: Annotated[int, Query(ge=1, le=365, description="从最近 N 天的好评消息生成")] = 30,
+    max_items: Annotated[int, Query(ge=1, le=50, description="最多生成条数")] = 20,
+    scan_limit: Annotated[int, Query(ge=1, le=500, description="最多扫描好评消息数")] = 200,
+):
+    since_dt = datetime.now(timezone.utc) - timedelta(days=int(days))
+
+    top_rows = await db.execute(
+        select(
+            ChatMessage.id,
+            ChatMessage.consultation_id,
+            ChatMessage.content,
+            ChatMessage.created_at,
+        )
+        .where(
+            and_(
+                ChatMessage.created_at >= since_dt,
+                ChatMessage.role == "assistant",
+                ChatMessage.rating == 3,
+            )
+        )
+        .order_by(desc(ChatMessage.created_at), desc(ChatMessage.id))
+        .limit(int(scan_limit))
+    )
+
+    items: list[FaqItem] = []
+    seen_questions: set[str] = set()
+    for row in top_rows.all():
+        message_id, consultation_id, answer, created_at = row
+
+        ans = str(answer or "").strip()
+        if not ans:
+            continue
+
+        if created_at is None:
+            continue
+
+        q_res = await db.execute(
+            select(ChatMessage.content)
+            .where(
+                and_(
+                    ChatMessage.consultation_id == int(consultation_id),
+                    ChatMessage.role == "user",
+                    ChatMessage.created_at <= created_at,
+                )
+            )
+            .order_by(desc(ChatMessage.created_at), desc(ChatMessage.id))
+            .limit(1)
+        )
+        q_val = q_res.scalar_one_or_none()
+        q = str(q_val or "").strip()
+        if not q:
+            continue
+
+        q_norm = re.sub(r"\s+", " ", q).strip().lower()
+        if not q_norm:
+            continue
+        if q_norm in seen_questions:
+            continue
+        seen_questions.add(q_norm)
+
+        items.append(FaqItem(question=q, answer=ans))
+        if len(items) >= int(max_items):
+            break
+
+    value_json = json.dumps([it.model_dump() for it in items], ensure_ascii=False)
+    _validate_system_config_no_secrets(FAQ_PUBLIC_ITEMS_KEY, value_json)
+
+    cfg_res = await db.execute(select(SystemConfig).where(SystemConfig.key == FAQ_PUBLIC_ITEMS_KEY))
+    cfg = cfg_res.scalar_one_or_none()
+    if cfg is None:
+        cfg = SystemConfig(
+            key=FAQ_PUBLIC_ITEMS_KEY,
+            value=value_json,
+            description="Auto-generated public FAQ items",
+            category="faq",
+            updated_by=current_user.id,
+        )
+        db.add(cfg)
+        log_action = LogAction.CREATE
+    else:
+        cfg.value = value_json
+        cfg.description = "Auto-generated public FAQ items"
+        cfg.category = "faq"
+        cfg.updated_by = current_user.id
+        log_action = LogAction.UPDATE
+
+    await _log_action(
+        db,
+        current_user.id,
+        log_action,
+        LogModule.SYSTEM,
+        description=f"生成FAQ: {len(items)} 条 (days={days}, scanned={scan_limit})",
+        request=request,
+    )
+
+    await db.commit()
+
+    return FaqGenerateResponse(
+        key=FAQ_PUBLIC_ITEMS_KEY,
+        generated=len(items),
+        saved=len(items),
+        items=items,
+    )
 
 
 # ============ 数据统计大屏 ============

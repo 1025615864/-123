@@ -32,6 +32,8 @@ export function MobileNav() {
             <Link
               key={path}
               to={path}
+              aria-label={label}
+              aria-current={isActive ? 'page' : undefined}
               className={`flex flex-col items-center justify-center flex-1 h-full transition-colors ${
                 isActive
                   ? 'text-blue-600 dark:text-blue-400'

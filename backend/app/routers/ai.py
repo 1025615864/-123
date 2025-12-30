@@ -6,9 +6,10 @@ import tempfile
 import json
 import logging
 import time
+import inspect as py_inspect
 import urllib.parse
 from typing import Annotated, cast
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, UploadFile, File, status
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -30,6 +31,9 @@ from ..schemas.ai import (
     ConsultationResponse,
     ConsultationListItem,
     MessageResponse,
+    ShareLinkResponse,
+    SharedConsultationResponse,
+    SharedMessageResponse,
     RatingRequest,
     RatingResponse,
     QuickRepliesRequest,
@@ -38,6 +42,7 @@ from ..schemas.ai import (
     FileAnalyzeResponse,
 )
 from ..utils.deps import get_current_user, get_current_user_optional
+from ..utils.security import create_access_token, decode_token
 from ..utils.rate_limiter import rate_limit, RateLimitConfig, rate_limiter, get_client_ip
 
 router = APIRouter(prefix="/ai", tags=["AI法律助手"])
@@ -162,6 +167,36 @@ def _try_get_ai_assistant():
         return get_ai_assistant()
     except Exception:
         return None
+
+
+def _supports_kwarg(func: object, name: str) -> bool:
+    try:
+        sig = py_inspect.signature(func)
+        params = sig.parameters
+        for p in params.values():
+            if p.kind == py_inspect.Parameter.VAR_KEYWORD:
+                return True
+        return name in params
+    except Exception:
+        return False
+
+
+def _build_user_profile(current_user: User | None) -> str:
+    if current_user is None:
+        return ""
+
+    nickname = str(getattr(current_user, "nickname", "") or "").strip()
+    username = str(getattr(current_user, "username", "") or "").strip()
+    role = str(getattr(current_user, "role", "") or "").strip()
+
+    parts: list[str] = []
+    if nickname:
+        parts.append(f"昵称：{nickname}")
+    if username:
+        parts.append(f"用户名：{username}")
+    if role:
+        parts.append(f"身份：{role}")
+    return "\n".join(parts)
 
 
 async def _load_seed_history(
@@ -302,11 +337,16 @@ async def chat_with_ai(
                 request_id=request_id,
             )
 
-        chat_result = await assistant.chat(
-            message=payload.message,
-            session_id=payload.session_id,
-            initial_history=seed_history,
-        )
+        user_profile = _build_user_profile(current_user)
+        chat_kwargs: dict[str, object] = {
+            "message": payload.message,
+            "session_id": payload.session_id,
+            "initial_history": seed_history,
+        }
+        if user_profile and _supports_kwarg(getattr(assistant, "chat", None), "user_profile"):
+            chat_kwargs["user_profile"] = user_profile
+
+        chat_result = await assistant.chat(**cast(dict, chat_kwargs))
 
         meta: dict[str, object] = {}
         if isinstance(chat_result, tuple) and len(chat_result) == 3:
@@ -398,6 +438,11 @@ async def chat_with_ai(
             risk_level=cast(str | None, meta.get("risk_level")) if isinstance(meta.get("risk_level"), str) else None,
             search_quality=cast(object, meta.get("search_quality")) if isinstance(meta.get("search_quality"), dict) else None,
             disclaimer=cast(str | None, meta.get("disclaimer")) if isinstance(meta.get("disclaimer"), str) else None,
+            model_used=cast(str | None, meta.get("model_used")) if isinstance(meta.get("model_used"), str) else None,
+            fallback_used=cast(bool | None, meta.get("fallback_used")) if isinstance(meta.get("fallback_used"), bool) else None,
+            model_attempts=cast(list[str] | None, meta.get("model_attempts"))
+            if isinstance(meta.get("model_attempts"), list)
+            else None,
             intent=cast(str | None, meta.get("intent")) if isinstance(meta.get("intent"), str) else None,
             needs_clarification=cast(bool | None, meta.get("needs_clarification")) if isinstance(meta.get("needs_clarification"), bool) else None,
             clarifying_questions=cast(list[str] | None, meta.get("clarifying_questions"))
@@ -663,11 +708,16 @@ async def chat_with_ai_stream(
             persist_error: str | None = None
 
             try:
-                async for event_type, data in assistant.chat_stream(
-                    message=payload.message,
-                    session_id=payload.session_id,
-                    initial_history=seed_history,
-                ):
+                user_profile = _build_user_profile(current_user)
+                stream_kwargs: dict[str, object] = {
+                    "message": payload.message,
+                    "session_id": payload.session_id,
+                    "initial_history": seed_history,
+                }
+                if user_profile and _supports_kwarg(getattr(assistant, "chat_stream", None), "user_profile"):
+                    stream_kwargs["user_profile"] = user_profile
+
+                async for event_type, data in assistant.chat_stream(**cast(dict, stream_kwargs)):
                     if event_type == "session":
                         session_id = cast(str | None, data.get("session_id"))
                     elif event_type == "references":
@@ -981,6 +1031,88 @@ async def get_consultation(
         created_at=cast(datetime, cast(object, consultation.created_at)),
         updated_at=cast(datetime, cast(object, consultation.updated_at)),
         messages=[MessageResponse.model_validate(msg) for msg in messages]
+    )
+
+
+@router.post("/consultations/{session_id}/share", response_model=ShareLinkResponse)
+async def create_consultation_share_link(
+    session_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    expires_days: Annotated[int, Query(ge=1, le=30, description="分享链接有效期（天）")] = 7,
+):
+    result = await db.execute(select(Consultation).where(Consultation.session_id == session_id))
+    consultation = result.scalar_one_or_none()
+    if not consultation:
+        raise HTTPException(status_code=404, detail="咨询记录不存在")
+
+    consultation_user_id = cast(int | None, getattr(consultation, "user_id", None))
+    if consultation_user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="无权限分享该咨询记录")
+
+    exp_delta = timedelta(days=int(expires_days))
+    expires_at = datetime.now(timezone.utc) + exp_delta
+
+    token = create_access_token(
+        {
+            "type": "consultation_share",
+            "session_id": str(session_id),
+        },
+        expires_delta=exp_delta,
+    )
+
+    return ShareLinkResponse(
+        token=token,
+        share_path=f"/share/{token}",
+        expires_at=expires_at,
+    )
+
+
+@router.get("/share/{token}", response_model=SharedConsultationResponse)
+async def get_shared_consultation(
+    token: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    payload = decode_token(str(token or ""))
+    if payload is None:
+        raise HTTPException(status_code=401, detail="无效或已过期的分享链接")
+
+    token_type = str(payload.get("type") or "").strip()
+    if token_type != "consultation_share":
+        raise HTTPException(status_code=401, detail="无效的分享链接")
+
+    sid = str(payload.get("session_id") or "").strip()
+    if not sid:
+        raise HTTPException(status_code=401, detail="无效的分享链接")
+
+    result = await db.execute(select(Consultation).where(Consultation.session_id == sid))
+    consultation = result.scalar_one_or_none()
+    if not consultation:
+        raise HTTPException(status_code=404, detail="咨询记录不存在")
+
+    messages_result = await db.execute(
+        select(ChatMessage)
+        .where(ChatMessage.consultation_id == consultation.id)
+        .order_by(ChatMessage.created_at)
+    )
+    messages = messages_result.scalars().all()
+
+    shared_messages: list[SharedMessageResponse] = []
+    for msg in messages:
+        shared_messages.append(
+            SharedMessageResponse(
+                role=cast(str, cast(object, msg.role)),
+                content=cast(str, cast(object, msg.content)),
+                references=cast(str | None, getattr(msg, "references", None)),
+                created_at=cast(datetime, cast(object, msg.created_at)),
+            )
+        )
+
+    return SharedConsultationResponse(
+        session_id=cast(str, cast(object, consultation.session_id)),
+        title=cast(str | None, cast(object, consultation.title)),
+        created_at=cast(datetime, cast(object, consultation.created_at)),
+        messages=shared_messages,
     )
 
 

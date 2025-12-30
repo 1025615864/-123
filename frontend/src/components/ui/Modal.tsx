@@ -1,4 +1,4 @@
-import { ReactNode, useEffect } from "react";
+import { ReactNode, useEffect, useId, useRef } from "react";
 import { X } from "lucide-react";
 
 export interface ModalProps {
@@ -22,6 +22,12 @@ export default function Modal({
   showCloseButton = true,
   zIndexClass = "z-50",
 }: ModalProps) {
+  const titleId = useId();
+  const descriptionId = useId();
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const closeBtnRef = useRef<HTMLButtonElement | null>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+
   useEffect(() => {
     if (isOpen) {
       document.body.style.overflow = "hidden";
@@ -45,6 +51,20 @@ export default function Modal({
     return () => document.removeEventListener("keydown", handleEscape);
   }, [isOpen, onClose]);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    restoreFocusRef.current = document.activeElement as HTMLElement | null;
+
+    window.setTimeout(() => {
+      const target = closeBtnRef.current ?? dialogRef.current;
+      target?.focus?.();
+    }, 0);
+
+    return () => {
+      restoreFocusRef.current?.focus?.();
+    };
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   const sizeStyles = {
@@ -64,17 +84,23 @@ export default function Modal({
         aria-hidden="true"
       />
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={title ? titleId : undefined}
+        aria-describedby={description ? descriptionId : undefined}
+        tabIndex={-1}
         className={`relative w-full ${sizeStyles[size]} rounded-2xl bg-white border border-slate-200/70 shadow-xl p-7 max-h-[90vh] overflow-y-auto dark:bg-white/[0.03] dark:border-white/[0.08] dark:backdrop-blur-xl dark:shadow-2xl dark:shadow-black/40`}
       >
         {(title || showCloseButton) && (
           <div className="flex items-start justify-between gap-4 mb-6">
             {title && (
               <div>
-                <h2 className="text-xl font-bold text-slate-900 dark:text-white">
+                <h2 id={titleId} className="text-xl font-bold text-slate-900 dark:text-white">
                   {title}
                 </h2>
                 {description && (
-                  <p className="text-sm text-slate-600 mt-1 dark:text-white/55">
+                  <p id={descriptionId} className="text-sm text-slate-600 mt-1 dark:text-white/55">
                     {description}
                   </p>
                 )}
@@ -82,6 +108,8 @@ export default function Modal({
             )}
             {showCloseButton && (
               <button
+                type="button"
+                ref={closeBtnRef}
                 onClick={onClose}
                 className="p-2 rounded-xl text-slate-500 hover:text-slate-900 hover:bg-slate-900/5 transition dark:text-white/60 dark:hover:text-white dark:hover:bg-white/5"
                 aria-label="关闭"

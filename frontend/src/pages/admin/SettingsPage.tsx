@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Save, Key, Globe, Bell, Shield } from "lucide-react";
+import { Save, Key, Globe, Bell, Shield, HelpCircle, Sparkles } from "lucide-react";
 import { Card, Input, Button, Textarea } from "../../components/ui";
 import { useQuery } from "@tanstack/react-query";
 import api from "../../api/client";
@@ -87,6 +87,16 @@ interface AiOpsStatusResponse {
   top_endpoints?: Array<{ endpoint: string; count: number }>;
 }
 
+interface FaqItem {
+  question: string;
+  answer: string;
+}
+
+interface FaqPublicResponse {
+  items: FaqItem[];
+  updated_at: string | null;
+}
+
 function SimpleMiniBarChart({
   data,
   maxValue,
@@ -134,6 +144,17 @@ export default function SettingsPage() {
       '{\n  "safe": "approved",\n  "warning": "pending",\n  "danger": "pending",\n  "unknown": "pending"\n}',
     enableNotifications: true,
     maintenanceMode: false,
+  });
+
+  const faqPublicQuery = useQuery({
+    queryKey: queryKeys.publicFaq(),
+    queryFn: async () => {
+      const res = await api.get("/system/public/faq");
+      return res.data as FaqPublicResponse;
+    },
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
   });
 
   const configsQuery = useQuery({
@@ -197,6 +218,11 @@ export default function SettingsPage() {
   }, [aiOpsStatusQuery.error, toast]);
 
   useEffect(() => {
+    if (!faqPublicQuery.error) return;
+    toast.error(getApiErrorMessage(faqPublicQuery.error, "FAQ 加载失败"));
+  }, [faqPublicQuery.error, toast]);
+
+  useEffect(() => {
     setSettings((prev) => {
       const scopeRaw = String((prev as any).newsAiProvidersScope || "default").trim();
       const scope = scopeRaw && scopeRaw !== "default" ? scopeRaw : "default";
@@ -245,6 +271,28 @@ export default function SettingsPage() {
     successMessage: "设置保存成功",
     errorMessageFallback: "保存失败，请稍后重试",
     invalidateQueryKeys: [queryKeys.systemConfigs(), queryKeys.newsAiStatus()],
+  });
+
+  const generateFaqMutation = useAppMutation<void, void>({
+    mutationFn: async (_: void) => {
+      await api.post(
+        "/system/faq/generate",
+        null,
+        {
+          params: {
+            days: 30,
+            max_items: 20,
+            scan_limit: 200,
+          },
+        }
+      );
+    },
+    successMessage: "FAQ 已生成",
+    errorMessageFallback: "FAQ 生成失败",
+    invalidateQueryKeys: [queryKeys.publicFaq()],
+    onSuccess: async () => {
+      await faqPublicQuery.refetch();
+    },
   });
 
   const handleSave = async () => {
@@ -431,6 +479,83 @@ export default function SettingsPage() {
               }
             />
           </div>
+        </Card>
+
+        <Card variant="surface" padding="lg">
+          <div className="flex items-center justify-between gap-3 mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center">
+                <Sparkles className="h-5 w-5 text-purple-600 dark:text-purple-300" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+                  FAQ 自动生成
+                </h3>
+                <p className="text-slate-600 text-sm dark:text-white/40">
+                  从最近好评咨询中提取高频问答，并发布到 /faq
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => faqPublicQuery.refetch()}
+                isLoading={faqPublicQuery.isFetching}
+              >
+                刷新
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => generateFaqMutation.mutate()}
+                isLoading={generateFaqMutation.isPending}
+              >
+                生成
+              </Button>
+            </div>
+          </div>
+
+          {faqPublicQuery.isLoading ? (
+            <p className="text-sm text-slate-600 dark:text-white/40">加载中...</p>
+          ) : faqPublicQuery.isError ? (
+            <p className="text-sm text-red-600 dark:text-red-300">{getApiErrorMessage(faqPublicQuery.error)}</p>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between rounded-xl bg-slate-900/5 px-4 py-3 dark:bg-white/5">
+                <div className="text-sm text-slate-700 dark:text-white/70">
+                  当前公开 FAQ：{Array.isArray(faqPublicQuery.data?.items) ? faqPublicQuery.data?.items.length : 0} 条
+                </div>
+                <div className="text-xs text-slate-500 dark:text-white/40">
+                  {faqPublicQuery.data?.updated_at ? `更新时间：${faqPublicQuery.data.updated_at}` : "更新时间：-"}
+                </div>
+              </div>
+
+              {Array.isArray(faqPublicQuery.data?.items) && faqPublicQuery.data.items.length > 0 ? (
+                <div className="space-y-3">
+                  {faqPublicQuery.data.items.slice(0, 8).map((it, idx) => (
+                    <div
+                      key={idx}
+                      className="rounded-xl border border-slate-200/70 bg-white px-4 py-3 dark:border-white/10 dark:bg-white/5"
+                    >
+                      <div className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-white">
+                        <HelpCircle className="h-4 w-4 text-amber-500" />
+                        {it.question}
+                      </div>
+                      <p className="mt-2 text-sm text-slate-600 dark:text-white/60">
+                        {it.answer}
+                      </p>
+                    </div>
+                  ))}
+                  {faqPublicQuery.data.items.length > 8 ? (
+                    <p className="text-xs text-slate-500 dark:text-white/40">仅展示前 8 条</p>
+                  ) : null}
+                </div>
+              ) : (
+                <p className="text-sm text-slate-600 dark:text-white/40">暂无 FAQ（请点击“生成”）</p>
+              )}
+            </div>
+          )}
         </Card>
 
         {/* AI咨询运维状态 */}

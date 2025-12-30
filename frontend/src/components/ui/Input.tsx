@@ -1,4 +1,4 @@
-import { InputHTMLAttributes, forwardRef, ReactNode } from 'react'
+import { InputHTMLAttributes, forwardRef, ReactNode, useId, useMemo } from 'react'
 import { LucideIcon } from 'lucide-react'
 
 export interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
@@ -22,6 +22,20 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
     },
     ref
   ) => {
+    const fallbackId = useId()
+    const inputId = props.id ?? fallbackId
+    const errorId = error ? `${inputId}-error` : undefined
+
+    const ariaDescribedByProp = props['aria-describedby']
+    const ariaInvalidProp = props['aria-invalid']
+    const describedBy = useMemo(() => {
+      const ids: string[] = []
+      const raw = ariaDescribedByProp
+      if (typeof raw === 'string' && raw.trim()) ids.push(raw.trim())
+      if (errorId) ids.push(errorId)
+      return ids.length > 0 ? ids.join(' ') : undefined
+    }, [ariaDescribedByProp, errorId])
+
     const baseStyles = 'w-full px-4 py-3 rounded-lg border bg-white text-slate-900 placeholder:text-slate-400 outline-none transition focus-visible:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500/20 disabled:opacity-60 disabled:cursor-not-allowed dark:bg-slate-800 dark:text-white dark:placeholder:text-slate-500'
     const errorStyles = error ? 'border-red-500 focus-visible:border-red-500 focus-visible:ring-red-500/20' : 'border-slate-200 dark:border-slate-700'
     const iconPaddingStyles = Icon ? (iconPosition === 'left' ? 'pl-12' : 'pr-12') : ''
@@ -32,7 +46,10 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
     return (
       <div className="w-full">
         {label && (
-          <label className="block text-sm font-medium text-slate-700 dark:text-white/70 mb-2">
+          <label
+            htmlFor={inputId}
+            className="block text-sm font-medium text-slate-700 dark:text-white/70 mb-2"
+          >
             {label}
           </label>
         )}
@@ -46,6 +63,9 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
             ref={ref}
             className={combinedClassName}
             {...props}
+            id={inputId}
+            aria-invalid={error ? true : ariaInvalidProp}
+            aria-describedby={describedBy}
           />
           {right && (
             <div className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -54,7 +74,9 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
           )}
         </div>
         {error && (
-          <p className="mt-2 text-sm text-red-400">{error}</p>
+          <p id={errorId} className="mt-2 text-sm text-red-400">
+            {error}
+          </p>
         )}
       </div>
     )
