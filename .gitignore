@@ -21,6 +21,7 @@ frontend/dist/
 *.pid
 .DS_Store
 Thumbs.db
+*.,d
 
 frontend/playwright-report/
 frontend/test-results/
