@@ -68,6 +68,16 @@ class SearchService:
     """全局搜索服务"""
 
     @staticmethod
+    def _escape_like(value: str, escape: str = "\\") -> str:
+        s = str(value or "")
+        if not escape:
+            return s
+        s = s.replace(escape, escape + escape)
+        s = s.replace("%", escape + "%")
+        s = s.replace("_", escape + "_")
+        return s
+
+    @staticmethod
     def _make_snippet(source: str | None, keyword: str, max_len: int = 120) -> str | None:
         text = " ".join(str(source or "").split())
         if not text:
@@ -112,12 +122,12 @@ class SearchService:
             return results
         
         q = str(query or "").strip()
-        search_term = f"%{q}%"
+        search_term = f"%{SearchService._escape_like(q)}%"
         
         # 搜索新闻
-        title_hit = News.title.ilike(search_term)
-        summary_hit = News.summary.ilike(search_term)
-        content_hit = News.content.ilike(search_term)
+        title_hit = News.title.ilike(search_term, escape="\\")
+        summary_hit = News.summary.ilike(search_term, escape="\\")
+        content_hit = News.content.ilike(search_term, escape="\\")
 
         news_query = (
             select(News)
@@ -152,8 +162,8 @@ class SearchService:
         # 搜索帖子
         posts_query = select(Post).where(
             or_(
-                Post.title.ilike(search_term),
-                Post.content.ilike(search_term)
+                Post.title.ilike(search_term, escape="\\"),
+                Post.content.ilike(search_term, escape="\\")
             ),
             Post.is_deleted == False
         ).limit(limit)
@@ -169,10 +179,10 @@ class SearchService:
         # 搜索律所
         firms_query = select(LawFirm).where(
             or_(
-                LawFirm.name.ilike(search_term),
-                LawFirm.description.ilike(search_term),
-                LawFirm.address.ilike(search_term),
-                LawFirm.specialties.ilike(search_term)
+                LawFirm.name.ilike(search_term, escape="\\"),
+                LawFirm.description.ilike(search_term, escape="\\"),
+                LawFirm.address.ilike(search_term, escape="\\"),
+                LawFirm.specialties.ilike(search_term, escape="\\")
             ),
             LawFirm.is_active == True
         ).limit(limit)
@@ -188,8 +198,8 @@ class SearchService:
         # 搜索律师
         lawyers_query = select(Lawyer).where(
             or_(
-                Lawyer.name.ilike(search_term),
-                Lawyer.specialties.ilike(search_term)
+                Lawyer.name.ilike(search_term, escape="\\"),
+                Lawyer.specialties.ilike(search_term, escape="\\")
             ),
             Lawyer.is_active == True
         ).limit(limit)
@@ -205,8 +215,8 @@ class SearchService:
         # 搜索法律知识
         knowledge_query = select(LegalKnowledge).where(
             or_(
-                LegalKnowledge.title.ilike(search_term),
-                LegalKnowledge.content.ilike(search_term)
+                LegalKnowledge.title.ilike(search_term, escape="\\"),
+                LegalKnowledge.content.ilike(search_term, escape="\\")
             ),
             LegalKnowledge.is_active == True
         ).limit(limit)
@@ -232,11 +242,12 @@ class SearchService:
             return []
         
         suggestions: list[str] = []
-        search_term = f"{query}%"
+        q = str(query or "")
+        search_term = f"{SearchService._escape_like(q)}%"
         
         # 从新闻标题获取建议
         news_query = select(News.title).where(
-            News.title.ilike(search_term),
+            News.title.ilike(search_term, escape="\\"),
             News.is_published == True
         ).limit(limit)
         news_result = await db.execute(news_query)
@@ -244,7 +255,7 @@ class SearchService:
         
         # 从帖子标题获取建议
         posts_query = select(Post.title).where(
-            Post.title.ilike(search_term),
+            Post.title.ilike(search_term, escape="\\"),
             Post.is_deleted == False
         ).limit(limit)
         posts_result = await db.execute(posts_query)

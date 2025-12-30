@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import time
 from typing import Any, cast
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, update, and_, or_, case, delete, true
+from sqlalchemy import select, func, and_, or_, desc, delete, update, true, case
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
@@ -34,6 +34,16 @@ logger = logging.getLogger(__name__)
 
 class NewsService:
     """新闻服务"""
+
+    @staticmethod
+    def _escape_like(value: str, escape: str = "\\") -> str:
+        s = str(value or "")
+        if not escape:
+            return s
+        s = s.replace(escape, escape + escape)
+        s = s.replace("%", escape + "%")
+        s = s.replace("_", escape + "_")
+        return s
 
     @staticmethod
     def _news_snapshot(news: News) -> dict[str, object]:
@@ -341,13 +351,14 @@ class NewsService:
             count_query = count_query.where(News.category == category)
         
         if keyword:
-            pattern = f"%{keyword}%"
+            kw = str(keyword or "").strip()
+            pattern = f"%{NewsService._escape_like(kw)}%"
             search_filter = or_(
-                News.title.ilike(pattern),
-                News.summary.ilike(pattern),
-                News.content.ilike(pattern),
-                News.source.ilike(pattern),
-                News.author.ilike(pattern),
+                News.title.ilike(pattern, escape="\\"),
+                News.summary.ilike(pattern, escape="\\"),
+                News.content.ilike(pattern, escape="\\"),
+                News.source.ilike(pattern, escape="\\"),
+                News.author.ilike(pattern, escape="\\"),
             )
             query = query.where(search_filter)
             count_query = count_query.where(search_filter)
@@ -1026,12 +1037,12 @@ class NewsService:
                 kw_clean = str(kw or "").strip()
                 if not kw_clean:
                     continue
-                pattern = f"%{kw_clean}%"
+                pattern = f"%{NewsService._escape_like(kw_clean)}%"
                 keyword_groups.append(
                     or_(
-                        News.title.ilike(pattern),
-                        News.summary.ilike(pattern),
-                        News.content.ilike(pattern),
+                        News.title.ilike(pattern, escape="\\"),
+                        News.summary.ilike(pattern, escape="\\"),
+                        News.content.ilike(pattern, escape="\\"),
                     )
                 )
             if keyword_groups:
@@ -1046,13 +1057,14 @@ class NewsService:
             conditions.append(News.category == category)
 
         if keyword:
-            pattern = f"%{keyword}%"
+            kw = str(keyword or "").strip()
+            pattern = f"%{NewsService._escape_like(kw)}%"
             search_filter = or_(
-                News.title.ilike(pattern),
-                News.summary.ilike(pattern),
-                News.content.ilike(pattern),
-                News.source.ilike(pattern),
-                News.author.ilike(pattern),
+                News.title.ilike(pattern, escape="\\"),
+                News.summary.ilike(pattern, escape="\\"),
+                News.content.ilike(pattern, escape="\\"),
+                News.source.ilike(pattern, escape="\\"),
+                News.author.ilike(pattern, escape="\\"),
             )
             conditions.append(search_filter)
 
@@ -2127,6 +2139,7 @@ class NewsService:
         result = await db.execute(
             select(NewsComment)
             .options(joinedload(NewsComment.author), joinedload(NewsComment.news))
+            .execution_options(populate_existing=True)
             .where(NewsComment.id == int(comment_id))
         )
         return result.scalar_one_or_none()
@@ -2272,7 +2285,8 @@ class NewsService:
             await db.commit()
         except Exception:
             await db.rollback()
-        return comment
+        reloaded = await NewsService.get_comment(db, int(comment.id))
+        return reloaded if reloaded is not None else comment
 
 
 news_service = NewsService()
