@@ -10,12 +10,15 @@ export interface ConsultationItem {
   message_count: number
 }
 
-export function useAiConsultationsQuery(enabled = true) {
-  const queryKey = queryKeys.aiConsultations()
+export function useAiConsultationsQuery(enabled = true, q: string = '') {
+  const queryKey = queryKeys.aiConsultations(q)
   const query = useQuery({
     queryKey,
     queryFn: async () => {
-      const res = await api.get('/ai/consultations')
+      const qNorm = String(q ?? '').trim()
+      const res = await api.get('/ai/consultations', {
+        params: qNorm ? { q: qNorm } : undefined,
+      })
       return (Array.isArray(res.data) ? res.data : []) as ConsultationItem[]
     },
     enabled,

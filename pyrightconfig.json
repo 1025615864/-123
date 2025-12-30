@@ -1,13 +1,34 @@
 {
-  "include": ["backend/app"],
-  "pythonVersion": "3.10",
+  "include": ["backend/app", "backend/tests"],
+  "pythonVersion": "3.13",
+  "typeCheckingMode": "basic",
   "executionEnvironments": [
     {
-      "root": "./",
+      "root": "./backend/tests",
+      "extraPaths": ["./backend"],
+      "reportGeneralTypeIssues": "none",
+      "reportMissingParameterType": "none",
+      "reportMissingTypeArgument": "none",
+      "reportUnknownArgumentType": "none",
+      "reportUnknownMemberType": "none",
+      "reportUnknownParameterType": "none",
+      "reportUnknownVariableType": "none",
+      "reportUnusedImport": "none",
+      "reportUnusedVariable": "none"
+    },
+    {
+      "root": "./backend/app",
+      "extraPaths": ["./backend"]
+    },
+    {
+      "root": "./backend",
       "extraPaths": ["./backend"]
     }
   ],
   "reportCallInDefaultInitializer": "none",
+  "reportPrivateUsage": "none",
+  "reportUnusedImport": "none",
+  "reportUnusedVariable": "none",
   "reportMissingImports": "none",
   "reportMissingModuleSource": "none"
 }

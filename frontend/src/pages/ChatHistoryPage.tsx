@@ -1,9 +1,9 @@
-import { useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, Navigate, useLocation } from 'react-router-dom'
-import { MessageSquare, Clock, Trash2, Download, ArrowRight } from 'lucide-react'
+import { MessageSquare, Clock, Trash2, Download, ArrowRight, Search, X } from 'lucide-react'
 import api from '../api/client'
 import { useAppMutation, useToast } from '../hooks'
-import { Card, Button, Loading, EmptyState } from '../components/ui'
+import { Card, Button, Loading, EmptyState, Input } from '../components/ui'
 import PageHeader from '../components/PageHeader'
 import { useAuth } from '../contexts/AuthContext'
 import { useTheme } from '../contexts/ThemeContext'
@@ -16,6 +16,17 @@ interface ExportMessage {
   content: string
   created_at: string | null
   references?: Array<{ law_name: string; article: string; content: string }>
+}
+
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState<T>(value)
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebounced(value), Math.max(0, delayMs))
+    return () => window.clearTimeout(t)
+  }, [value, delayMs])
+
+  return debounced
 }
 
 interface ExportData {
@@ -31,7 +42,10 @@ export default function ChatHistoryPage() {
   const { isAuthenticated } = useAuth()
   const location = useLocation()
 
-  const { query: consultationsQuery } = useAiConsultationsQuery(isAuthenticated)
+  const [q, setQ] = useState('')
+
+  const debouncedQ = useDebouncedValue(q, 300)
+  const { query: consultationsQuery } = useAiConsultationsQuery(isAuthenticated, debouncedQ)
 
   useEffect(() => {
     if (!consultationsQuery.error) return
@@ -42,13 +56,15 @@ export default function ChatHistoryPage() {
 
   const consultations = consultationsQuery.data ?? []
 
+  const qTrimmed = useMemo(() => String(q ?? '').trim(), [q])
+
   const deleteMutation = useAppMutation<void, string>({
     mutationFn: async (sid: string) => {
       await api.delete(`/ai/consultations/${sid}`)
     },
     successMessage: '删除成功',
     errorMessageFallback: '删除失败，请稍后重试',
-    invalidateQueryKeys: [queryKeys.aiConsultations()],
+    invalidateQueryKeys: [queryKeys.aiConsultationsBase()],
   })
 
   const handleDelete = async (sessionId: string) => {
@@ -58,34 +74,50 @@ export default function ChatHistoryPage() {
 
   const handleExport = async (consultation: ConsultationItem) => {
     try {
-      const res = await api.get(`/ai/consultations/${consultation.session_id}/export`)
-      const data = res.data as ExportData
-      
-      // 生成HTML内容用于打印/导出PDF
-      const htmlContent = generateExportHTML(data)
-      
-      // 创建新窗口用于打印
-      const printWindow = window.open('', '_blank')
-      if (printWindow) {
-        printWindow.document.write(htmlContent)
-        printWindow.document.close()
-        printWindow.onload = () => {
-          printWindow.print()
-        }
-      }
-      
-      toast.success('已打开打印预览，可保存为PDF')
-    } catch {
-      // 降级为简单文本导出
-      const content = `咨询记录导出\n\n标题: ${consultation.title}\n时间: ${new Date(consultation.created_at).toLocaleString()}\n消息数: ${consultation.message_count}\n\n（完整对话内容需在详情页查看）`
-      const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+      const res = await api.get(`/ai/consultations/${consultation.session_id}/report`, {
+        responseType: 'blob' as any,
+      })
+
+      const blob = new Blob([res.data], { type: 'application/pdf' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `咨询记录_${consultation.session_id}.txt`
+      a.download = `法律咨询报告_${consultation.session_id}.pdf`
       a.click()
       URL.revokeObjectURL(url)
+
       toast.success('导出成功')
+    } catch {
+      try {
+        const res = await api.get(`/ai/consultations/${consultation.session_id}/export`)
+        const data = res.data as ExportData
+        
+        // 生成HTML内容用于打印/导出PDF
+        const htmlContent = generateExportHTML(data)
+        
+        // 创建新窗口用于打印
+        const printWindow = window.open('', '_blank')
+        if (printWindow) {
+          printWindow.document.write(htmlContent)
+          printWindow.document.close()
+          printWindow.onload = () => {
+            printWindow.print()
+          }
+        }
+        
+        toast.success('已打开打印预览，可保存为PDF')
+      } catch {
+        // 降级为简单文本导出
+        const content = `咨询记录导出\n\n标题: ${consultation.title}\n时间: ${new Date(consultation.created_at).toLocaleString()}\n消息数: ${consultation.message_count}\n\n（完整对话内容需在详情页查看）`
+        const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `咨询记录_${consultation.session_id}.txt`
+        a.click()
+        URL.revokeObjectURL(url)
+        toast.success('导出成功')
+      }
     }
   }
 
@@ -180,16 +212,53 @@ export default function ChatHistoryPage() {
         }
       />
 
+      <Card variant="surface" padding="lg">
+        <div className="max-w-2xl">
+          <Input
+            icon={Search}
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="搜索咨询记录（标题/内容）..."
+            right={
+              qTrimmed ? (
+                <button
+                  type="button"
+                  onClick={() => setQ('')}
+                  className="p-1 rounded-md text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors dark:text-white/60 dark:hover:text-white dark:hover:bg-slate-800"
+                  aria-label="清空搜索"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              ) : null
+            }
+          />
+        </div>
+      </Card>
+
       {consultations.length === 0 ? (
         <EmptyState
           icon={MessageSquare}
-          title="暂无咨询记录"
-          description="开始一次新的AI法律咨询，您的对话将被保存在这里"
+          title={qTrimmed ? '未找到匹配记录' : '暂无咨询记录'}
+          description={
+            qTrimmed
+              ? '请尝试更换关键词或清空搜索条件'
+              : '开始一次新的AI法律咨询，您的对话将被保存在这里'
+          }
           tone={actualTheme}
           action={
-            <Link to="/chat" className="mt-6 inline-block">
-              <Button icon={ArrowRight} className="bg-emerald-600 hover:bg-emerald-700 text-white focus-visible:ring-emerald-500/25">开始咨询</Button>
-            </Link>
+            qTrimmed ? (
+              <Button
+                icon={X}
+                className="bg-slate-900 hover:bg-slate-950 text-white focus-visible:ring-slate-900/25"
+                onClick={() => setQ('')}
+              >
+                清空搜索
+              </Button>
+            ) : (
+              <Link to="/chat" className="mt-6 inline-block">
+                <Button icon={ArrowRight} className="bg-emerald-600 hover:bg-emerald-700 text-white focus-visible:ring-emerald-500/25">开始咨询</Button>
+              </Link>
+            )
           }
         />
       ) : (
@@ -225,6 +294,7 @@ export default function ChatHistoryPage() {
                     size="sm"
                     onClick={() => handleExport(item)}
                     className="p-2 hover:text-slate-900 dark:hover:text-white"
+                    aria-label="导出报告"
                   >
                     <Download className="h-4 w-4" />
                   </Button>

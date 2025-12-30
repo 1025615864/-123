@@ -4,7 +4,8 @@ export const queryKeys = {
   notificationsPreview: (pageSize: number = 10) =>
     ["notifications-preview", { pageSize }] as const,
   adminSystemNotifications: () => ["admin-system-notifications"] as const,
-  aiConsultations: () => ["ai-consultations"] as const,
+  aiConsultationsBase: () => ["ai-consultations"] as const,
+  aiConsultations: (q: string = "") => ["ai-consultations", { q }] as const,
   adminDashboardStats: () => ["admin-dashboard-stats"] as const,
   adminDashboardTrends: (days: number) =>
     ["admin-dashboard-trends", { days }] as const,
@@ -32,7 +33,11 @@ export const queryKeys = {
     sourceSite: string,
     from: string,
     to: string
-  ) => ["news", { page, pageSize, category, keyword, riskLevel, sourceSite, from, to }] as const,
+  ) =>
+    [
+      "news",
+      { page, pageSize, category, keyword, riskLevel, sourceSite, from, to },
+    ] as const,
   newsFavoritesList: (
     page: number,
     pageSize: number,
@@ -42,7 +47,11 @@ export const queryKeys = {
     sourceSite: string,
     from: string,
     to: string
-  ) => ["news-favorites", { page, pageSize, category, keyword, riskLevel, sourceSite, from, to }] as const,
+  ) =>
+    [
+      "news-favorites",
+      { page, pageSize, category, keyword, riskLevel, sourceSite, from, to },
+    ] as const,
   newsHistoryList: (
     page: number,
     pageSize: number,
@@ -52,7 +61,11 @@ export const queryKeys = {
     sourceSite: string,
     from: string,
     to: string
-  ) => ["news-history", { page, pageSize, category, keyword, riskLevel, sourceSite, from, to }] as const,
+  ) =>
+    [
+      "news-history",
+      { page, pageSize, category, keyword, riskLevel, sourceSite, from, to },
+    ] as const,
   newsSubscribedList: (
     page: number,
     pageSize: number,
@@ -62,7 +75,11 @@ export const queryKeys = {
     sourceSite: string,
     from: string,
     to: string
-  ) => ["news-subscribed", { page, pageSize, category, keyword, riskLevel, sourceSite, from, to }] as const,
+  ) =>
+    [
+      "news-subscribed",
+      { page, pageSize, category, keyword, riskLevel, sourceSite, from, to },
+    ] as const,
   newsRecommendedList: (
     page: number,
     pageSize: number,
@@ -72,7 +89,11 @@ export const queryKeys = {
     sourceSite: string,
     from: string,
     to: string
-  ) => ["news-recommended", { page, pageSize, category, keyword, riskLevel, sourceSite, from, to }] as const,
+  ) =>
+    [
+      "news-recommended",
+      { page, pageSize, category, keyword, riskLevel, sourceSite, from, to },
+    ] as const,
   newsTop: (limit: number) => ["news-top", { limit }] as const,
   newsRecent: (limit: number) => ["news-recent", { limit }] as const,
   newsHot: (days: number, limit: number, category: string | null = null) =>
@@ -113,6 +134,8 @@ export const queryKeys = {
   systemConfigs: () => ["system-configs"] as const,
 
   newsAiStatus: () => ["news-ai-status"] as const,
+
+  aiOpsStatus: () => ["ai-ops-status"] as const,
 
   forumPost: (postId: string | undefined) => ["forum-post", postId] as const,
   forumPostComments: (postId: string | undefined) =>

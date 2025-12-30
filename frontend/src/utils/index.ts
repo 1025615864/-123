@@ -197,12 +197,39 @@ export const storage = {
 
 export function getApiErrorMessage(err: unknown, fallback = '请求失败，请稍后重试'): string {
   const anyErr = err as any;
-  return (
+  const baseMsg: string =
     anyErr?.response?.data?.detail ||
     anyErr?.response?.data?.message ||
     anyErr?.message ||
-    fallback
-  );
+    fallback;
+
+  const requestId: string | undefined =
+    anyErr?.response?.data?.request_id ||
+    anyErr?.requestId ||
+    anyErr?.request_id ||
+    anyErr?.response?.headers?.["x-request-id"] ||
+    anyErr?.response?.headers?.["X-Request-Id"];
+
+  const errorCode: string | undefined =
+    anyErr?.response?.data?.error_code ||
+    anyErr?.errorCode ||
+    anyErr?.error_code ||
+    anyErr?.response?.headers?.["x-error-code"] ||
+    anyErr?.response?.headers?.["X-Error-Code"];
+
+  const suffixParts: string[] = [];
+  if (typeof errorCode === "string" && errorCode.trim()) {
+    suffixParts.push(`错误码: ${errorCode.trim()}`);
+  }
+  if (typeof requestId === "string" && requestId.trim()) {
+    suffixParts.push(`请求ID: ${requestId.trim()}`);
+  }
+
+  if (suffixParts.length === 0) {
+    return baseMsg;
+  }
+
+  return `${baseMsg}（${suffixParts.join(" ")}）`;
 }
 
 /**

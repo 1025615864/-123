@@ -32,6 +32,9 @@ const NewsTopicsPage = lazy(() => import("./pages/NewsTopicsPage"));
 const NewsTopicDetailPage = lazy(() => import("./pages/NewsTopicDetailPage"));
 const LawFirmDetailPage = lazy(() => import("./pages/LawFirmDetailPage"));
 const FeeCalculatorPage = lazy(() => import("./pages/FeeCalculatorPage"));
+const LimitationsCalculatorPage = lazy(
+  () => import("./pages/LimitationsCalculatorPage")
+);
 const DocumentGeneratorPage = lazy(
   () => import("./pages/DocumentGeneratorPage")
 );
@@ -136,6 +139,7 @@ function App() {
                 <Route path="lawfirm" element={<LawFirmPage />} />
                 <Route path="lawfirm/:firmId" element={<LawFirmDetailPage />} />
                 <Route path="calculator" element={<FeeCalculatorPage />} />
+                <Route path="limitations" element={<LimitationsCalculatorPage />} />
                 <Route path="documents" element={<DocumentGeneratorPage />} />
                 <Route path="login" element={<LoginPage />} />
                 <Route path="register" element={<RegisterPage />} />

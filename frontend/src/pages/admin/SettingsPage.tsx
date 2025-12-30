@@ -62,6 +62,31 @@ interface NewsAiStatusResponse {
   config_overrides: Record<string, string>;
 }
 
+interface AiOpsRecentError {
+  at: string;
+  request_id: string;
+  endpoint: string;
+  error_code: string;
+  status_code: number | null;
+  message: string | null;
+}
+
+interface AiOpsStatusResponse {
+  ai_router_enabled: boolean;
+  openai_api_key_configured: boolean;
+  openai_base_url: string;
+  ai_model: string;
+  chroma_persist_dir: string;
+  started_at: number;
+  started_at_iso: string;
+  chat_requests_total: number;
+  chat_stream_requests_total: number;
+  errors_total: number;
+  recent_errors: AiOpsRecentError[];
+  top_error_codes?: Array<{ error_code: string; count: number }>;
+  top_endpoints?: Array<{ endpoint: string; count: number }>;
+}
+
 function SimpleMiniBarChart({
   data,
   maxValue,
@@ -148,12 +173,28 @@ export default function SettingsPage() {
     placeholderData: (prev) => prev,
   });
 
+  const aiOpsStatusQuery = useQuery({
+    queryKey: queryKeys.aiOpsStatus(),
+    queryFn: async () => {
+      const res = await api.get("/system/ai/status");
+      return res.data as AiOpsStatusResponse;
+    },
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  });
+
   useEffect(() => {
     if (!newsAiStatusQuery.error) return;
     toast.error(
       getApiErrorMessage(newsAiStatusQuery.error, "新闻AI状态加载失败")
     );
   }, [newsAiStatusQuery.error, toast]);
+
+  useEffect(() => {
+    if (!aiOpsStatusQuery.error) return;
+    toast.error(getApiErrorMessage(aiOpsStatusQuery.error, "AI运维状态加载失败"));
+  }, [aiOpsStatusQuery.error, toast]);
 
   useEffect(() => {
     setSettings((prev) => {
@@ -389,6 +430,151 @@ export default function SettingsPage() {
                 setSettings({ ...settings, contactPhone: e.target.value })
               }
             />
+          </div>
+        </Card>
+
+        {/* AI咨询运维状态 */}
+        <Card variant="surface" padding="lg">
+          <div className="flex items-center justify-between gap-3 mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-indigo-500/10 flex items-center justify-center">
+                <Shield className="h-5 w-5 text-indigo-600 dark:text-indigo-300" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+                  AI咨询运维状态
+                </h3>
+                <p className="text-slate-600 text-sm dark:text-white/40">
+                  AI咨询可用性、请求量、错误与最近错误
+                </p>
+              </div>
+            </div>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => aiOpsStatusQuery.refetch()}
+              isLoading={aiOpsStatusQuery.isFetching}
+            >
+              刷新
+            </Button>
+          </div>
+
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/60 dark:bg-white/5 dark:border-white/10">
+                <p className="text-xs text-slate-600 dark:text-white/40">AI路由启用</p>
+                <p className="text-lg font-semibold text-slate-900 dark:text-white">
+                  {aiOpsStatusQuery.data?.ai_router_enabled ? "是" : "否"}
+                </p>
+              </div>
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/60 dark:bg-white/5 dark:border-white/10">
+                <p className="text-xs text-slate-600 dark:text-white/40">OPENAI_API_KEY</p>
+                <p className="text-lg font-semibold text-slate-900 dark:text-white">
+                  {aiOpsStatusQuery.data?.openai_api_key_configured ? "已配置" : "未配置"}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3">
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/60 dark:bg-white/5 dark:border-white/10">
+                <p className="text-xs text-slate-600 dark:text-white/40">chat 总请求</p>
+                <p className="text-lg font-semibold text-slate-900 dark:text-white">
+                  {aiOpsStatusQuery.data?.chat_requests_total ?? "-"}
+                </p>
+              </div>
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/60 dark:bg-white/5 dark:border-white/10">
+                <p className="text-xs text-slate-600 dark:text-white/40">stream 总请求</p>
+                <p className="text-lg font-semibold text-slate-900 dark:text-white">
+                  {aiOpsStatusQuery.data?.chat_stream_requests_total ?? "-"}
+                </p>
+              </div>
+              <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/60 dark:bg-white/5 dark:border-white/10">
+                <p className="text-xs text-slate-600 dark:text-white/40">错误总数</p>
+                <p className="text-lg font-semibold text-slate-900 dark:text-white">
+                  {aiOpsStatusQuery.data?.errors_total ?? "-"}
+                </p>
+              </div>
+            </div>
+
+            <div className="text-sm text-slate-700 dark:text-white/70 space-y-1">
+              <p>base_url：{aiOpsStatusQuery.data?.openai_base_url ?? "-"}</p>
+              <p>model：{aiOpsStatusQuery.data?.ai_model ?? "-"}</p>
+              <p>chroma：{aiOpsStatusQuery.data?.chroma_persist_dir ?? "-"}</p>
+              <p>started_at：{aiOpsStatusQuery.data?.started_at_iso ?? "-"}</p>
+            </div>
+
+            {Array.isArray(aiOpsStatusQuery.data?.top_error_codes) &&
+              (aiOpsStatusQuery.data?.top_error_codes?.length ?? 0) > 0 && (
+                <div>
+                  <p className="text-sm font-medium text-slate-900 dark:text-white mb-2">
+                    Top 错误码
+                  </p>
+                  <div className="space-y-2">
+                    {(aiOpsStatusQuery.data?.top_error_codes ?? []).map((e, idx) => (
+                      <div
+                        key={idx}
+                        className="p-3 rounded-xl border border-slate-200/70 bg-white dark:bg-white/5 dark:border-white/10"
+                      >
+                        <p className="text-sm text-slate-900 dark:text-white">
+                          {e.count} 次 - {e.error_code}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+            {Array.isArray(aiOpsStatusQuery.data?.top_endpoints) &&
+              (aiOpsStatusQuery.data?.top_endpoints?.length ?? 0) > 0 && (
+                <div>
+                  <p className="text-sm font-medium text-slate-900 dark:text-white mb-2">
+                    Top 端点
+                  </p>
+                  <div className="space-y-2">
+                    {(aiOpsStatusQuery.data?.top_endpoints ?? []).map((e, idx) => (
+                      <div
+                        key={idx}
+                        className="p-3 rounded-xl border border-slate-200/70 bg-white dark:bg-white/5 dark:border-white/10"
+                      >
+                        <p className="text-sm text-slate-900 dark:text-white">
+                          {e.count} 次 - {e.endpoint}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+            <div>
+              <p className="text-sm font-medium text-slate-900 dark:text-white mb-2">
+                最近错误（最多 50 条）
+              </p>
+              <div className="space-y-2">
+                {(aiOpsStatusQuery.data?.recent_errors ?? []).slice(0, 20).map((e, idx) => (
+                  <div
+                    key={`${e.request_id}-${idx}`}
+                    className="p-3 rounded-xl border border-slate-200/70 bg-white dark:bg-white/5 dark:border-white/10"
+                  >
+                    <p className="text-sm text-slate-900 dark:text-white">
+                      {e.endpoint} / {e.error_code}
+                      {e.status_code != null ? `（${e.status_code}）` : ""}
+                    </p>
+                    <p className="text-xs text-slate-600 dark:text-white/40">{e.at}</p>
+                    <p className="text-xs text-slate-600 dark:text-white/40 break-words">
+                      请求ID：{e.request_id}
+                    </p>
+                    <p className="text-xs text-slate-600 dark:text-white/40 break-words">
+                      {e.message || "-"}
+                    </p>
+                  </div>
+                ))}
+                {(!aiOpsStatusQuery.data ||
+                  (aiOpsStatusQuery.data.recent_errors ?? []).length === 0) && (
+                  <p className="text-sm text-slate-600 dark:text-white/40">暂无错误记录</p>
+                )}
+              </div>
+            </div>
           </div>
         </Card>
 

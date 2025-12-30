@@ -1,5 +1,6 @@
-import { useState } from 'react'
-import { Calculator, Scale, Banknote, HelpCircle, ChevronDown, ChevronUp } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
+import { Calculator, Scale, Banknote, HelpCircle, ChevronDown, ChevronUp, ArrowRight } from 'lucide-react'
 import { Card, Button, Input } from '../components/ui'
 import PageHeader from '../components/PageHeader'
 import { useTheme } from '../contexts/ThemeContext'
@@ -73,6 +74,22 @@ const calculateLawyerFee = (amount: number, caseType: string, stage: string): { 
   return { min: Math.round(min), max: Math.round(max) }
 }
 
+const CASE_TYPES = [
+  { value: 'property', label: '财产纠纷', desc: '合同、债务、房产等' },
+  { value: 'divorce', label: '离婚纠纷', desc: '离婚、财产分割、抚养权' },
+  { value: 'labor', label: '劳动争议', desc: '工资、赔偿、工伤等' },
+  { value: 'admin', label: '行政诉讼', desc: '行政处罚、行政强制等' },
+  { value: 'intellectual', label: '知识产权', desc: '专利、商标、著作权' },
+  { value: 'criminal', label: '刑事案件', desc: '刑事辩护、取保候审' },
+]
+
+const STAGES = [
+  { value: 'investigation', label: '侦查阶段' },
+  { value: 'prosecution', label: '审查起诉' },
+  { value: 'trial', label: '审判阶段' },
+  { value: 'appeal', label: '二审/再审' },
+]
+
 interface FaqItem {
   question: string
   answer: string
@@ -109,21 +126,20 @@ export default function FeeCalculatorPage() {
   const [expandedFaq, setExpandedFaq] = useState<number | null>(null)
   const { actualTheme } = useTheme()
 
-  const caseTypes = [
-    { value: 'property', label: '财产纠纷', desc: '合同、债务、房产等' },
-    { value: 'divorce', label: '离婚纠纷', desc: '离婚、财产分割、抚养权' },
-    { value: 'labor', label: '劳动争议', desc: '工资、赔偿、工伤等' },
-    { value: 'admin', label: '行政诉讼', desc: '行政处罚、行政强制等' },
-    { value: 'intellectual', label: '知识产权', desc: '专利、商标、著作权' },
-    { value: 'criminal', label: '刑事案件', desc: '刑事辩护、取保候审' },
-  ]
+  const selectedCaseTypeLabel = useMemo(() => {
+    return CASE_TYPES.find((t) => t.value === caseType)?.label || caseType
+  }, [caseType])
 
-  const stages = [
-    { value: 'investigation', label: '侦查阶段' },
-    { value: 'prosecution', label: '审查起诉' },
-    { value: 'trial', label: '审判阶段' },
-    { value: 'appeal', label: '二审/再审' },
-  ]
+  const selectedStageLabel = useMemo(() => {
+    return STAGES.find((s) => s.value === stage)?.label || stage
+  }, [stage])
+
+  const chatDraft = useMemo(() => {
+    if (!result) return ''
+    const amountNum = parseFloat(amount) || 0
+    const amountPart = caseType === 'criminal' ? '' : `标的金额约 ${amountNum} 元；`
+    return `我想咨询诉讼费用/律师费预算：案件类型为「${selectedCaseTypeLabel}」，${amountPart}阶段为「${selectedStageLabel}」。我已用费用计算器估算：诉讼费约 ${result.litigationFee} 元，律师费参考区间约 ${result.lawyerFeeMin}-${result.lawyerFeeMax} 元。请问这个估算在实践中可能有哪些差异？我该如何进一步准备材料与降低成本？`
+  }, [amount, caseType, result, selectedCaseTypeLabel, selectedStageLabel])
 
   const handleCalculate = () => {
     const amountNum = parseFloat(amount) || 0
@@ -169,7 +185,7 @@ export default function FeeCalculatorPage() {
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-3 dark:text-white/70">案件类型</label>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                  {caseTypes.map((type) => (
+                  {CASE_TYPES.map((type) => (
                     <button
                       key={type.value}
                       onClick={() => setCaseType(type.value)}
@@ -193,7 +209,7 @@ export default function FeeCalculatorPage() {
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-3 dark:text-white/70">诉讼阶段</label>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                    {stages.map((s) => (
+                    {STAGES.map((s) => (
                       <button
                         key={s.value}
                         onClick={() => setStage(s.value)}
@@ -263,6 +279,14 @@ export default function FeeCalculatorPage() {
                   以上费用仅供参考。实际诉讼费以法院收费为准，律师费可与律师协商确定。
                   复杂案件建议咨询专业律师获取准确报价。
                 </p>
+              </div>
+
+              <div className="mt-6">
+                <Link to={`/chat?draft=${encodeURIComponent(chatDraft)}`}>
+                  <Button icon={ArrowRight} className="bg-emerald-600 hover:bg-emerald-700 text-white focus-visible:ring-emerald-500/25">
+                    用这个结果去咨询 AI
+                  </Button>
+                </Link>
               </div>
             </Card>
           )}
