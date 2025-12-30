@@ -87,3 +87,7 @@ class QuickRepliesRequest(BaseModel):
 
 class QuickRepliesResponse(BaseModel):
     replies: Annotated[list[str], Field(default_factory=list, description="快捷回复候选")]
+
+
+class TranscribeResponse(BaseModel):
+    text: str = Field(..., description="语音转写文本")

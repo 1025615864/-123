@@ -1,6 +1,7 @@
 """AI助手API路由"""
 import uuid
 import asyncio
+import io
 import json
 import logging
 import time
@@ -8,7 +9,7 @@ import urllib.parse
 from typing import Annotated, cast
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, UploadFile, File, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, inspect, exists, or_
@@ -32,6 +33,7 @@ from ..schemas.ai import (
     RatingResponse,
     QuickRepliesRequest,
     QuickRepliesResponse,
+    TranscribeResponse,
 )
 from ..utils.deps import get_current_user, get_current_user_optional
 from ..utils.rate_limiter import rate_limit, RateLimitConfig, rate_limiter, get_client_ip
@@ -1102,6 +1104,144 @@ async def consultation_report(
             "Content-Disposition": content_disposition,
         },
     )
+
+
+@router.post("/transcribe", response_model=TranscribeResponse)
+@rate_limit(*RateLimitConfig.AI_CHAT, by_ip=True, by_user=False)
+async def transcribe(
+    request: Request,
+    response: Response,
+    file: Annotated[UploadFile, File(...)],
+    current_user: Annotated[User | None, Depends(get_current_user_optional)] = None,
+):
+    started_at = float(time.time())
+    request_id = uuid.uuid4().hex
+    ai_metrics.record_request("transcribe")
+    client_ip = get_client_ip(request)
+
+    current_user_id: int | None = None
+    if current_user is not None:
+        try:
+            identity = inspect(current_user).identity
+            if identity:
+                current_user_id = cast(int | None, identity[0])
+        except Exception:
+            current_user_id = None
+
+    user_id_str = str(current_user_id) if current_user_id is not None else "guest"
+
+    e2e_mock_enabled = bool(settings.debug) and str(request.headers.get("X-E2E-Mock-AI") or "").strip() == "1"
+    if e2e_mock_enabled:
+        try:
+            _ = await file.read()
+        except Exception:
+            pass
+        response.headers["X-Request-Id"] = request_id
+        return TranscribeResponse(text="这是一个E2E mock 的语音转写结果")
+
+    try:
+        if not settings.openai_api_key:
+            error_code = ERROR_AI_NOT_CONFIGURED
+            message = "AI服务未配置：请设置 OPENAI_API_KEY 后重试"
+            ai_metrics.record_error(
+                endpoint="transcribe",
+                request_id=request_id,
+                error_code=error_code,
+                status_code=503,
+                message=message,
+            )
+            _audit_event(
+                "transcribe_error",
+                {
+                    "request_id": request_id,
+                    "endpoint": "transcribe",
+                    "user_id": user_id_str,
+                    "ip": client_ip,
+                    "status_code": 503,
+                    "error_code": error_code,
+                    "duration_ms": int((time.time() - started_at) * 1000),
+                },
+            )
+            return _make_error_response(
+                status_code=503,
+                error_code=error_code,
+                message=message,
+                request_id=request_id,
+            )
+
+        if current_user is None:
+            _enforce_guest_ai_quota(request)
+
+        content = await file.read()
+        if not content:
+            return _make_error_response(
+                status_code=400,
+                error_code=ERROR_AI_BAD_REQUEST,
+                message="音频文件为空",
+                request_id=request_id,
+            )
+
+        if len(content) > 10 * 1024 * 1024:
+            return _make_error_response(
+                status_code=400,
+                error_code=ERROR_AI_BAD_REQUEST,
+                message="音频文件大小不能超过 10MB",
+                request_id=request_id,
+            )
+
+        filename = str(file.filename or "audio").strip() or "audio"
+
+        def _transcribe_sync() -> str:
+            from openai import OpenAI
+
+            client = OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url)
+            buf = io.BytesIO(content)
+            try:
+                setattr(buf, "name", filename)
+            except Exception:
+                pass
+            res = client.audio.transcriptions.create(model="whisper-1", file=buf)
+            return str(getattr(res, "text", "") or "")
+
+        text = await asyncio.to_thread(_transcribe_sync)
+        if not str(text).strip():
+            return _make_error_response(
+                status_code=500,
+                error_code=ERROR_AI_INTERNAL_ERROR,
+                message="语音转写失败",
+                request_id=request_id,
+            )
+
+        _audit_event(
+            "transcribe_ok",
+            {
+                "request_id": request_id,
+                "endpoint": "transcribe",
+                "user_id": user_id_str,
+                "ip": client_ip,
+                "duration_ms": int((time.time() - started_at) * 1000),
+                "text_len": len(str(text)),
+            },
+        )
+
+        response.headers["X-Request-Id"] = request_id
+        return TranscribeResponse(text=str(text))
+    except HTTPException:
+        raise
+    except Exception:
+        ai_metrics.record_error(
+            endpoint="transcribe",
+            request_id=request_id,
+            error_code=ERROR_AI_INTERNAL_ERROR,
+            status_code=500,
+            message="transcribe_failed",
+        )
+        return _make_error_response(
+            status_code=500,
+            error_code=ERROR_AI_INTERNAL_ERROR,
+            message="语音转写失败",
+            request_id=request_id,
+        )
 
 
 @router.post("/quick-replies", response_model=QuickRepliesResponse)

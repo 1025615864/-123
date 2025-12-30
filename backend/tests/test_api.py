@@ -1260,6 +1260,18 @@ class TestAIConsultationAPI:
         assert len(items4) == 0
 
     @pytest.mark.asyncio
+    async def test_ai_transcribe_supports_e2e_mock(self, client: AsyncClient):
+        res = await client.post(
+            "/api/ai/transcribe",
+            files={"file": ("test.wav", b"RIFFxxxxWAVE", "audio/wav")},
+            headers={"X-E2E-Mock-AI": "1"},
+        )
+        assert res.status_code == 200
+        payload = _json_dict(res)
+        assert payload.get("text") == "这是一个E2E mock 的语音转写结果"
+        assert isinstance(res.headers.get("X-Request-Id"), str)
+
+    @pytest.mark.asyncio
     async def test_ai_consultation_report_sets_rfc5987_filename(
         self,
         client: AsyncClient,
