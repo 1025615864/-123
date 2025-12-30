@@ -50,11 +50,12 @@ test('前台：历史记录导出报告优先走 /report（PDF）并提示成功
   let hitReport = false
   await page.route('**/api/ai/consultations/s_report_1/report**', async (route) => {
     hitReport = true
+    const utf8Filename = '法律咨询报告_s_report_1.pdf'
     await route.fulfill({
       status: 200,
       contentType: 'application/pdf',
       headers: {
-        'content-disposition': 'attachment; filename="server_report_s_report_1.pdf"',
+        'content-disposition': `attachment; filename="report_s_report_1.pdf"; filename*=UTF-8''${encodeURIComponent(utf8Filename)}`,
       },
       body: Buffer.from('%PDF-1.4\n%\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n'),
     })
@@ -69,7 +70,7 @@ test('前台：历史记录导出报告优先走 /report（PDF）并提示成功
 
   await expect.poll(() => hitReport).toBeTruthy()
   const download = await downloadP
-  expect(download.suggestedFilename()).toBe('server_report_s_report_1.pdf')
+  expect(download.suggestedFilename()).toBe('法律咨询报告_s_report_1.pdf')
   await expect(page.getByText('导出成功')).toBeVisible({ timeout: 12_000 })
 })
 
