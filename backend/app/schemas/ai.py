@@ -37,6 +37,9 @@ class ChatResponse(BaseModel):
     risk_level: str | None = Field(None, description="风险等级")
     search_quality: SearchQualityInfo | None = Field(None, description="检索质量信息")
     disclaimer: str | None = Field(None, description="免责声明")
+    intent: str | None = Field(None, description="识别到的意图类别")
+    needs_clarification: bool | None = Field(None, description="是否需要追问补充信息")
+    clarifying_questions: list[str] | None = Field(None, description="建议追问的问题列表")
     created_at: datetime = Field(default_factory=datetime.now)
 
 

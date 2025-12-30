@@ -1421,6 +1421,9 @@ class TestAIConsultationAPI:
                         "strategy_reason": "未找到直接相关法条",
                         "confidence": "low",
                         "risk_level": "safe",
+                        "intent": "labor",
+                        "needs_clarification": True,
+                        "clarifying_questions": ["q1"],
                         "search_quality": {
                             "total_candidates": 0,
                             "qualified_count": 0,
@@ -1447,6 +1450,9 @@ class TestAIConsultationAPI:
         assert data.get("confidence") == "low"
         assert data.get("risk_level") == "safe"
         assert data.get("disclaimer") == "d"
+        assert data.get("intent") == "labor"
+        assert data.get("needs_clarification") is True
+        assert data.get("clarifying_questions") == ["q1"]
 
         sq_obj = data.get("search_quality")
         assert isinstance(sq_obj, dict)

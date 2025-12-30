@@ -398,6 +398,11 @@ async def chat_with_ai(
             risk_level=cast(str | None, meta.get("risk_level")) if isinstance(meta.get("risk_level"), str) else None,
             search_quality=cast(object, meta.get("search_quality")) if isinstance(meta.get("search_quality"), dict) else None,
             disclaimer=cast(str | None, meta.get("disclaimer")) if isinstance(meta.get("disclaimer"), str) else None,
+            intent=cast(str | None, meta.get("intent")) if isinstance(meta.get("intent"), str) else None,
+            needs_clarification=cast(bool | None, meta.get("needs_clarification")) if isinstance(meta.get("needs_clarification"), bool) else None,
+            clarifying_questions=cast(list[str] | None, meta.get("clarifying_questions"))
+            if isinstance(meta.get("clarifying_questions"), list)
+            else None,
             created_at=datetime.now(),
         )
     except HTTPException as e:

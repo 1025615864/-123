@@ -14,6 +14,7 @@ from pydantic import SecretStr
 from ..config import get_settings
 from ..schemas.ai import LawReference
 from .ai_response_strategy import ResponseStrategy, ResponseStrategyDecider, SearchQuality
+from .ai_intent import AiIntentClassifier
 from .content_safety import ContentSafetyFilter, RiskLevel
 from .disclaimer import DisclaimerManager
 
@@ -238,6 +239,7 @@ class AILegalAssistant:
         self.knowledge_base.initialize()
         self.safety_filter: ContentSafetyFilter = ContentSafetyFilter()
         self.strategy_decider: ResponseStrategyDecider = ResponseStrategyDecider()
+        self.intent_classifier: AiIntentClassifier = AiIntentClassifier()
         self.disclaimer_manager: DisclaimerManager = DisclaimerManager()
         self.conversation_histories: dict[str, list[dict[str, str]]] = {}
         self._last_seen: dict[str, float] = {}
@@ -356,6 +358,8 @@ class AILegalAssistant:
         """
         session_id = self.get_or_create_session(session_id, initial_history=initial_history)
 
+        intent_result = self.intent_classifier.classify(message)
+
         safety = self.safety_filter.check_input(message)
         if safety.risk_level == RiskLevel.BLOCKED:
             strategy = ResponseStrategy.REFUSE_ANSWER
@@ -377,6 +381,9 @@ class AILegalAssistant:
                 "strategy_reason": "内容安全拦截",
                 "confidence": "N/A",
                 "risk_level": str(safety.risk_level.value),
+                "intent": str(intent_result.intent),
+                "needs_clarification": bool(intent_result.needs_clarification),
+                "clarifying_questions": list(intent_result.clarifying_questions),
                 "search_quality": {
                     "total_candidates": 0,
                     "qualified_count": 0,
@@ -435,6 +442,9 @@ class AILegalAssistant:
             "strategy_reason": str(decision.reason),
             "confidence": str(decision.confidence),
             "risk_level": str(safety.risk_level.value),
+            "intent": str(intent_result.intent),
+            "needs_clarification": bool(intent_result.needs_clarification),
+            "clarifying_questions": list(intent_result.clarifying_questions),
             "search_quality": {
                 "total_candidates": int(quality.total_candidates),
                 "qualified_count": int(quality.qualified_count),
@@ -465,6 +475,8 @@ class AILegalAssistant:
         """
         session_id = self.get_or_create_session(session_id, initial_history=initial_history)
 
+        intent_result = self.intent_classifier.classify(message)
+
         safety = self.safety_filter.check_input(message)
         if safety.risk_level == RiskLevel.BLOCKED:
             strategy = ResponseStrategy.REFUSE_ANSWER
@@ -478,6 +490,9 @@ class AILegalAssistant:
                     "strategy_reason": "内容安全拦截",
                     "confidence": "N/A",
                     "risk_level": str(safety.risk_level.value),
+                    "intent": str(intent_result.intent),
+                    "needs_clarification": bool(intent_result.needs_clarification),
+                    "clarifying_questions": list(intent_result.clarifying_questions),
                     "search_quality": {
                         "total_candidates": 0,
                         "qualified_count": 0,
@@ -511,6 +526,8 @@ class AILegalAssistant:
                     "strategy_reason": "内容安全拦截",
                     "confidence": "N/A",
                     "risk_level": str(safety.risk_level.value),
+                    "intent": str(intent_result.intent),
+                    "needs_clarification": bool(intent_result.needs_clarification),
                 },
             )
             return
@@ -530,6 +547,9 @@ class AILegalAssistant:
                 "strategy_reason": str(decision.reason),
                 "confidence": str(decision.confidence),
                 "risk_level": str(safety.risk_level.value),
+                "intent": str(intent_result.intent),
+                "needs_clarification": bool(intent_result.needs_clarification),
+                "clarifying_questions": list(intent_result.clarifying_questions),
                 "search_quality": {
                     "total_candidates": int(quality.total_candidates),
                     "qualified_count": int(quality.qualified_count),
@@ -626,6 +646,8 @@ class AILegalAssistant:
                 "strategy_reason": str(decision.reason),
                 "confidence": str(decision.confidence),
                 "risk_level": str(safety.risk_level.value),
+                "intent": str(intent_result.intent),
+                "needs_clarification": bool(intent_result.needs_clarification),
             },
         )
 
