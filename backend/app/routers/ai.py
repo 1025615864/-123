@@ -302,11 +302,21 @@ async def chat_with_ai(
                 request_id=request_id,
             )
 
-        session_id, answer, references = await assistant.chat(
+        chat_result = await assistant.chat(
             message=payload.message,
             session_id=payload.session_id,
             initial_history=seed_history,
         )
+
+        meta: dict[str, object] = {}
+        if isinstance(chat_result, tuple) and len(chat_result) == 3:
+            session_id, answer, references = chat_result
+        elif isinstance(chat_result, tuple) and len(chat_result) == 4:
+            session_id, answer, references, meta_obj = chat_result
+            if isinstance(meta_obj, dict):
+                meta = cast(dict[str, object], meta_obj)
+        else:
+            raise RuntimeError("invalid assistant.chat result")
 
         if consultation is None:
             result = await db.execute(
@@ -371,6 +381,8 @@ async def chat_with_ai(
                 "ip": client_ip,
                 "session_id": str(session_id),
                 "assistant_message_id": int(assistant_message_id) if assistant_message_id is not None else None,
+                "strategy_used": meta.get("strategy_used"),
+                "risk_level": meta.get("risk_level"),
                 "duration_ms": int((time.time() - started_at) * 1000),
             },
         )
@@ -380,6 +392,12 @@ async def chat_with_ai(
             answer=answer,
             references=references,
             assistant_message_id=assistant_message_id,
+            strategy_used=cast(str | None, meta.get("strategy_used")) if isinstance(meta.get("strategy_used"), str) else None,
+            strategy_reason=cast(str | None, meta.get("strategy_reason")) if isinstance(meta.get("strategy_reason"), str) else None,
+            confidence=cast(str | None, meta.get("confidence")) if isinstance(meta.get("confidence"), str) else None,
+            risk_level=cast(str | None, meta.get("risk_level")) if isinstance(meta.get("risk_level"), str) else None,
+            search_quality=cast(object, meta.get("search_quality")) if isinstance(meta.get("search_quality"), dict) else None,
+            disclaimer=cast(str | None, meta.get("disclaimer")) if isinstance(meta.get("disclaimer"), str) else None,
             created_at=datetime.now(),
         )
     except HTTPException as e:

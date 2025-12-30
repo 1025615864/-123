@@ -343,7 +343,7 @@ class AILegalAssistant:
         session_id: str | None = None,
         *,
         initial_history: list[dict[str, str]] | None = None,
-    ) -> tuple[str, str, list[LawReference]]:
+    ) -> tuple[str, str, list[LawReference], dict[str, object]]:
         """
         与AI助手对话
         
@@ -358,19 +358,38 @@ class AILegalAssistant:
 
         safety = self.safety_filter.check_input(message)
         if safety.risk_level == RiskLevel.BLOCKED:
+            strategy = ResponseStrategy.REFUSE_ANSWER
+            disclaimer = self.disclaimer_manager.get_disclaimer(risk_level=safety.risk_level, strategy=strategy)
+
             answer = str(safety.suggestion or "很抱歉，我无法回答这类问题。如需帮助，请联系专业机构。")
-            answer = self._append_disclaimer(answer, risk_level=safety.risk_level, strategy=ResponseStrategy.REFUSE_ANSWER)
+            answer = self._append_disclaimer(answer, risk_level=safety.risk_level, strategy=strategy)
             answer = self.safety_filter.sanitize_output(answer)
+
             history = self.conversation_histories.get(session_id, [])
             history.append({'role': 'user', 'content': message})
             history.append({'role': 'assistant', 'content': answer})
             self.conversation_histories[session_id] = history[-self._max_messages_per_session:]
             self._last_seen[session_id] = time.time()
             self._evict_if_needed()
-            return session_id, answer, []
+
+            meta: dict[str, object] = {
+                "strategy_used": str(strategy.value),
+                "strategy_reason": "内容安全拦截",
+                "confidence": "N/A",
+                "risk_level": str(safety.risk_level.value),
+                "search_quality": {
+                    "total_candidates": 0,
+                    "qualified_count": 0,
+                    "avg_similarity": 0.0,
+                    "confidence": "low",
+                },
+                "disclaimer": str(disclaimer),
+            }
+            return session_id, answer, [], meta
 
         references, quality = self.knowledge_base.search_with_quality_control(message, k=5)
         decision = self.strategy_decider.decide(message, quality, risk_level=safety.risk_level)
+        disclaimer = self.disclaimer_manager.get_disclaimer(risk_level=safety.risk_level, strategy=decision.strategy)
         context = self._build_context(references)
 
         history = self.conversation_histories.get(session_id, [])
@@ -410,8 +429,22 @@ class AILegalAssistant:
         self._evict_if_needed()
         
         parsed_refs = self._parse_references(references)
+
+        meta2: dict[str, object] = {
+            "strategy_used": str(decision.strategy.value),
+            "strategy_reason": str(decision.reason),
+            "confidence": str(decision.confidence),
+            "risk_level": str(safety.risk_level.value),
+            "search_quality": {
+                "total_candidates": int(quality.total_candidates),
+                "qualified_count": int(quality.qualified_count),
+                "avg_similarity": float(quality.avg_similarity),
+                "confidence": str(quality.confidence),
+            },
+            "disclaimer": str(disclaimer),
+        }
         
-        return session_id, answer, parsed_refs
+        return session_id, answer, parsed_refs, meta2
     
     async def chat_stream(
         self, 
@@ -434,14 +467,32 @@ class AILegalAssistant:
 
         safety = self.safety_filter.check_input(message)
         if safety.risk_level == RiskLevel.BLOCKED:
+            strategy = ResponseStrategy.REFUSE_ANSWER
+            disclaimer = self.disclaimer_manager.get_disclaimer(risk_level=safety.risk_level, strategy=strategy)
             yield ("session", {"session_id": session_id})
             yield ("references", {"references": []})
+            yield (
+                "meta",
+                {
+                    "strategy_used": str(strategy.value),
+                    "strategy_reason": "内容安全拦截",
+                    "confidence": "N/A",
+                    "risk_level": str(safety.risk_level.value),
+                    "search_quality": {
+                        "total_candidates": 0,
+                        "qualified_count": 0,
+                        "avg_similarity": 0.0,
+                        "confidence": "low",
+                    },
+                    "disclaimer": str(disclaimer),
+                },
+            )
 
             full_answer = str(safety.suggestion or "很抱歉，我无法回答这类问题。如需帮助，请联系专业机构。")
             full_answer = self._append_disclaimer(
                 full_answer,
                 risk_level=safety.risk_level,
-                strategy=ResponseStrategy.REFUSE_ANSWER,
+                strategy=strategy,
             )
             full_answer = self.safety_filter.sanitize_output(full_answer)
             yield ("content", {"text": full_answer})
@@ -452,16 +503,42 @@ class AILegalAssistant:
             self.conversation_histories[session_id] = history[-self._max_messages_per_session:]
             self._last_seen[session_id] = time.time()
             self._evict_if_needed()
-            yield ("done", {"session_id": session_id})
+            yield (
+                "done",
+                {
+                    "session_id": session_id,
+                    "strategy_used": str(strategy.value),
+                    "strategy_reason": "内容安全拦截",
+                    "confidence": "N/A",
+                    "risk_level": str(safety.risk_level.value),
+                },
+            )
             return
 
         references, quality = self.knowledge_base.search_with_quality_control(message, k=5)
         decision = self.strategy_decider.decide(message, quality, risk_level=safety.risk_level)
+        disclaimer = self.disclaimer_manager.get_disclaimer(risk_level=safety.risk_level, strategy=decision.strategy)
         context = self._build_context(references)
         parsed_refs = self._parse_references(references)
 
         yield ("session", {"session_id": session_id})
         yield ("references", {"references": [ref.model_dump() for ref in parsed_refs]})
+        yield (
+            "meta",
+            {
+                "strategy_used": str(decision.strategy.value),
+                "strategy_reason": str(decision.reason),
+                "confidence": str(decision.confidence),
+                "risk_level": str(safety.risk_level.value),
+                "search_quality": {
+                    "total_candidates": int(quality.total_candidates),
+                    "qualified_count": int(quality.qualified_count),
+                    "avg_similarity": float(quality.avg_similarity),
+                    "confidence": str(quality.confidence),
+                },
+                "disclaimer": str(disclaimer),
+            },
+        )
 
         history = self.conversation_histories.get(session_id, [])
 
@@ -541,7 +618,16 @@ class AILegalAssistant:
         self._last_seen[session_id] = time.time()
         self._evict_if_needed()
 
-        yield ("done", {"session_id": session_id})
+        yield (
+            "done",
+            {
+                "session_id": session_id,
+                "strategy_used": str(decision.strategy.value),
+                "strategy_reason": str(decision.reason),
+                "confidence": str(decision.confidence),
+                "risk_level": str(safety.risk_level.value),
+            },
+        )
 
 
 _ai_assistant = None

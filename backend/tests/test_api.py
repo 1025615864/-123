@@ -1374,6 +1374,86 @@ class TestAIConsultationAPI:
         assert isinstance(payload2.get("request_id"), str)
 
     @pytest.mark.asyncio
+    async def test_ai_chat_returns_strategy_meta_when_available(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+        monkeypatch: MonkeyPatch,
+    ):
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        import app.routers.ai as ai_router
+
+        monkeypatch.setattr(ai_router.settings, "openai_api_key", "test", raising=True)
+
+        user = User(
+            username="ai_meta_u1",
+            email="ai_meta_u1@example.com",
+            nickname="ai_meta_u1",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        token = create_access_token({"sub": str(user.id)})
+
+        class FakeAssistant:
+            async def chat(
+                self,
+                *,
+                message: str,
+                session_id: str | None = None,
+                initial_history: list[dict[str, str]] | None = None,
+            ) -> tuple[str, str, list[object], dict[str, object]]:
+                _ = message
+                _ = initial_history
+                assert session_id is None
+                return (
+                    "s_meta_1",
+                    "OK",
+                    [],
+                    {
+                        "strategy_used": "general_legal",
+                        "strategy_reason": "未找到直接相关法条",
+                        "confidence": "low",
+                        "risk_level": "safe",
+                        "search_quality": {
+                            "total_candidates": 0,
+                            "qualified_count": 0,
+                            "avg_similarity": 0.0,
+                            "confidence": "low",
+                        },
+                        "disclaimer": "d",
+                    },
+                )
+
+        monkeypatch.setattr(ai_router, "_try_get_ai_assistant", lambda: FakeAssistant(), raising=True)
+
+        res = await client.post(
+            "/api/ai/chat",
+            json={"message": "hello"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 200
+        data = _json_dict(res)
+        assert data.get("session_id") == "s_meta_1"
+        assert data.get("answer") == "OK"
+        assert data.get("strategy_used") == "general_legal"
+        assert data.get("strategy_reason") == "未找到直接相关法条"
+        assert data.get("confidence") == "low"
+        assert data.get("risk_level") == "safe"
+        assert data.get("disclaimer") == "d"
+
+        sq_obj = data.get("search_quality")
+        assert isinstance(sq_obj, dict)
+        assert sq_obj.get("qualified_count") == 0
+        assert sq_obj.get("confidence") == "low"
+
+    @pytest.mark.asyncio
     async def test_ai_consultations_list_supports_q_search(
         self,
         client: AsyncClient,
