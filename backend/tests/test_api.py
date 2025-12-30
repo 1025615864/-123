@@ -719,6 +719,118 @@ class TestLawFirmAPI:
         assert "total" in data
 
 
+class TestLawFirmConsultationsAPI:
+    """律所咨询预约 API 测试"""
+
+    @pytest.mark.asyncio
+    async def test_consultation_cancel_and_permissions(self, client: AsyncClient, test_session: AsyncSession):
+        from sqlalchemy import select
+
+        from app.models.lawfirm import Lawyer, LawyerConsultation
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        user1 = User(
+            username="u_lawfirm_consult_1",
+            email="u_lawfirm_consult_1@example.com",
+            nickname="u_lawfirm_consult_1",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        user2 = User(
+            username="u_lawfirm_consult_2",
+            email="u_lawfirm_consult_2@example.com",
+            nickname="u_lawfirm_consult_2",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add_all([user1, user2])
+        await test_session.commit()
+        await test_session.refresh(user1)
+        await test_session.refresh(user2)
+
+        lawyer = Lawyer(name="律师A")
+        test_session.add(lawyer)
+        await test_session.commit()
+        await test_session.refresh(lawyer)
+
+        token1 = create_access_token({"sub": str(user1.id)})
+        token2 = create_access_token({"sub": str(user2.id)})
+
+        create_res = await client.post(
+            "/api/lawfirm/consultations",
+            json={
+                "lawyer_id": int(lawyer.id),
+                "subject": "我的劳动纠纷咨询",
+                "contact_phone": "13800000000",
+            },
+            headers={"Authorization": f"Bearer {token1}"},
+        )
+        assert create_res.status_code == 200
+        create_data = _json_dict(create_res)
+        consultation_id = _as_int(create_data.get("id"), 0)
+        assert consultation_id > 0
+        assert create_data.get("status") == "pending"
+
+        list_res = await client.get(
+            "/api/lawfirm/consultations",
+            headers={"Authorization": f"Bearer {token1}"},
+        )
+        assert list_res.status_code == 200
+        list_data = _json_dict(list_res)
+        items = _as_list(list_data.get("items"))
+        ids = {_as_int(item.get("id"), 0) for item in items if isinstance(item, dict)}
+        assert consultation_id in ids
+
+        cancel_res = await client.post(
+            f"/api/lawfirm/consultations/{consultation_id}/cancel",
+            headers={"Authorization": f"Bearer {token1}"},
+        )
+        assert cancel_res.status_code == 200
+        assert _json_dict(cancel_res).get("status") == "cancelled"
+
+        cancel_again_res = await client.post(
+            f"/api/lawfirm/consultations/{consultation_id}/cancel",
+            headers={"Authorization": f"Bearer {token1}"},
+        )
+        assert cancel_again_res.status_code == 200
+        assert _json_dict(cancel_again_res).get("status") == "cancelled"
+
+        cancel_other_user_res = await client.post(
+            f"/api/lawfirm/consultations/{consultation_id}/cancel",
+            headers={"Authorization": f"Bearer {token2}"},
+        )
+        assert cancel_other_user_res.status_code == 404
+
+        create_res2 = await client.post(
+            "/api/lawfirm/consultations",
+            json={
+                "lawyer_id": int(lawyer.id),
+                "subject": "合同纠纷咨询",
+            },
+            headers={"Authorization": f"Bearer {token1}"},
+        )
+        assert create_res2.status_code == 200
+        consultation_id2 = _as_int(_json_dict(create_res2).get("id"), 0)
+        assert consultation_id2 > 0
+
+        c_res = await test_session.execute(
+            select(LawyerConsultation).where(LawyerConsultation.id == int(consultation_id2))
+        )
+        c = c_res.scalar_one()
+        c.status = "completed"
+        test_session.add(c)
+        await test_session.commit()
+
+        cancel_completed_res = await client.post(
+            f"/api/lawfirm/consultations/{consultation_id2}/cancel",
+            headers={"Authorization": f"Bearer {token1}"},
+        )
+        assert cancel_completed_res.status_code == 400
+
+
 class TestPaymentAPI:
     """支付API测试"""
 

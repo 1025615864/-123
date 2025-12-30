@@ -443,6 +443,7 @@ class AiOpsStatusResponse(BaseModel):
     ai_router_enabled: bool
     openai_api_key_configured: bool
     openai_base_url: str
+    providers: list[dict[str, object]]
     ai_model: str
     chroma_persist_dir: str
     started_at: float
@@ -582,6 +583,7 @@ async def get_ai_ops_status(
         ai_router_enabled=bool(ai_router_enabled),
         openai_api_key_configured=bool(str(settings.openai_api_key or "").strip()),
         openai_base_url=str(settings.openai_base_url),
+        providers=[],
         ai_model=str(settings.ai_model),
         chroma_persist_dir=str(settings.chroma_persist_dir),
         started_at=started_at,

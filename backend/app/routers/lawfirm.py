@@ -5,9 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel
 from sqlalchemy import select, func, or_, desc
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from ..database import get_db
-from ..models.lawfirm import LawyerVerification, Lawyer, LawFirm
+from ..models.lawfirm import LawyerVerification, Lawyer, LawFirm, LawyerConsultation
 from ..models.user import User
 from ..schemas.lawfirm import (
     LawFirmCreate, LawFirmUpdate, LawFirmResponse, LawFirmListResponse,
@@ -28,6 +29,18 @@ def _split_specialties(value: str | None) -> list[str]:
         return []
     parts = [p.strip() for p in value.replace("，", ",").split(",")]
     return [p for p in parts if p]
+
+
+async def _get_owned_consultation(db: AsyncSession, consultation_id: int, user_id: int):
+    res = await db.execute(
+        select(LawyerConsultation)
+        .options(selectinload(LawyerConsultation.lawyer))
+        .where(
+            LawyerConsultation.id == int(consultation_id),
+            LawyerConsultation.user_id == int(user_id),
+        )
+    )
+    return res.scalar_one_or_none()
 
 
 # ============ 律所相关 ============
@@ -422,6 +435,43 @@ async def get_my_consultations(
         ))
     
     return ConsultationListResponse(items=items, total=total, page=page, page_size=page_size)
+
+
+@router.post("/consultations/{consultation_id}/cancel", response_model=ConsultationResponse, summary="取消我的咨询")
+async def cancel_my_consultation(
+    consultation_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """取消当前用户的咨询预约"""
+    consultation = await _get_owned_consultation(db, consultation_id, current_user.id)
+    if not consultation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="咨询不存在")
+
+    if consultation.status == "completed":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="咨询已完成，无法取消")
+
+    if consultation.status != "cancelled":
+        consultation.status = "cancelled"
+        db.add(consultation)
+        await db.commit()
+        await db.refresh(consultation)
+
+    return ConsultationResponse(
+        id=consultation.id,
+        user_id=consultation.user_id,
+        lawyer_id=consultation.lawyer_id,
+        subject=consultation.subject,
+        description=consultation.description,
+        category=consultation.category,
+        contact_phone=consultation.contact_phone,
+        preferred_time=consultation.preferred_time,
+        status=consultation.status,
+        admin_note=consultation.admin_note,
+        created_at=consultation.created_at,
+        updated_at=consultation.updated_at,
+        lawyer_name=consultation.lawyer.name if consultation.lawyer else None,
+    )
 
 
 # ============ 评价相关 ============
