@@ -36,6 +36,36 @@ interface ExportData {
   messages: ExportMessage[]
 }
 
+ function sanitizeDownloadFilename(filename: string): string {
+   const s = String(filename ?? '').trim()
+   if (!s) return ''
+   return s.replace(/[\\/:*?"<>|]+/g, '_').trim()
+ }
+
+ function parseContentDispositionFilename(headerValue: unknown): string | null {
+   const s = String(headerValue ?? '').trim()
+   if (!s) return null
+
+   const mStar = s.match(/filename\*\s*=\s*([^']*)''([^;]+)/i)
+   if (mStar) {
+     const raw = String(mStar[2] ?? '').trim().replace(/^"|"$/g, '')
+     try {
+       const decoded = decodeURIComponent(raw)
+       return sanitizeDownloadFilename(decoded) || null
+     } catch {
+       return sanitizeDownloadFilename(raw) || null
+     }
+   }
+
+   const m = s.match(/filename\s*=\s*([^;]+)/i)
+   if (m) {
+     const raw = String(m[1] ?? '').trim().replace(/^"|"$/g, '')
+     return sanitizeDownloadFilename(raw) || null
+   }
+
+   return null
+ }
+
 export default function ChatHistoryPage() {
   const toast = useToast()
   const { actualTheme } = useTheme()
@@ -78,11 +108,19 @@ export default function ChatHistoryPage() {
         responseType: 'blob' as any,
       })
 
+       const disposition =
+         (res as any)?.headers?.['content-disposition'] ??
+         (res as any)?.headers?.['Content-Disposition'] ??
+         (res as any)?.headers?.['CONTENT-DISPOSITION']
+       const serverFilename = parseContentDispositionFilename(disposition)
+       const defaultFilename = `法律咨询报告_${consultation.session_id}.pdf`
+       const downloadFilename = sanitizeDownloadFilename(serverFilename || defaultFilename) || defaultFilename
+
       const blob = new Blob([res.data], { type: 'application/pdf' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `法律咨询报告_${consultation.session_id}.pdf`
+      a.download = downloadFilename
       a.click()
       URL.revokeObjectURL(url)
 
@@ -97,14 +135,24 @@ export default function ChatHistoryPage() {
         
         // 创建新窗口用于打印
         const printWindow = window.open('', '_blank')
-        if (printWindow) {
-          printWindow.document.write(htmlContent)
-          printWindow.document.close()
-          printWindow.onload = () => {
-            printWindow.print()
-          }
+        if (!printWindow) {
+          const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' })
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = `咨询记录_${consultation.session_id}.html`
+          a.click()
+          URL.revokeObjectURL(url)
+          toast.success('已下载HTML报告，可打开后打印为PDF')
+          return
         }
-        
+
+        printWindow.document.write(htmlContent)
+        printWindow.document.close()
+        printWindow.onload = () => {
+          printWindow.print()
+        }
+
         toast.success('已打开打印预览，可保存为PDF')
       } catch {
         // 降级为简单文本导出
