@@ -24,6 +24,9 @@ export const queryKeys = {
   lawFirm: (firmId: string | undefined) => ["lawfirm", { firmId }] as const,
   lawFirmLawyers: (firmId: string | undefined) =>
     ["lawfirm-lawyers", { firmId }] as const,
+  lawFirmConsultationsBase: () => ["lawfirm-consultations"] as const,
+  lawFirmConsultations: (page: number, pageSize: number) =>
+    ["lawfirm-consultations", { page, pageSize }] as const,
 
   newsCategories: () => ["news-categories"] as const,
   newsList: (

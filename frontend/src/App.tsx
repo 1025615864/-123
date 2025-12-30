@@ -31,6 +31,9 @@ const NewsDetailPage = lazy(() => import("./pages/NewsDetailPage"));
 const NewsTopicsPage = lazy(() => import("./pages/NewsTopicsPage"));
 const NewsTopicDetailPage = lazy(() => import("./pages/NewsTopicDetailPage"));
 const LawFirmDetailPage = lazy(() => import("./pages/LawFirmDetailPage"));
+const LawFirmConsultationsPage = lazy(
+  () => import("./pages/LawFirmConsultationsPage")
+);
 const FeeCalculatorPage = lazy(() => import("./pages/FeeCalculatorPage"));
 const LimitationsCalculatorPage = lazy(
   () => import("./pages/LimitationsCalculatorPage")
@@ -138,6 +141,10 @@ function App() {
                 <Route path="news/topics/:topicId" element={<NewsTopicDetailPage />} />
                 <Route path="news/:newsId" element={<NewsDetailPage />} />
                 <Route path="lawfirm" element={<LawFirmPage />} />
+                <Route
+                  path="lawfirm/consultations"
+                  element={<LawFirmConsultationsPage />}
+                />
                 <Route path="lawfirm/:firmId" element={<LawFirmDetailPage />} />
                 <Route path="calculator" element={<FeeCalculatorPage />} />
                 <Route path="limitations" element={<LimitationsCalculatorPage />} />

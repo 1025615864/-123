@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { MapPin, Phone, Star, Users, Search, Building2, BadgeCheck } from 'lucide-react'
+import { MapPin, Phone, Star, Users, Search, Building2, BadgeCheck, Calendar } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
-import { Loading, Card, Input, Badge, EmptyState, Button } from '../components/ui'
+import { Loading, Card, Input, Badge, EmptyState, Button, LinkButton } from '../components/ui'
 import PageHeader from '../components/PageHeader'
 import api from '../api/client'
 import { usePrefetchLimiter, useToast } from '../hooks'
@@ -108,7 +108,12 @@ export default function LawFirmPage() {
           layout="mdCenter"
           tone={actualTheme}
           right={
-            <div className="w-full md:w-auto">
+            <div className="w-full md:w-auto space-y-3">
+              <div className="flex justify-end">
+                <LinkButton to="/lawfirm/consultations" variant="outline" size="sm" icon={Calendar}>
+                  我的预约
+                </LinkButton>
+              </div>
               <Card variant="surface" padding="sm">
                 <div className="flex flex-col sm:flex-row gap-3">
                   <div className="flex-1 min-w-0">
