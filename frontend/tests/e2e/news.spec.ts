@@ -97,7 +97,23 @@ test('新闻列表：关键词搜索可命中 title/summary/source/author/conten
     await expect(page.getByText(`标题-${token}`).first()).toBeVisible({ timeout: 12_000 })
 
     // negative
-    await page.getByPlaceholder('搜索标题或摘要').fill(`NOT_FOUND_${token}`)
+    const notFoundKw = `NOTFOUND${now}${Math.random().toString(36).slice(2)}`
+    const notFoundRespP = page.waitForResponse(
+      (r) =>
+        r.request().method() === 'GET' &&
+        (() => {
+          try {
+            const u = new URL(r.url())
+            if (!u.pathname.endsWith('/api/news')) return false
+            return String(u.searchParams.get('keyword') ?? '') === notFoundKw
+          } catch {
+            return false
+          }
+        })(),
+      { timeout: 25_000 }
+    )
+    await page.getByPlaceholder('搜索标题或摘要').fill(notFoundKw)
+    await notFoundRespP
     await expect(page.getByText('暂无符合条件的新闻')).toBeVisible({ timeout: 12_000 })
   } finally {
     await deleteNews(request, adminToken, newsId)
@@ -611,7 +627,7 @@ test('管理后台：创建草稿新闻 -> 发布 -> 置顶（列表可见字段
 
     // 置顶
     await page.getByTitle('置顶').first().click()
-    await expect(page.getByText('置顶').first()).toBeVisible({ timeout: 12_000 })
+    await expect(page.getByTitle('取消置顶').first()).toBeVisible({ timeout: 12_000 })
 
     // 取消置顶（可选，确保 toggle 正常）
     await page.getByTitle('取消置顶').first().click()
