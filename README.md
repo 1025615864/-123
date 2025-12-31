@@ -71,13 +71,8 @@ docker compose up -d --build
 
 ## 文档入口（建议先看）
 
-- `docs/PROJECT_REPORT.md`：项目报告（面向接手工程师的一站式说明）
-- `docs/HANDOFF.md`：项目交接补充（偏 News / News AI 工程交付与运维要点）
-- `docs/DEV_GUIDE.md`：开发指南（从零启动/Windows 常见坑/测试命令）
-- `docs/ARCHITECTURE.md`：架构说明（模块划分/数据流/安全策略）
-- `docs/PROD_DEPLOY_AND_SMOKE_SOP.md`：生产部署参数清单 + 冒烟 SOP
-- `docs/API_QUICK_REFERENCE.md`：常用 API 速查（按模块分类）
-- `docs/UPDATE_LOG.md`：更新记录（变更点与测试结果）
+- `docs/PROJECT_REPORT.md`：项目报告（面向接手工程师的一站式说明；开发/部署/运维/架构/API/FAQ 已收敛到此）
+- `docs/_archive/`：历史文档归档（仅供追溯，不作为入口维护）
 - `helm/baixing-assistant/README.md`：Helm Chart 部署说明（K8s + Ingress）
 
 ## 快速启动
@@ -196,7 +191,7 @@ docker compose -f docker-compose.prod.yml up -d --build
 
 ### 生产配置与运维
 
-- 生产部署参数清单 + 一键冒烟 SOP：`docs/PROD_DEPLOY_AND_SMOKE_SOP.md`
+- 生产配置要点 + 冒烟流程（News AI）：见 `docs/PROJECT_REPORT.md`
 - Helm（Kubernetes）部署：`helm/baixing-assistant/README.md`
 - Docker Compose 生产示例：`docker-compose.prod.yml` + 仓库根目录 `env.example.txt`
 

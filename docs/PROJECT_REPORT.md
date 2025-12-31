@@ -177,7 +177,7 @@ Chart：`helm/baixing-assistant`
 - 会话消息落库（consultation/messages）。
 - 当请求带 `session_id` 时，会从 DB 读取最近消息注入 assistant，实现跨重启续聊。
 
-详细实现现状见：`AI_CONSULTATION_STATUS.md`。
+AI 咨询模块的实现细节与已知风险点已合并到本文档的「12.5 AI 咨询模块现状（要点）」章节。
 
 ### 7.3 新闻与 News AI（/api/news + /api/system/news-ai/status）
 
@@ -228,7 +228,7 @@ Chart：`helm/baixing-assistant`
 
 脚本逻辑：health -> status -> 创建新闻 -> AI rerun -> 轮询确认 -> 清理。
 
-详细 SOP：`PROD_DEPLOY_AND_SMOKE_SOP.md`。
+生产部署与冒烟 SOP 的关键要点已合并到本文档的「12.4 生产部署与冒烟（摘要）」章节。
 
 ### 9.2 CI 工作流
 
@@ -273,13 +273,87 @@ Chart：`helm/baixing-assistant`
 
 ---
 
-## 12. 文档索引
+## 12. 文档与附录（已合并到本文）
 
-- `../README.md`（仓库入口）
-- `DEV_GUIDE.md`（从零启动与测试）
-- `ARCHITECTURE.md`（架构与数据流）
-- `API_QUICK_REFERENCE.md`（API 速查）
-- `PROD_DEPLOY_AND_SMOKE_SOP.md`（生产部署与冒烟 SOP）
-- `AI_CONSULTATION_STATUS.md`（AI 咨询模块现状）
-- `UPDATE_LOG.md`（更新记录）
-- `../helm/baixing-assistant/README.md`（Helm 部署）
+本仓库的核心工程交接信息已收敛到 **本文件**。为减少文档分散、降低维护成本：
+
+- 原 `docs/` 下的多份说明文档已统一归档到 `docs/_archive/`（不删除，仅供追溯）。
+- 本节给出“合并后的摘要版附录”，覆盖接手工程师最常用的开发/运维/架构/API/变更信息。
+
+---
+
+### 12.1 开发指南（精简版）
+
+- **后端启动**（Windows 建议优先用 `py -m ...`）：
+  - 安装依赖：`py -m pip install -r backend/requirements.txt`
+  - 启动：`py -m uvicorn app.main:app --reload --port 8000`（在 `backend/` 目录执行）
+- **前端启动**：
+  - 安装：`npm install`（在 `frontend/` 目录）
+  - 启动：`npm run dev`（默认 `http://localhost:5173`）
+- **Docker Compose**：
+  - 开发：`docker compose up -d --build`
+  - 生产示例：`docker compose -f docker-compose.prod.yml up -d --build`
+- **测试**：
+  - 后端：`py -m pytest -q`、类型：`py -m pyright`
+  - 前端：`npm run build`、E2E：`npm run test:e2e`
+
+---
+
+### 12.2 架构与数据流（精简版）
+
+- **整体**：`frontend(React)` -> `/api` -> `backend(FastAPI)` -> DB（SQLite/PG）/ Redis（生产推荐）/ ChromaDB（RAG）
+- **路由聚合**：后端在 `app/main.py` 中挂载 `/api` 前缀；WebSocket 单独挂载。
+- **生产关键约束**：
+  - **Secrets 不入库**：`OPENAI_API_KEY`、`JWT_SECRET_KEY/SECRET_KEY` 等必须通过 env/Secret 注入。
+  - **生产 News AI**：`DEBUG=false` 且 Redis 不可用时会禁用周期任务（避免多副本重复跑）。
+
+---
+
+### 12.3 常用 API 速查（精简版）
+
+- **健康检查**：`GET /health`
+- **登录**：`POST /api/user/login`（JWT 在 `token.access_token`）
+- **AI 咨询**：`POST /api/ai/chat`、`POST /api/ai/chat/stream`
+- **新闻消费**：`GET /api/news`、`GET /api/news/{id}`
+- **News AI 运维**：`GET /api/system/news-ai/status`（管理员）
+- **News AI 手动重跑**：`POST /api/news/admin/{news_id}/ai/rerun`（管理员）
+
+---
+
+### 12.4 生产部署与冒烟（摘要）
+
+- **必须遵守**：Secrets（如 `OPENAI_API_KEY`、`JWT_SECRET_KEY/SECRET_KEY`、`PAYMENT_WEBHOOK_SECRET`）只能走环境变量/Secret Manager。
+- **Redis（生产强烈建议）**：`DEBUG=false` 且 Redis 不可用会禁用定时任务/News AI pipeline。
+- **冒烟脚本（News AI）**：
+  - Windows：`../scripts/smoke-news-ai.ps1`
+  - Linux/CI：`../scripts/smoke-news-ai.sh`
+  - 逻辑：health -> status -> 创建新闻 -> AI rerun -> 轮询确认 -> 清理。
+
+---
+
+### 12.5 AI 咨询模块现状（要点）
+
+- **核心能力**：同步与 SSE 流式聊天；会话与消息落库；支持 `session_id` 跨重启续聊（从 DB 注入最近历史）；权限校验（owner/admin）；游客配额（IP 维度）。
+- **PDF 报告**：`GET /api/ai/consultations/{session_id}/report`；若缺少 PDF 依赖（如 `reportlab`）会返回 501。
+- **运维接口**：`GET /api/system/ai/status`（管理员），用于查看 AI 模块就绪状态与最近错误趋势（以 Swagger 为准）。
+
+---
+
+### 12.6 更新记录（摘录）
+
+- **2025-12-27**：落地“Secrets 不入库”、News AI 运维状态接口、`StaleDataError` 并发兜底、生产部署与冒烟 SOP。
+- **2025-12-29**：News 模块发布（tag `news-module-20251229`）、补齐开发/架构/API 速查文档入口与测试结果记录。
+
+---
+
+### 12.7 归档（历史文档）
+
+为减少 `docs/` 根目录文件数、降低维护成本，下列文档已移到 `docs/_archive/` 目录保留：
+
+- `_archive/ARCHITECTURE.md`
+- `_archive/API_QUICK_REFERENCE.md`
+- `_archive/PROD_DEPLOY_AND_SMOKE_SOP.md`
+- `_archive/HANDOFF.md`
+- `_archive/DEV_GUIDE.md`
+- `_archive/AI_CONSULTATION_STATUS.md`
+- `_archive/UPDATE_LOG.md`
