@@ -4,8 +4,13 @@
 >
 > 适用范围：本仓库（`backend/` + `frontend/`）。
 
+主入口文档：
+
+- `PROJECT_REPORT.md`：项目报告（面向接手工程师的一站式说明）
+
 建议阅读顺序：
 
+- `PROJECT_REPORT.md`：项目报告（快速上手/启动/部署/模块与排障索引）
 - `DEV_GUIDE.md`：本地从零启动（含 Windows 常见坑与测试命令）
 - `ARCHITECTURE.md`：整体架构与各模块数据流
 - `API_QUICK_REFERENCE.md`：常用 API 速查（按模块分类）

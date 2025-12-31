@@ -127,5 +127,6 @@ backend/
 
 ## 相关文档
 
+- `../docs/PROJECT_REPORT.md`：项目报告（面向接手工程师的一站式说明）
 - `../docs/PROD_DEPLOY_AND_SMOKE_SOP.md`：生产部署参数清单 + 一键冒烟 SOP
 - `../docs/UPDATE_LOG.md`：更新记录（变更点与测试结果）

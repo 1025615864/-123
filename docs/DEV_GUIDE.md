@@ -2,6 +2,8 @@
 
 > 目标：帮助你从零开始在本仓库把 **backend + frontend** 跑起来，并覆盖常见的 Windows/中文路径坑、基础联调与测试。
 
+建议先读：`PROJECT_REPORT.md`（项目报告，一站式上手）。
+
 ---
 
 ## 0. 前置要求
@@ -168,6 +170,13 @@ npm run build
 ```bash
 cd frontend
 npm run test:e2e
+```
+
+仅运行移动端回归套件：
+
+```bash
+cd frontend
+npm run test:e2e:mobile
 ```
 
 > Playwright 默认会启动隔离端口的后端/前端 dev server（见 `frontend/README.md` 的 E2E 环境变量说明）。

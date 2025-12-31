@@ -71,7 +71,8 @@ docker compose up -d --build
 
 ## 文档入口（建议先看）
 
-- `docs/HANDOFF.md`：项目交接（架构/配置/关键入口/排障）
+- `docs/PROJECT_REPORT.md`：项目报告（面向接手工程师的一站式说明）
+- `docs/HANDOFF.md`：项目交接补充（偏 News / News AI 工程交付与运维要点）
 - `docs/DEV_GUIDE.md`：开发指南（从零启动/Windows 常见坑/测试命令）
 - `docs/ARCHITECTURE.md`：架构说明（模块划分/数据流/安全策略）
 - `docs/PROD_DEPLOY_AND_SMOKE_SOP.md`：生产部署参数清单 + 冒烟 SOP
