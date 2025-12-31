@@ -20,7 +20,7 @@ export default function Modal({
   children,
   size = "md",
   showCloseButton = true,
-  zIndexClass = "z-50",
+  zIndexClass = "z-[70]",
 }: ModalProps) {
   const titleId = useId();
   const descriptionId = useId();

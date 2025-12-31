@@ -1099,7 +1099,7 @@ export default function ChatPage() {
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-140px)] h-[calc(100dvh-140px)] w-full max-w-5xl mx-auto">
+    <div className="flex flex-col flex-1 min-h-0 w-full max-w-5xl mx-auto">
       <div className="flex-none px-4 sm:px-0 mb-6">
         <PageHeader
           eyebrow="AI智能咨询"

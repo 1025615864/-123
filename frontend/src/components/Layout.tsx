@@ -61,12 +61,12 @@ export default function Layout() {
   ];
 
   return (
-    <div className="min-h-screen flex flex-col font-sans">
+    <div className="min-h-[100dvh] flex flex-col font-sans">
       <header
         className="sticky top-0 z-50 backdrop-blur-xl border-b flex justify-center bg-white/80 border-slate-200/60 dark:bg-slate-900/80 dark:border-white/5"
       >
         <div className="w-full max-w-7xl px-6 sm:px-8 lg:px-12">
-          <div className="flex justify-between items-center h-18">
+          <div className="flex justify-between items-center h-[72px]">
             <Link to="/" className="flex items-center space-x-3 group flex-shrink-0 outline-none rounded-xl transition-all active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900">
               <div className="relative">
                 <div className="absolute inset-0 bg-blue-500 rounded-xl blur opacity-20 group-hover:opacity-40 transition-opacity" />
@@ -238,9 +238,13 @@ export default function Layout() {
       </header>
 
       <main
-        className={`flex-1 flex justify-center ${showMobileBottomNav ? 'pb-[calc(56px+env(safe-area-inset-bottom))]' : ''}`}
+        className={`flex-1 flex justify-center min-h-0 ${showMobileBottomNav ? 'pb-[calc(56px+env(safe-area-inset-bottom))]' : ''}`}
       >
-        <div className="w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-8 md:py-12 animate-fade-in">
+        <div
+          className={`w-full max-w-7xl px-4 sm:px-6 lg:px-8 ${
+            isChatRoute ? "py-4 md:py-6" : "py-8 md:py-12"
+          } flex flex-col min-h-0 animate-fade-in`}
+        >
           <Outlet />
         </div>
       </main>
