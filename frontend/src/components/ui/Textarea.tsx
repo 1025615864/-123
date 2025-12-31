@@ -15,8 +15,8 @@ const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(
     },
     ref
   ) => {
-    const baseStyles = 'w-full px-4 py-3 rounded-xl border bg-white text-slate-900 placeholder:text-slate-400 outline-none transition resize-none focus-visible:border-amber-500/50 focus-visible:ring-2 focus-visible:ring-amber-500/20 disabled:opacity-60 disabled:cursor-not-allowed dark:bg-white/5 dark:text-white dark:placeholder:text-white/30'
-    const errorStyles = error ? 'border-red-500/60 focus-visible:border-red-500/60 focus-visible:ring-red-500/20' : 'border-slate-200/70 dark:border-white/10'
+    const baseStyles = 'w-full px-4 py-3 rounded-xl border bg-white text-slate-900 placeholder:text-slate-400 outline-none transition resize-none focus-visible:border-amber-500/50 focus-visible:ring-2 focus-visible:ring-amber-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 disabled:opacity-60 disabled:cursor-not-allowed dark:bg-white/5 dark:text-white dark:placeholder:text-white/30'
+    const errorStyles = error ? 'border-red-500/60 focus-visible:border-red-500/60 focus-visible:ring-red-500/20' : 'border-slate-200/70 hover:border-slate-300 dark:border-white/10 dark:hover:border-white/20'
     
     const combinedClassName = `${baseStyles} ${errorStyles} ${className}`
     

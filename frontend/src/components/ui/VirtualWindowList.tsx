@@ -35,15 +35,28 @@ export default function VirtualWindowList<T>({
   const rafRef = useRef<number | null>(null)
   const observersRef = useRef(new Map<number, ResizeObserver>())
   const observedElsRef = useRef(new Map<number, Element>())
+  const prevItemsLengthRef = useRef(0)
 
   const [range, setRange] = useState({ start: 0, end: Math.min(items.length, 20) })
   const [totalHeight, setTotalHeight] = useState(items.length * estimateItemHeight)
   const [version, setVersion] = useState(0)
 
   useEffect(() => {
-    sizesRef.current = Array.from({ length: items.length }, () => estimateItemHeight)
+    const prevLen = prevItemsLengthRef.current
+    const prevSizes = sizesRef.current
+    const nextSizes = Array.from({ length: items.length }, (_, i) => {
+      if (i < prevLen) return prevSizes[i] ?? estimateItemHeight
+      return estimateItemHeight
+    })
+
+    prevItemsLengthRef.current = items.length
+    sizesRef.current = nextSizes
     setTotalHeight(items.length * estimateItemHeight)
-    setRange({ start: 0, end: Math.min(items.length, 20) })
+    setRange((prev) => {
+      const start = Math.min(prev.start, Math.max(0, items.length - 1))
+      const end = Math.min(items.length, Math.max(start + 1, prev.end))
+      return prev.start === start && prev.end === end ? prev : { start, end }
+    })
     setVersion((v) => v + 1)
   }, [estimateItemHeight, items.length])
 
@@ -87,6 +100,15 @@ export default function VirtualWindowList<T>({
 
     setRange((prev) => (prev.start === start && prev.end === end ? prev : { start, end }))
   }, [items.length, offsets, overscan])
+
+  useEffect(() => {
+    if (items.length === 0) return
+    if (rafRef.current != null) return
+    rafRef.current = window.requestAnimationFrame(() => {
+      rafRef.current = null
+      computeRange()
+    })
+  }, [computeRange, items.length, offsets])
 
   useEffect(() => {
     const onScrollOrResize = () => {

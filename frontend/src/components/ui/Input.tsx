@@ -36,8 +36,8 @@ const Input = forwardRef<HTMLInputElement, InputProps>(
       return ids.length > 0 ? ids.join(' ') : undefined
     }, [ariaDescribedByProp, errorId])
 
-    const baseStyles = 'w-full px-4 py-3 rounded-lg border bg-white text-slate-900 placeholder:text-slate-400 outline-none transition focus-visible:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500/20 disabled:opacity-60 disabled:cursor-not-allowed dark:bg-slate-800 dark:text-white dark:placeholder:text-slate-500'
-    const errorStyles = error ? 'border-red-500 focus-visible:border-red-500 focus-visible:ring-red-500/20' : 'border-slate-200 dark:border-slate-700'
+    const baseStyles = 'w-full px-4 py-3 rounded-lg border bg-white text-slate-900 placeholder:text-slate-400 outline-none transition focus-visible:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 disabled:opacity-60 disabled:cursor-not-allowed dark:bg-slate-800 dark:text-white dark:placeholder:text-slate-500'
+    const errorStyles = error ? 'border-red-500 focus-visible:border-red-500 focus-visible:ring-red-500/20' : 'border-slate-200 hover:border-slate-300 dark:border-slate-700 dark:hover:border-slate-600'
     const iconPaddingStyles = Icon ? (iconPosition === 'left' ? 'pl-12' : 'pr-12') : ''
     const rightPaddingStyles = right && (!Icon || iconPosition === 'left') ? 'pr-12' : ''
     

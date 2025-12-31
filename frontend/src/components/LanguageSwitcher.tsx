@@ -37,7 +37,7 @@ export function LanguageSelector({ className = '' }: LanguageSwitcherProps) {
     <select
       value={language}
       onChange={(e) => setLanguage(e.target.value as Language)}
-      className={`px-2 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm ${className}`}
+      className={`px-2 py-1 rounded border border-gray-300 bg-white text-sm text-slate-900 outline-none transition hover:border-gray-400 focus-visible:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:border-gray-600 dark:bg-gray-800 dark:text-white dark:hover:border-gray-500 dark:focus-visible:ring-offset-slate-900 ${className}`}
     >
       <option value="zh">中文</option>
       <option value="en">English</option>

@@ -10,7 +10,7 @@ import {
   Bell,
   Layers,
 } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
   Card,
   Input,
@@ -22,10 +22,11 @@ import {
   NewsCardSkeleton,
   FadeInImage,
   LinkButton,
+  VirtualWindowList,
 } from "../components/ui";
 import PageHeader from "../components/PageHeader";
 import api from "../api/client";
-import { usePrefetchLimiter, useToast } from "../hooks";
+import { useMediaQuery, usePrefetchLimiter, useToast } from "../hooks";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
 import { getApiErrorMessage } from "../utils";
@@ -81,6 +82,11 @@ export default function NewsPage() {
   const navigate = useNavigate();
   const lastSyncedSearchRef = useRef<string>("");
 
+  const isMobile = useMediaQuery("(max-width: 767px)");
+  const isMdUp = useMediaQuery("(min-width: 768px)");
+  const isLgUp = useMediaQuery("(min-width: 1024px)");
+  const columns = isLgUp ? 3 : isMdUp ? 2 : 1;
+
   const formatDateInput = (d: Date) => {
     const yyyy = d.getFullYear();
     const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -89,7 +95,7 @@ export default function NewsPage() {
   };
 
   const [page, setPage] = useState(1);
-  const pageSize = 18;
+  const pageSize = import.meta.env.DEV && isMobile ? 6 : 18;
   const [category, setCategory] = useState<string | null>(null);
   const [keyword, setKeyword] = useState("");
   const [riskLevel, setRiskLevel] = useState<string>("all");
@@ -221,7 +227,22 @@ export default function NewsPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [category, keyword, mode, riskLevel, sourceSite, from, to]);
+    if (isMobile) {
+      try {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      } catch {
+        // ignore
+      }
+    }
+  }, [category, keyword, mode, riskLevel, sourceSite, from, to, isMobile]);
+
+  useEffect(() => {
+    try {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch {
+      // ignore
+    }
+  }, [page]);
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -297,6 +318,85 @@ export default function NewsPage() {
       }
     },
     staleTime: 30 * 60 * 1000,
+  });
+
+  const infiniteBaseKey = useMemo(
+    () => ({
+      mode,
+      pageSize,
+      category,
+      keyword: debouncedKeyword.trim(),
+      riskLevel,
+      sourceSite: sourceSite.trim(),
+      from: from.trim(),
+      to: to.trim(),
+    }),
+    [
+      category,
+      debouncedKeyword,
+      from,
+      mode,
+      pageSize,
+      riskLevel,
+      sourceSite,
+      to,
+    ]
+  );
+
+  const infiniteEnabled =
+    isMobile &&
+    (mode === "favorites" || mode === "history" || mode === "subscribed"
+      ? isAuthenticated
+      : true);
+
+  const newsInfiniteQuery = useInfiniteQuery({
+    queryKey: ["news-infinite", infiniteBaseKey] as const,
+    initialPageParam: 1,
+    queryFn: async ({ pageParam }) => {
+      const params = new URLSearchParams();
+      params.set("page", String(pageParam));
+      params.set("page_size", String(pageSize));
+      if (category) params.set("category", category);
+      if (debouncedKeyword.trim()) params.set("keyword", debouncedKeyword.trim());
+
+      const rl = String(riskLevel || "").trim().toLowerCase();
+      if (rl && rl !== "all") params.set("risk_level", rl);
+
+      const ss = String(sourceSite || "").trim();
+      if (ss) params.set("source_site", ss);
+
+      const fromValue = String(from || "").trim();
+      if (fromValue) params.set("from", fromValue);
+
+      const toValue = String(to || "").trim();
+      if (toValue) params.set("to", toValue);
+
+      const endpoint =
+        mode === "recommended"
+          ? "/news/recommended"
+          : mode === "favorites"
+          ? "/news/favorites"
+          : mode === "history"
+          ? "/news/history"
+          : mode === "subscribed"
+          ? "/news/subscribed"
+          : "/news";
+
+      const res = await api.get(`${endpoint}?${params.toString()}`);
+      return res.data as NewsListResponse;
+    },
+    getNextPageParam: (lastPage) => {
+      const pageValue = Number(lastPage?.page ?? 1);
+      const pageSizeValue = Number(lastPage?.page_size ?? pageSize);
+      const totalValue = Number(lastPage?.total ?? 0);
+      const loaded = pageValue * pageSizeValue;
+      if (loaded >= totalValue) return undefined;
+      return pageValue + 1;
+    },
+    enabled: infiniteEnabled,
+    staleTime: 30 * 1000,
+    retry: 1,
+    refetchOnWindowFocus: false,
   });
 
   const hotNewsQuery = useQuery({
@@ -409,18 +509,20 @@ export default function NewsPage() {
       return res.data as NewsListResponse;
     },
     enabled:
-      mode === "favorites" || mode === "history" || mode === "subscribed"
+      !isMobile &&
+      (mode === "favorites" || mode === "history" || mode === "subscribed"
         ? isAuthenticated
-        : true,
+        : true),
     placeholderData: (prev) => prev,
     retry: 1,
     refetchOnWindowFocus: false,
   });
 
   useEffect(() => {
-    if (!newsQuery.error) return;
-    toast.error(getApiErrorMessage(newsQuery.error));
-  }, [newsQuery.error, toast]);
+    const err = isMobile ? newsInfiniteQuery.error : newsQuery.error;
+    if (!err) return;
+    toast.error(getApiErrorMessage(err));
+  }, [isMobile, newsInfiniteQuery.error, newsQuery.error, toast]);
 
   const displayCategories = useMemo(() => {
     const fromApi = (categoriesQuery.data ?? [])
@@ -430,20 +532,46 @@ export default function NewsPage() {
     return ["全部", ...unique];
   }, [categoriesQuery.data]);
 
-  const news = newsQuery.data?.items ?? [];
-  const total = newsQuery.data?.total ?? 0;
+  const news = isMobile
+    ? (newsInfiniteQuery.data?.pages ?? []).flatMap((p) => p.items ?? [])
+    : newsQuery.data?.items ?? [];
+  const total = isMobile
+    ? Number(newsInfiniteQuery.data?.pages?.[0]?.total ?? 0)
+    : newsQuery.data?.total ?? 0;
 
-  if (newsQuery.isLoading && news.length === 0) {
-    return (
-      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-        {Array.from({ length: 6 }).map((_, i) => (
-          <NewsCardSkeleton key={i} />
-        ))}
-      </div>
-    );
-  }
+  const isInitialLoading =
+    (isMobile ? newsInfiniteQuery.isLoading : newsQuery.isLoading) &&
+    news.length === 0;
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+  const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isMobile) return;
+    const el = loadMoreSentinelRef.current;
+    if (!el) return;
+    if (!newsInfiniteQuery.hasNextPage) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const first = entries[0];
+        if (!first?.isIntersecting) return;
+        if (!newsInfiniteQuery.hasNextPage) return;
+        if (newsInfiniteQuery.isFetchingNextPage) return;
+        newsInfiniteQuery.fetchNextPage();
+      },
+      { root: null, rootMargin: "600px 0px", threshold: 0.01 }
+    );
+
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [
+    isMobile,
+    newsInfiniteQuery.fetchNextPage,
+    newsInfiniteQuery.hasNextPage,
+    newsInfiniteQuery.isFetchingNextPage,
+  ]);
 
   const prefetchNewsDetail = (id: number) => {
     const newsId = String(id);
@@ -454,6 +582,103 @@ export default function NewsPage() {
         return res.data;
       },
     });
+  };
+
+  const newsRows = useMemo(() => {
+    const out: NewsListItem[][] = [];
+    const cols = Math.max(1, Math.floor(columns));
+    for (let i = 0; i < news.length; i += cols) {
+      out.push(news.slice(i, i + cols));
+    }
+    return out;
+  }, [columns, news]);
+
+  const renderNewsCard = (item: NewsListItem) => {
+    return (
+      <Link
+        key={item.id}
+        to={`/news/${item.id}`}
+        onMouseEnter={() => prefetchNewsDetail(item.id)}
+        onFocus={() => prefetchNewsDetail(item.id)}
+        className="group block rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
+      >
+        <Card variant="surface" hover padding="none" className="overflow-hidden">
+          <div className="aspect-[16/10] bg-slate-900/5 relative dark:bg-white/[0.03]">
+            {item.cover_image ? (
+              <FadeInImage
+                src={item.cover_image}
+                alt={item.title}
+                wrapperClassName="w-full h-full"
+                className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+              />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center">
+                <Newspaper className="h-10 w-10 text-slate-400 dark:text-white/30" />
+              </div>
+            )}
+          </div>
+
+          <div className="p-5">
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <Badge variant="primary" size="sm" icon={Tag}>
+                {item.category}
+              </Badge>
+              {getRiskBadge(item.ai_risk_level) ? (
+                <Badge variant={getRiskBadge(item.ai_risk_level)!.variant} size="sm">
+                  {getRiskBadge(item.ai_risk_level)!.label}
+                </Badge>
+              ) : null}
+              {item.is_top ? (
+                <Badge variant="warning" size="sm">
+                  置顶
+                </Badge>
+              ) : null}
+              {Array.isArray(item.ai_keywords) && item.ai_keywords.length > 0
+                ? item.ai_keywords.slice(0, 3).map((k, kIdx) => (
+                    <Badge key={`${item.id}-kw-${kIdx}`} variant="info" size="sm">
+                      {k}
+                    </Badge>
+                  ))
+                : null}
+              {(() => {
+                const riskNorm = String(item.ai_risk_level ?? "")
+                  .trim()
+                  .toLowerCase();
+                const hasKw =
+                  Array.isArray(item.ai_keywords) && item.ai_keywords.length > 0;
+                if (hasKw) return null;
+                if (!riskNorm || riskNorm === "unknown") {
+                  return (
+                    <Badge variant="default" size="sm">
+                      AI生成中
+                    </Badge>
+                  );
+                }
+                return null;
+              })()}
+            </div>
+
+            <h3 className="text-base font-semibold text-slate-900 mb-2 line-clamp-2 leading-snug dark:text-white">
+              {item.title}
+            </h3>
+            <p className="text-slate-600 text-sm line-clamp-3 leading-relaxed dark:text-white/50">
+              {item.summary}
+            </p>
+
+            <div className="flex items-center justify-between text-xs text-slate-500 pt-4 mt-4 border-t border-slate-200/70 dark:text-white/55 dark:border-white/10">
+              <span className="flex items-center gap-2">
+                <Calendar className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                {new Date(item.published_at || item.created_at).toLocaleDateString()}
+              </span>
+              <span className="flex items-center gap-2">
+                <Eye className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                {item.view_count} 阅读
+              </span>
+            </div>
+          </div>
+        </Card>
+      </Link>
+    );
   };
 
   return (
@@ -473,13 +698,13 @@ export default function NewsPage() {
                   value={keyword}
                   onChange={(e) => setKeyword(e.target.value)}
                   placeholder="搜索标题或摘要"
-                  className="py-2.5"
+                  className="py-3 rounded-full"
                 />
               </div>
               <LinkButton
                 to="/news/topics"
                 variant="outline"
-                className="rounded-full px-6 py-3 text-sm"
+                className="rounded-full px-6 py-3 text-sm transition-all hover:shadow-sm"
                 icon={Layers}
               >
                 专题
@@ -488,7 +713,7 @@ export default function NewsPage() {
                 <LinkButton
                   to="/news/subscriptions"
                   variant="outline"
-                  className="rounded-full px-6 py-3 text-sm"
+                  className="rounded-full px-6 py-3 text-sm transition-all hover:shadow-sm"
                   icon={Bell}
                 >
                   我的订阅
@@ -568,7 +793,7 @@ export default function NewsPage() {
             <select
               value={riskLevel}
               onChange={(e) => setRiskLevel(e.target.value)}
-              className="w-full px-4 py-3 rounded-lg border border-slate-200 bg-white text-slate-900 outline-none transition focus-visible:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+              className="w-full px-4 py-3 rounded-lg border border-slate-200 bg-white text-slate-900 outline-none transition hover:border-slate-300 focus-visible:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:hover:border-slate-600 dark:focus-visible:ring-offset-slate-900"
             >
               <option value="all">全部</option>
               <option value="unknown">未知</option>
@@ -727,119 +952,66 @@ export default function NewsPage() {
         </Card>
       </section>
 
-      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-        {news.length === 0 ? (
-          <EmptyState
-            icon={Newspaper}
-            title="暂无符合条件的新闻"
-            description="试试切换分类或修改搜索关键词"
-            className="col-span-full"
-          />
-        ) : (
-          news.map((item, index) => (
-            <Link
-              key={item.id}
-              to={`/news/${item.id}`}
-              onMouseEnter={() => prefetchNewsDetail(item.id)}
-              onFocus={() => prefetchNewsDetail(item.id)}
-              className="block opacity-0 animate-fade-in"
-              style={{
-                animationDelay: `${
-                  Math.min(18, Math.max(0, index % 18)) * 35
-                }ms`,
-              }}
+      {isInitialLoading ? (
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <NewsCardSkeleton key={i} />
+          ))}
+        </div>
+      ) : news.length === 0 ? (
+        <EmptyState
+          icon={Newspaper}
+          title="暂无符合条件的新闻"
+          description="试试切换分类或修改搜索关键词"
+        />
+      ) : (
+        <VirtualWindowList
+          items={newsRows}
+          getItemKey={(row, rowIndex) => {
+            const first = row?.[0]?.id;
+            return first != null ? `row-${first}` : `row-${rowIndex}`;
+          }}
+          estimateItemHeight={420}
+          overscan={8}
+          className="w-full"
+          itemClassName="pb-8"
+          renderItem={(row, rowIndex) => (
+            <div
+              className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8"
+              data-row-index={rowIndex}
             >
-              <Card
-                variant="surface"
-                hover
-                padding="none"
-                className="overflow-hidden"
+              {row.map((item) => renderNewsCard(item))}
+            </div>
+          )}
+        />
+      )}
+
+      {isMobile && news.length > 0 ? (
+        <div className="pt-2">
+          <div ref={loadMoreSentinelRef} className="h-px" />
+          {newsInfiniteQuery.hasNextPage ? (
+            <div className="flex flex-col items-center gap-3 pt-8">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={newsInfiniteQuery.isFetchingNextPage}
+                onClick={() => newsInfiniteQuery.fetchNextPage()}
               >
-                <div className="aspect-[16/10] bg-slate-900/5 relative dark:bg-white/[0.03]">
-                  {item.cover_image ? (
-                    <FadeInImage
-                      src={item.cover_image}
-                      alt={item.title}
-                      wrapperClassName="w-full h-full"
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center">
-                      <Newspaper className="h-10 w-10 text-slate-400 dark:text-white/30" />
-                    </div>
-                  )}
-                </div>
+                {newsInfiniteQuery.isFetchingNextPage ? "加载中..." : "加载更多"}
+              </Button>
+              <div className="text-xs text-slate-500 dark:text-white/55">
+                已加载 {news.length} / {total}
+              </div>
+            </div>
+          ) : (
+            <div className="flex justify-center pt-8 text-xs text-slate-500 dark:text-white/55">
+              已加载全部
+            </div>
+          )}
+        </div>
+      ) : null}
 
-                <div className="p-5">
-                  <div className="flex flex-wrap items-center gap-2 mb-3">
-                    <Badge variant="primary" size="sm" icon={Tag}>
-                      {item.category}
-                    </Badge>
-                    {getRiskBadge(item.ai_risk_level) ? (
-                      <Badge
-                        variant={getRiskBadge(item.ai_risk_level)!.variant}
-                        size="sm"
-                      >
-                        {getRiskBadge(item.ai_risk_level)!.label}
-                      </Badge>
-                    ) : null}
-                    {item.is_top ? (
-                      <Badge variant="warning" size="sm">
-                        置顶
-                      </Badge>
-                    ) : null}
-                    {Array.isArray(item.ai_keywords) && item.ai_keywords.length > 0
-                      ? item.ai_keywords.slice(0, 3).map((k, kIdx) => (
-                          <Badge key={`${item.id}-kw-${kIdx}`} variant="info" size="sm">
-                            {k}
-                          </Badge>
-                        ))
-                      : null}
-                    {(() => {
-                      const riskNorm = String(item.ai_risk_level ?? "")
-                        .trim()
-                        .toLowerCase();
-                      const hasKw =
-                        Array.isArray(item.ai_keywords) && item.ai_keywords.length > 0;
-                      if (hasKw) return null;
-                      if (!riskNorm || riskNorm === "unknown") {
-                        return (
-                          <Badge variant="default" size="sm">
-                            AI生成中
-                          </Badge>
-                        );
-                      }
-                      return null;
-                    })()}
-                  </div>
-
-                  <h3 className="text-base font-semibold text-slate-900 mb-2 line-clamp-2 leading-snug dark:text-white">
-                    {item.title}
-                  </h3>
-                  <p className="text-slate-600 text-sm line-clamp-3 leading-relaxed dark:text-white/50">
-                    {item.summary}
-                  </p>
-
-                  <div className="flex items-center justify-between text-xs text-slate-500 pt-4 mt-4 border-t border-slate-200/70 dark:text-white/55 dark:border-white/10">
-                    <span className="flex items-center gap-2">
-                      <Calendar className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                      {new Date(
-                        item.published_at || item.created_at
-                      ).toLocaleDateString()}
-                    </span>
-                    <span className="flex items-center gap-2">
-                      <Eye className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                      {item.view_count} 阅读
-                    </span>
-                  </div>
-                </div>
-              </Card>
-            </Link>
-          ))
-        )}
-      </div>
-
-      {totalPages > 1 ? (
+      {!isMobile && totalPages > 1 ? (
         <Pagination
           currentPage={page}
           totalPages={totalPages}

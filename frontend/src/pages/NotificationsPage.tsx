@@ -210,7 +210,11 @@ export default function NotificationsPage() {
             {items.map((n) => (
               <div
                 key={n.id}
-                className={`p-5 flex items-start gap-4 ${n.is_read ? '' : 'bg-amber-50/70 dark:bg-amber-500/5'}`}
+                className={`p-5 flex items-start gap-4 transition-colors ${
+                  n.is_read
+                    ? 'hover:bg-slate-50 dark:hover:bg-white/5'
+                    : 'bg-amber-50/70 hover:bg-amber-50 dark:bg-amber-500/5 dark:hover:bg-amber-500/10'
+                }`}
               >
                 <div className="mt-0.5">{getIcon(n.type)}</div>
                 <div className="flex-1 min-w-0">
@@ -259,7 +263,7 @@ export default function NotificationsPage() {
 
                   {n.link && (n.link.startsWith('/') ? (
                     <Link
-                      className="inline-block text-sm text-amber-700 hover:underline mt-3 dark:text-amber-400"
+                      className="inline-block text-sm text-amber-700 mt-3 outline-none rounded-md transition-all hover:underline active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:text-amber-400 dark:focus-visible:ring-offset-slate-900"
                       to={n.link}
                       onClick={() => {
                         if (!n.is_read) handleMarkAsRead(n.id)
@@ -269,7 +273,7 @@ export default function NotificationsPage() {
                     </Link>
                   ) : (
                     <a
-                      className="inline-block text-sm text-amber-700 hover:underline mt-3 dark:text-amber-400"
+                      className="inline-block text-sm text-amber-700 mt-3 outline-none rounded-md transition-all hover:underline active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:text-amber-400 dark:focus-visible:ring-offset-slate-900"
                       href={n.link}
                       target="_blank"
                       rel="noreferrer"

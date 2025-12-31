@@ -170,7 +170,7 @@ export default function NotificationBell({
       default:
         return (
           <AlertCircle
-            className={`h-4 w-4 ${isLight ? "text-gray-500" : "text-white/50"}`}
+            className={`h-4 w-4 ${isLight ? "text-slate-500" : "text-white/50"}`}
           />
         );
     }
@@ -197,12 +197,12 @@ export default function NotificationBell({
     <div className="relative">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className={`relative p-2 rounded-full transition-colors ${
-          isLight ? "hover:bg-gray-100" : "hover:bg-white/10"
+        className={`relative p-2 rounded-full outline-none transition-all active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 ${
+          isLight ? "hover:bg-slate-100" : "hover:bg-white/10"
         }`}
       >
         <Bell
-          className={`h-5 w-5 ${isLight ? "text-gray-700" : "text-white/70"}`}
+          className={`h-5 w-5 ${isLight ? "text-slate-700" : "text-white/70"}`}
         />
         {unreadCount > 0 && (
           <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full text-xs text-white flex items-center justify-center">
@@ -220,18 +220,18 @@ export default function NotificationBell({
           <div
             className={`absolute right-0 top-full mt-2 w-80 sm:w-96 rounded-xl shadow-xl z-50 overflow-hidden ${
               isLight
-                ? "bg-white border border-gray-200"
+                ? "bg-white border border-slate-200"
                 : "bg-[#1a1425] border border-white/10"
             }`}
           >
             <div
               className={`flex items-center justify-between px-4 py-3 border-b ${
-                isLight ? "border-gray-200" : "border-white/10"
+                isLight ? "border-slate-200" : "border-white/10"
               }`}
             >
               <h3
                 className={`font-semibold ${
-                  isLight ? "text-gray-900" : "text-white"
+                  isLight ? "text-slate-900" : "text-white"
                 }`}
               >
                 通知消息
@@ -257,12 +257,12 @@ export default function NotificationBell({
               {notifications.length === 0 ? (
                 <div
                   className={`py-12 text-center ${
-                    isLight ? "text-gray-500" : "text-white/40"
+                    isLight ? "text-slate-500" : "text-white/40"
                   }`}
                 >
                   <Bell
                     className={`h-8 w-8 mx-auto mb-2 ${
-                      isLight ? "text-gray-400" : "opacity-50"
+                      isLight ? "text-slate-400" : "opacity-50"
                     }`}
                   />
                   <p>暂无通知</p>
@@ -273,7 +273,7 @@ export default function NotificationBell({
                     key={notification.id}
                     className={`px-4 py-3 border-b transition-colors ${
                       isLight
-                        ? `border-gray-100 hover:bg-gray-50 ${
+                        ? `border-slate-100 hover:bg-slate-50 ${
                             !notification.is_read ? "bg-emerald-50" : ""
                           }`
                         : `border-white/5 hover:bg-white/5 ${
@@ -290,10 +290,10 @@ export default function NotificationBell({
                           className={`text-sm ${
                             notification.is_read
                               ? isLight
-                                ? "text-gray-700"
+                                ? "text-slate-700"
                                 : "text-white/70"
                               : isLight
-                              ? "text-gray-900 font-medium"
+                              ? "text-slate-900 font-medium"
                               : "text-white font-medium"
                           }`}
                         >
@@ -302,7 +302,7 @@ export default function NotificationBell({
                         {notification.content && (
                           <p
                             className={`text-xs mt-1 line-clamp-2 ${
-                              isLight ? "text-gray-600" : "text-white/50"
+                              isLight ? "text-slate-600" : "text-white/50"
                             }`}
                           >
                             {notification.content}
@@ -311,7 +311,7 @@ export default function NotificationBell({
                         <div className="flex items-center justify-between mt-2">
                           <span
                             className={`text-xs ${
-                              isLight ? "text-gray-500" : "text-white/40"
+                              isLight ? "text-slate-500" : "text-white/40"
                             }`}
                           >
                             {formatTime(notification.created_at)}
@@ -322,9 +322,9 @@ export default function NotificationBell({
                                 onClick={() =>
                                   handleMarkAsRead(notification.id)
                                 }
-                                className={`p-1 rounded transition-colors ${
+                                className={`p-1 rounded outline-none transition-all active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 ${
                                   isLight
-                                    ? "hover:bg-gray-100 text-gray-400 hover:text-gray-700"
+                                    ? "hover:bg-slate-100 text-slate-400 hover:text-slate-700"
                                     : "hover:bg-white/10 text-white/40 hover:text-white/70"
                                 }`}
                                 title="标记已读"
@@ -334,9 +334,9 @@ export default function NotificationBell({
                             )}
                             <button
                               onClick={() => handleDelete(notification.id)}
-                              className={`p-1 rounded transition-colors ${
+                              className={`p-1 rounded outline-none transition-all active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 ${
                                 isLight
-                                  ? "hover:bg-gray-100 text-gray-400 hover:text-red-600"
+                                  ? "hover:bg-slate-100 text-slate-400 hover:text-red-600"
                                   : "hover:bg-white/10 text-white/40 hover:text-red-400"
                               }`}
                               title="删除"
@@ -355,12 +355,12 @@ export default function NotificationBell({
             {notifications.length > 0 && (
               <div
                 className={`px-4 py-2 border-t text-center ${
-                  isLight ? "border-gray-200" : "border-white/10"
+                  isLight ? "border-slate-200" : "border-white/10"
                 }`}
               >
                 <Link
                   to="/notifications"
-                  className={`text-sm ${
+                  className={`text-sm outline-none rounded-md transition-all active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 ${
                     isLight
                       ? "text-emerald-700 hover:text-emerald-800"
                       : "text-amber-400 hover:text-amber-300"

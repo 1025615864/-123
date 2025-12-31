@@ -44,6 +44,8 @@ export default function Layout() {
     location.pathname === "/register" ||
     isChatRoute;
 
+  const showMobileBottomNav = isMobile && !hideFooter;
+
   const navItems = [
     { path: "/", label: "首页", icon: Scale },
     { path: "/chat", label: "AI咨询", icon: MessageCircle },
@@ -65,7 +67,7 @@ export default function Layout() {
       >
         <div className="w-full max-w-7xl px-6 sm:px-8 lg:px-12">
           <div className="flex justify-between items-center h-18">
-            <Link to="/" className="flex items-center space-x-3 group flex-shrink-0 outline-none rounded-xl transition">
+            <Link to="/" className="flex items-center space-x-3 group flex-shrink-0 outline-none rounded-xl transition-all active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900">
               <div className="relative">
                 <div className="absolute inset-0 bg-blue-500 rounded-xl blur opacity-20 group-hover:opacity-40 transition-opacity" />
                 <div className="relative bg-gradient-to-br from-blue-600 to-indigo-600 p-2 rounded-xl shadow-lg shadow-blue-500/20">
@@ -84,7 +86,7 @@ export default function Layout() {
                     key={path}
                     to={path}
                     aria-current={location.pathname === path ? "page" : undefined}
-                    className={`text-sm font-medium transition-colors relative py-1 ${
+                    className={`text-sm font-medium transition-colors relative py-1 outline-none rounded-md focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 ${
                       location.pathname === path
                         ? "text-blue-600 dark:text-blue-400"
                         : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
@@ -112,14 +114,14 @@ export default function Layout() {
                   {user?.role === 'admin' && (
                     <Link
                       to="/admin"
-                      className="px-3 py-1.5 rounded-full text-xs font-medium transition-colors bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
+                      className="px-3 py-1.5 rounded-full text-xs font-medium outline-none transition-all bg-slate-100 text-slate-700 hover:bg-slate-200 active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 dark:focus-visible:ring-offset-slate-900"
                     >
                       管理后台
                     </Link>
                   )}
                   <Link
                     to="/profile"
-                    className="flex items-center space-x-2 px-1 py-1 rounded-full hover:bg-slate-50 transition-colors dark:hover:bg-slate-800"
+                    className="flex items-center space-x-2 px-1 py-1 rounded-full outline-none transition-all hover:bg-slate-50 active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:hover:bg-slate-800 dark:focus-visible:ring-offset-slate-900"
                   >
                     <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center border border-white shadow-sm dark:bg-slate-700 dark:border-slate-600">
                       <User className="h-4 w-4 text-slate-500 dark:text-slate-300" />
@@ -160,7 +162,7 @@ export default function Layout() {
                 aria-label={mobileMenuOpen ? "关闭菜单" : "打开菜单"}
                 aria-expanded={mobileMenuOpen}
                 aria-controls={mobileMenuId}
-                className="lg:hidden p-2 rounded-lg text-slate-600 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-800"
+                className="lg:hidden p-2 rounded-lg text-slate-600 outline-none transition-all hover:bg-slate-50 active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:text-slate-300 dark:hover:bg-slate-800 dark:focus-visible:ring-offset-slate-900"
               >
                 {mobileMenuOpen ? (
                   <X className="h-6 w-6" />
@@ -184,7 +186,7 @@ export default function Layout() {
                   to={path}
                   onClick={() => setMobileMenuOpen(false)}
                   aria-current={location.pathname === path ? "page" : undefined}
-                  className={`flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-medium transition-all ${
+                  className={`flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-medium transition-all outline-none active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 ${
                     location.pathname === path
                       ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400'
                       : 'text-slate-700 hover:bg-slate-50 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800'
@@ -236,7 +238,7 @@ export default function Layout() {
       </header>
 
       <main
-        className={`flex-1 flex justify-center ${isMobile ? 'pb-16' : ''}`}
+        className={`flex-1 flex justify-center ${showMobileBottomNav ? 'pb-[calc(56px+env(safe-area-inset-bottom))]' : ''}`}
       >
         <div className="w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-8 md:py-12 animate-fade-in">
           <Outlet />
@@ -244,7 +246,7 @@ export default function Layout() {
       </main>
       
       {/* 移动端底部导航 */}
-      {isMobile && <MobileNav />}
+      {showMobileBottomNav && <MobileNav />}
 
       {!hideFooter && (
       <footer className="mt-auto border-t border-slate-200 bg-slate-50 flex justify-center dark:border-slate-800 dark:bg-slate-900/50">
@@ -263,13 +265,13 @@ export default function Layout() {
               <div className="flex space-x-3">
                 <a
                   href="#"
-                  className="w-10 h-10 rounded-full bg-white border border-slate-200 flex items-center justify-center hover:border-blue-500 hover:text-blue-600 transition-all dark:bg-slate-800 dark:border-slate-700 dark:hover:border-blue-400"
+                  className="w-10 h-10 rounded-full bg-white border border-slate-200 flex items-center justify-center outline-none transition-all hover:border-blue-500 hover:text-blue-600 active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:bg-slate-800 dark:border-slate-700 dark:hover:border-blue-400 dark:focus-visible:ring-offset-slate-900"
                 >
                   <Phone className="h-4 w-4" />
                 </a>
                 <a
                   href="#"
-                  className="w-10 h-10 rounded-full bg-white border border-slate-200 flex items-center justify-center hover:border-blue-500 hover:text-blue-600 transition-all dark:bg-slate-800 dark:border-slate-700 dark:hover:border-blue-400"
+                  className="w-10 h-10 rounded-full bg-white border border-slate-200 flex items-center justify-center outline-none transition-all hover:border-blue-500 hover:text-blue-600 active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:bg-slate-800 dark:border-slate-700 dark:hover:border-blue-400 dark:focus-visible:ring-offset-slate-900"
                 >
                   <Mail className="h-4 w-4" />
                 </a>
@@ -283,7 +285,7 @@ export default function Layout() {
                   <li key={path}>
                     <Link
                       to={path}
-                      className="text-slate-500 hover:text-blue-600 transition-colors text-sm dark:text-slate-400 dark:hover:text-blue-400"
+                      className="text-slate-500 hover:text-blue-600 transition-colors text-sm outline-none rounded-md active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:text-slate-400 dark:hover:text-blue-400 dark:focus-visible:ring-offset-slate-900"
                     >
                       {label}
                     </Link>
@@ -316,10 +318,10 @@ export default function Layout() {
               © 2024 百姓法律助手. All rights reserved.
             </p>
             <div className="flex space-x-6 mt-4 sm:mt-0">
-              <a href="#" className="text-slate-400 hover:text-slate-600 text-sm transition-colors">
+              <a href="#" className="text-slate-400 hover:text-slate-600 text-sm outline-none rounded-md transition-colors active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-slate-900">
                 隐私政策
               </a>
-              <a href="#" className="text-slate-400 hover:text-slate-600 text-sm transition-colors">
+              <a href="#" className="text-slate-400 hover:text-slate-600 text-sm outline-none rounded-md transition-colors active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-slate-900">
                 服务条款
               </a>
             </div>

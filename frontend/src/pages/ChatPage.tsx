@@ -14,7 +14,6 @@ import {
   History,
   Plus,
   BookOpen,
-  Star,
   Brain,
   Search,
   FileText,
@@ -23,10 +22,7 @@ import {
   ChevronDown,
   ChevronUp,
   Sparkles,
-  Copy,
   Square,
-  ThumbsUp,
-  ThumbsDown,
   Mic,
   MicOff,
   Paperclip,
@@ -36,6 +32,7 @@ import { useAppMutation, useToast } from "../hooks";
 import { getApiErrorMessage } from "../utils";
 import PageHeader from "../components/PageHeader";
 import { Button, Modal } from "../components/ui";
+import MessageActionsBar from "../components/chat/MessageActionsBar";
 import TemplateSelector from "../components/TemplateSelector";
 import { useTheme } from "../contexts/ThemeContext";
 import { useAuth } from "../contexts/AuthContext";
@@ -123,9 +120,12 @@ export default function ChatPage() {
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const [analyzingFile, setAnalyzingFile] = useState(false);
+  const [isNearBottom, setIsNearBottom] = useState(true);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const streamingAssistantIndexRef = useRef<number | null>(null);
   const streamingAbortRef = useRef<AbortController | null>(null);
   const skipNextLoadSessionIdRef = useRef<string | null>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -133,6 +133,15 @@ export default function ChatPage() {
   const recordingStreamRef = useRef<MediaStream | null>(null);
   const recordingChunksRef = useRef<BlobPart[]>([]);
   const toast = useToast();
+
+  const handleChatScroll = useCallback(() => {
+    const el = chatScrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const near = distanceFromBottom <= 120;
+    setIsNearBottom(near);
+    setShowScrollToBottom(!near);
+  }, []);
 
   const resizeInput = useCallback(() => {
     const el = inputRef.current;
@@ -406,17 +415,32 @@ export default function ChatPage() {
   );
 
   useEffect(() => {
-    scrollToBottom(streaming ? "auto" : "smooth");
-  }, [messages, scrollToBottom, streaming]);
+    if (streaming) {
+      if (!isNearBottom) return;
+      scrollToBottom("auto");
+      return;
+    }
+
+    if (isNearBottom) {
+      scrollToBottom("smooth");
+    }
+  }, [messages, scrollToBottom, streaming, isNearBottom]);
+
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      handleChatScroll();
+    });
+  }, [handleChatScroll, messages.length]);
 
   useEffect(() => {
     resizeInput();
   }, [input, resizeInput]);
 
-  const sendMessage = async () => {
-    if (!input.trim() || loading || streaming) return;
+  const sendMessage = async (overrideMessage?: string) => {
+    const picked = String(overrideMessage ?? input).trim();
+    if (!picked || loading || streaming) return;
 
-    const userMessage = input.trim();
+    const userMessage = picked;
 
     const token = localStorage.getItem("token");
     const isGuest = !token;
@@ -466,6 +490,9 @@ export default function ChatPage() {
 
     setInput("");
     setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
+    requestAnimationFrame(() => {
+      scrollToBottom("smooth");
+    });
 
     let pendingRaf: number | null = null;
     let flushPendingText: (() => void) | null = null;
@@ -1067,12 +1094,12 @@ export default function ChatPage() {
         stopStreaming();
         return;
       }
-      sendMessage();
+      void sendMessage();
     }
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-140px)] w-full max-w-5xl mx-auto">
+    <div className="flex flex-col h-[calc(100vh-140px)] h-[calc(100dvh-140px)] w-full max-w-5xl mx-auto">
       <div className="flex-none px-4 sm:px-0 mb-6">
         <PageHeader
           eyebrow="AI智能咨询"
@@ -1120,7 +1147,11 @@ export default function ChatPage() {
       </div>
 
       <div className="flex-1 flex flex-col min-h-0 bg-white/50 dark:bg-slate-900/50 backdrop-blur-xl rounded-3xl border border-slate-200/70 dark:border-white/10 shadow-xl overflow-hidden relative">
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 scroll-smooth">
+        <div
+          ref={chatScrollRef}
+          onScroll={handleChatScroll}
+          className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 scroll-smooth"
+        >
           {messages.map((message, index) => (
             <div
               key={index}
@@ -1150,7 +1181,7 @@ export default function ChatPage() {
                 }`}
               >
                 <div
-                  className={`px-5 py-4 rounded-2xl shadow-sm text-sm leading-relaxed ${
+                  className={`px-5 py-4 rounded-2xl shadow-sm text-sm leading-relaxed transition-transform duration-200 ${
                     message.role === "user"
                       ? "bg-blue-600 text-white rounded-tr-sm"
                       : "bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-100 dark:border-slate-700 rounded-tl-sm"
@@ -1175,6 +1206,21 @@ export default function ChatPage() {
                       riskLevel={message.riskLevel}
                       searchQuality={message.searchQuality}
                       disclaimer={message.disclaimer}
+                      onRegenerate={() => {
+                        let question = "";
+                        for (let i = index - 1; i >= 0; i--) {
+                          const m = messages[i];
+                          if (m?.role === "user") {
+                            question = String(m.content ?? "");
+                            break;
+                          }
+                        }
+                        if (!question.trim()) {
+                          toast.info("未找到对应的上一条提问");
+                          return;
+                        }
+                        void sendMessage(question);
+                      }}
                       onQuickReplySelect={(text) => {
                         setInput(text);
                         requestAnimationFrame(() => inputRef.current?.focus());
@@ -1192,8 +1238,24 @@ export default function ChatPage() {
           <div ref={messagesEndRef} className="h-4" />
         </div>
 
+        {showScrollToBottom && (
+          <button
+            type="button"
+            onClick={() => {
+              scrollToBottom("smooth");
+              requestAnimationFrame(() => {
+                handleChatScroll();
+              });
+            }}
+            className="absolute bottom-28 right-6 z-10 rounded-full border border-slate-200/70 bg-white/90 p-3 text-slate-700 shadow-lg backdrop-blur-md transition-all hover:bg-white hover:shadow-xl hover:-translate-y-0.5 active:translate-y-0 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:border-white/10 dark:bg-slate-800/80 dark:text-slate-200 dark:hover:bg-slate-800 dark:focus-visible:ring-offset-slate-900"
+            aria-label="回到底部"
+          >
+            <ChevronDown className="h-5 w-5" />
+          </button>
+        )}
+
         {/* Input Area */}
-        <div className="p-4 sm:p-6 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-t border-slate-200/50 dark:border-slate-700/50">
+        <div className="p-4 sm:p-6 pb-[calc(1rem+env(safe-area-inset-bottom))] bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-t border-slate-200/50 dark:border-slate-700/50">
           <div className="max-w-3xl mx-auto space-y-4">
             {!isAuthenticated && (
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200/70 bg-slate-50 px-4 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
@@ -1233,7 +1295,7 @@ export default function ChatPage() {
                       requestAnimationFrame(() => inputRef.current?.focus());
                     }}
                     disabled={loading}
-                    className="px-3 py-1.5 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-xs text-slate-600 dark:text-slate-300 transition-colors"
+                    className="px-3 py-1.5 rounded-full bg-slate-100 hover:bg-slate-200 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:bg-slate-800 dark:hover:bg-slate-700 dark:focus-visible:ring-offset-slate-900 text-xs text-slate-600 dark:text-slate-300 transition-all"
                   >
                     {p}
                   </button>
@@ -1298,7 +1360,13 @@ export default function ChatPage() {
                   )}
                 </Button>
                 <Button
-                  onClick={streaming ? stopStreaming : sendMessage}
+                  onClick={
+                    streaming
+                      ? stopStreaming
+                      : () => {
+                          void sendMessage();
+                        }
+                  }
                   disabled={loading || (!streaming && !input.trim())}
                   isLoading={loading}
                   loadingText=""
@@ -1439,6 +1507,7 @@ function AssistantMessage({
   riskLevel,
   searchQuality,
   disclaimer,
+  onRegenerate,
   onQuickReplySelect,
   isStreaming,
 }: {
@@ -1457,6 +1526,7 @@ function AssistantMessage({
   riskLevel?: string;
   searchQuality?: SearchQualityInfo;
   disclaimer?: string;
+  onRegenerate?: () => void;
   onQuickReplySelect?: (text: string) => void;
   isStreaming?: boolean;
 }) {
@@ -1650,16 +1720,16 @@ function AssistantMessage({
     rateMutation.mutate({ message_id: messageId, rating: value });
   };
 
-  const copyToClipboard = async () => {
+  const copyTextToClipboard = async (text: string) => {
     try {
       if (navigator?.clipboard?.writeText) {
-        await navigator.clipboard.writeText(content);
+        await navigator.clipboard.writeText(text);
         toast.success("已复制到剪贴板");
         return;
       }
 
       const textarea = document.createElement("textarea");
-      textarea.value = content;
+      textarea.value = text;
       textarea.style.position = "fixed";
       textarea.style.left = "-9999px";
       textarea.style.top = "-9999px";
@@ -1677,6 +1747,31 @@ function AssistantMessage({
     } catch {
       toast.error("复制失败");
     }
+  };
+
+  const copyToClipboard = async () => {
+    await copyTextToClipboard(content);
+  };
+
+  const copyWithReferences = async () => {
+    const parts: string[] = [];
+    parts.push(String(content ?? ""));
+    const refs = Array.isArray(references) ? references : [];
+    if (refs.length > 0) {
+      parts.push("\n\n相关法条：");
+      for (const ref of refs) {
+        const lawName = String(ref?.law_name ?? "").trim();
+        const article = String(ref?.article ?? "").trim();
+        const refContent = String(ref?.content ?? "").trim();
+        const title = lawName || article ? `《${lawName}》${article}` : "法条引用";
+        parts.push(`- ${title}`);
+        if (refContent) {
+          parts.push(refContent);
+        }
+        parts.push("");
+      }
+    }
+    await copyTextToClipboard(parts.join("\n").trim());
   };
 
   const renderedBlocks = useMemo(() => {
@@ -2149,65 +2244,22 @@ function AssistantMessage({
         </div>
       )}
 
-      <div className="flex flex-wrap items-center gap-4 pt-2">
-        <button
-          type="button"
-          onClick={copyToClipboard}
-          className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-blue-600 transition-colors dark:text-slate-400 dark:hover:text-blue-400"
-          aria-label="复制回答"
-        >
-          <Copy className="h-3.5 w-3.5" />
-          复制
-        </button>
-
-        <button
-          type="button"
-          disabled={!messageId}
-          onClick={toggleFavorite}
-          className={`inline-flex items-center gap-1.5 text-xs transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
-            favorited
-              ? "text-amber-600 font-medium dark:text-amber-400"
-              : "text-slate-500 hover:text-amber-600 dark:text-slate-400 dark:hover:text-amber-400"
-          }`}
-          aria-label={favorited ? "已收藏" : "收藏"}
-        >
-          <Star className="h-3.5 w-3.5" />
-          {favorited ? "已收藏" : "收藏"}
-        </button>
-
-        {messageId && (
-          <>
-            <button
-              type="button"
-              disabled={rateMutation.isPending}
-              onClick={() => rate(3)}
-              className={`inline-flex items-center gap-1.5 text-xs transition-colors ${
-                rated === 3
-                  ? "text-blue-600 font-medium dark:text-blue-400"
-                  : "text-slate-500 hover:text-blue-600 dark:text-slate-400 dark:hover:text-blue-400"
-              } disabled:opacity-60 disabled:cursor-not-allowed`}
-              aria-label="好评"
-            >
-              <ThumbsUp className="h-3.5 w-3.5" />
-              好评
-            </button>
-            <button
-              type="button"
-              disabled={rateMutation.isPending}
-              onClick={() => rate(1)}
-              className={`inline-flex items-center gap-1.5 text-xs transition-colors ${
-                rated === 1
-                  ? "text-red-600 font-medium dark:text-red-400"
-                  : "text-slate-500 hover:text-red-600 dark:text-slate-400 dark:hover:text-red-400"
-              } disabled:opacity-60 disabled:cursor-not-allowed`}
-              aria-label="差评"
-            >
-              <ThumbsDown className="h-3.5 w-3.5" />
-              差评
-            </button>
-          </>
-        )}
-      </div>
+      <MessageActionsBar
+        disabled={Boolean(isStreaming)}
+        canCopy={Boolean(String(content ?? "").trim())}
+        canFavorite={Boolean(messageId)}
+        canRate={Boolean(messageId)}
+        canRegenerate={Boolean(onRegenerate) && !isStreaming}
+        favorited={favorited}
+        rated={rated}
+        rateLoading={rateMutation.isPending}
+        onCopy={copyToClipboard}
+        onCopyWithReferences={copyWithReferences}
+        onToggleFavorite={toggleFavorite}
+        onRateGood={() => rate(3)}
+        onRateBad={() => rate(1)}
+        onRegenerate={onRegenerate}
+      />
 
       {references && references.length > 0 && (
         <div className="pt-2">

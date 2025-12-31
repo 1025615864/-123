@@ -127,7 +127,11 @@ export default function HomePage() {
 
         <div className="grid md:grid-cols-2 gap-10 lg:gap-12">
           {services.map(({ icon: Icon, title, description, link }) => (
-            <Link key={title} to={link} className="block group">
+            <Link
+              key={title}
+              to={link}
+              className="group block rounded-3xl outline-none focus-visible:ring-2 focus-visible:ring-amber-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
+            >
               <Card
                 variant="surface"
                 hover
@@ -281,7 +285,7 @@ function HomeNewsRecommendSection() {
           <Link
             key={item.id}
             to={`/news/${item.id}`}
-            className="block py-4 group"
+            className="group block rounded-xl px-3 -mx-3 py-4 transition-colors hover:bg-slate-50 dark:hover:bg-white/[0.03] outline-none focus-visible:ring-2 focus-visible:ring-amber-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
           >
             <div className="flex items-center gap-2 mb-2">
               <Badge variant="primary" size="sm">
@@ -334,7 +338,7 @@ function HomeNewsRecommendSection() {
         <LinkButton
           to="/news"
           variant="ghost"
-          className="rounded-full px-6 py-3 text-sm"
+          className="rounded-full px-6 py-3 text-sm transition-all hover:shadow-sm"
         >
           更多资讯
           <ArrowRight className="h-4 w-4" />

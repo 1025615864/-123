@@ -157,7 +157,7 @@ export default function LimitationsCalculatorPage() {
                     setSelectedRuleId(e.target.value)
                     setResult(null)
                   }}
-                  className="w-full px-4 py-3 rounded-lg border bg-white text-slate-900 outline-none transition focus-visible:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500/20 border-slate-200 dark:bg-slate-800 dark:text-white dark:border-slate-700"
+                  className="w-full px-4 py-3 rounded-lg border bg-white text-slate-900 outline-none transition hover:border-slate-300 focus-visible:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white border-slate-200 dark:bg-slate-800 dark:text-white dark:border-slate-700 dark:hover:border-slate-600 dark:focus-visible:ring-offset-slate-900"
                 >
                   <option value="">请选择...</option>
                   {rulesByCategory.map(([category, rules]) => (

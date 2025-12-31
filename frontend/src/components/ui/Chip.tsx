@@ -19,7 +19,7 @@ const Chip = forwardRef<HTMLButtonElement, ChipProps>(
     ref
   ) => {
     const baseStyles =
-      'inline-flex items-center justify-center font-medium transition-all outline-none focus-visible:ring-2 focus-visible:ring-amber-500/20 active:scale-[0.99]'
+      'inline-flex items-center justify-center font-medium transition-all outline-none focus-visible:ring-2 focus-visible:ring-amber-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 active:scale-[0.99]'
 
     const sizeStyles = {
       sm: 'px-3 py-1.5 rounded-full text-sm',

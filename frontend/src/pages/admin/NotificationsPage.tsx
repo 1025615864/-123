@@ -117,7 +117,7 @@ export default function NotificationsPage() {
             {notifications.map((item) => (
               <div
                 key={item.id}
-                className="p-4 rounded-lg bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10"
+                className="p-4 rounded-lg bg-slate-900/5 border border-slate-200/70 transition-all hover:bg-slate-900/10 hover:border-slate-300 hover:shadow-sm dark:bg-white/5 dark:border-white/10 dark:hover:bg-white/[0.07] dark:hover:border-white/20 dark:hover:shadow-none"
               >
                 <div className="flex items-start justify-between">
                   <div className="flex-1">
@@ -130,7 +130,7 @@ export default function NotificationsPage() {
                         href={item.link}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-blue-700 text-sm mt-1 hover:underline hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300"
+                        className="text-blue-700 text-sm mt-1 outline-none rounded-md transition-all hover:underline hover:text-blue-800 active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:text-blue-400 dark:hover:text-blue-300 dark:focus-visible:ring-offset-slate-900"
                       >
                         {item.link}
                       </a>

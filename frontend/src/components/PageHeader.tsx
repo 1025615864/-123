@@ -34,20 +34,22 @@ export default function PageHeader({
           <p
             className={`${
               tone === 'light' ? 'text-emerald-700' : 'text-amber-400'
-            } text-sm font-medium tracking-wider uppercase mb-3`}
+            } text-xs font-semibold tracking-widest uppercase mb-3`}
           >
             {eyebrow}
           </p>
         )}
         <h1
-          className={`text-3xl md:text-4xl font-bold mb-4 ${
+          className={`text-3xl md:text-4xl font-bold mb-4 leading-tight tracking-tight ${
             tone === 'light' ? 'text-gray-900' : 'text-white'
           }`}
         >
           {title}
         </h1>
         {description && (
-          <p className={`${tone === 'light' ? 'text-gray-600' : 'text-white/50'} max-w-md`}>
+          <p
+            className={`${tone === 'light' ? 'text-gray-600' : 'text-white/50'} max-w-md text-sm md:text-base leading-relaxed`}
+          >
             {description}
           </p>
         )}

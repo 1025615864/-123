@@ -76,10 +76,10 @@ export default function Modal({
 
   return (
     <div
-      className={`fixed inset-0 ${zIndexClass} flex items-center justify-center p-4 animate-fade-in`}
+      className={`fixed inset-0 ${zIndexClass} flex items-center justify-center p-4 sm:p-6 animate-fade-in`}
     >
       <div
-        className="absolute inset-0 bg-black/30 backdrop-blur-sm dark:bg-[#0f0a1e]/70"
+        className="absolute inset-0 bg-black/30 backdrop-blur-sm transition-opacity duration-200 dark:bg-[#0f0a1e]/70"
         onClick={onClose}
         aria-hidden="true"
       />
@@ -90,7 +90,7 @@ export default function Modal({
         aria-labelledby={title ? titleId : undefined}
         aria-describedby={description ? descriptionId : undefined}
         tabIndex={-1}
-        className={`relative w-full ${sizeStyles[size]} rounded-2xl bg-white border border-slate-200/70 shadow-xl p-7 max-h-[90vh] overflow-y-auto dark:bg-white/[0.03] dark:border-white/[0.08] dark:backdrop-blur-xl dark:shadow-2xl dark:shadow-black/40`}
+        className={`relative w-full ${sizeStyles[size]} rounded-2xl bg-white border border-slate-200/70 shadow-xl ring-1 ring-slate-900/5 p-7 max-h-[90vh] overflow-y-auto outline-none transition-all duration-200 focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:bg-white/[0.03] dark:border-white/[0.08] dark:ring-white/10 dark:backdrop-blur-xl dark:shadow-2xl dark:shadow-black/40 dark:focus-visible:ring-offset-slate-900`}
       >
         {(title || showCloseButton) && (
           <div className="flex items-start justify-between gap-4 mb-6">
@@ -111,7 +111,7 @@ export default function Modal({
                 type="button"
                 ref={closeBtnRef}
                 onClick={onClose}
-                className="p-2 rounded-xl text-slate-500 hover:text-slate-900 hover:bg-slate-900/5 transition dark:text-white/60 dark:hover:text-white dark:hover:bg-white/5"
+                className="p-2 rounded-xl text-slate-500 outline-none transition-all hover:text-slate-900 hover:bg-slate-900/5 active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:text-white/60 dark:hover:text-white dark:hover:bg-white/5 dark:focus-visible:ring-offset-slate-900"
                 aria-label="关闭"
               >
                 <X className="h-5 w-5" />

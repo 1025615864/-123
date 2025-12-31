@@ -48,7 +48,7 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       [disabled, isLoading]
     )
 
-    const baseStyles = 'inline-flex items-center justify-center gap-2 rounded-lg font-semibold transition-all outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30 disabled:opacity-50 disabled:cursor-not-allowed'
+    const baseStyles = 'inline-flex items-center justify-center gap-2 rounded-lg font-semibold transition-all outline-none focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed'
     
     const variantStyles = {
       primary: 'btn-primary text-white',
