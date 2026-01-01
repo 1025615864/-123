@@ -65,10 +65,10 @@ async def client(test_session: AsyncSession) -> AsyncGenerator[AsyncClient, None
     
     app.dependency_overrides[get_db] = override_get_db
     
-    transport_kwargs = {"app": app}
     if "lifespan" in inspect.signature(ASGITransport.__init__).parameters:
-        transport_kwargs["lifespan"] = "off"
-    transport = ASGITransport(**transport_kwargs)
+        transport = ASGITransport(app=app, lifespan="off")
+    else:
+        transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
     
