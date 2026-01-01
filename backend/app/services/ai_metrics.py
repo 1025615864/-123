@@ -98,6 +98,8 @@ class AiMetrics:
                 "chat_requests_total": int(self.chat_requests_total),
                 "chat_stream_requests_total": int(self.chat_stream_requests_total),
                 "errors_total": int(self.errors_total),
+                "error_code_counts": dict(self._error_code_counts),
+                "endpoint_error_counts": dict(self._endpoint_error_counts),
                 "recent_errors": [e.to_dict() for e in list(self._recent_errors)],
                 "top_error_codes": list(top_error_codes)[:10],
                 "top_endpoints": list(top_endpoints)[:10],

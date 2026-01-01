@@ -6,6 +6,7 @@ import os
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, and_, or_
 from pydantic import BaseModel, ConfigDict, Field, AliasChoices
@@ -18,6 +19,14 @@ from ..utils.deps import require_admin, get_current_user_optional
 from ..utils.rate_limiter import get_client_ip, rate_limit, RateLimitConfig
 
 router = APIRouter(prefix="/system", tags=["系统管理"])
+
+
+def _prom_escape_label_value(value: str) -> str:
+    s = str(value)
+    s = s.replace("\\", "\\\\")
+    s = s.replace("\"", "\\\"")
+    s = s.replace("\n", "\\n")
+    return s
 
 
 # ============ 系统配置 ============
@@ -595,6 +604,81 @@ async def get_ai_ops_status(
         top_error_codes=top_error_codes,
         top_endpoints=top_endpoints,
     )
+
+
+@router.get("/metrics")
+async def get_metrics(
+    _current_user: Annotated[User, Depends(require_admin)],
+):
+    from ..services.ai_metrics import ai_metrics
+
+    snap = ai_metrics.snapshot()
+    started_at = float(snap.get("started_at") or 0.0)
+    chat_total = int(snap.get("chat_requests_total") or 0)
+    chat_stream_total = int(snap.get("chat_stream_requests_total") or 0)
+    errors_total = int(snap.get("errors_total") or 0)
+
+    error_code_counts_obj = snap.get("error_code_counts")
+    endpoint_error_counts_obj = snap.get("endpoint_error_counts")
+
+    error_code_counts: dict[str, int] = {}
+    if isinstance(error_code_counts_obj, dict):
+        for k_obj, v_obj in cast(dict[object, object], error_code_counts_obj).items():
+            k = str(k_obj or "").strip()
+            if not k:
+                continue
+            try:
+                error_code_counts[k] = int(v_obj)  # type: ignore[arg-type]
+            except Exception:
+                continue
+
+    endpoint_error_counts: dict[str, int] = {}
+    if isinstance(endpoint_error_counts_obj, dict):
+        for k_obj, v_obj in cast(dict[object, object], endpoint_error_counts_obj).items():
+            k = str(k_obj or "").strip()
+            if not k:
+                continue
+            try:
+                endpoint_error_counts[k] = int(v_obj)  # type: ignore[arg-type]
+            except Exception:
+                continue
+
+    lines: list[str] = []
+    lines.append("# HELP baixing_ai_started_at_seconds Unix timestamp when AiMetrics started")
+    lines.append("# TYPE baixing_ai_started_at_seconds gauge")
+    lines.append(f"baixing_ai_started_at_seconds {started_at}")
+    lines.append("# HELP baixing_ai_chat_requests_total Total /ai/chat requests")
+    lines.append("# TYPE baixing_ai_chat_requests_total counter")
+    lines.append(f"baixing_ai_chat_requests_total {chat_total}")
+    lines.append("# HELP baixing_ai_chat_stream_requests_total Total /ai/chat_stream requests")
+    lines.append("# TYPE baixing_ai_chat_stream_requests_total counter")
+    lines.append(f"baixing_ai_chat_stream_requests_total {chat_stream_total}")
+    lines.append("# HELP baixing_ai_errors_total Total AI errors")
+    lines.append("# TYPE baixing_ai_errors_total counter")
+    lines.append(f"baixing_ai_errors_total {errors_total}")
+
+    lines.append("# HELP baixing_ai_error_code_total Total errors grouped by error_code")
+    lines.append("# TYPE baixing_ai_error_code_total counter")
+    for code in sorted(error_code_counts.keys()):
+        v = int(error_code_counts.get(code) or 0)
+        if v <= 0:
+            continue
+        lines.append(
+            f"baixing_ai_error_code_total{{error_code=\"{_prom_escape_label_value(code)}\"}} {v}"
+        )
+
+    lines.append("# HELP baixing_ai_endpoint_error_total Total errors grouped by endpoint")
+    lines.append("# TYPE baixing_ai_endpoint_error_total counter")
+    for ep in sorted(endpoint_error_counts.keys()):
+        v = int(endpoint_error_counts.get(ep) or 0)
+        if v <= 0:
+            continue
+        lines.append(
+            f"baixing_ai_endpoint_error_total{{endpoint=\"{_prom_escape_label_value(ep)}\"}} {v}"
+        )
+
+    body = "\n".join(lines) + "\n"
+    return PlainTextResponse(content=body, media_type="text/plain; version=0.0.4")
 
 
 @router.put("/configs/{key}")
