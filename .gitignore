@@ -16,6 +16,7 @@ backend/chroma_db/
 backend/data/
 backend/uploads/
 backend/app/__pycache__/
+backend/backups/
 frontend/node_modules/
 frontend/dist/
 *.pid
@@ -28,3 +29,5 @@ frontend/test-results/
 
 helm/baixing-assistant/charts/
 helm/baixing-assistant/Chart.lock
+
+*.dump
