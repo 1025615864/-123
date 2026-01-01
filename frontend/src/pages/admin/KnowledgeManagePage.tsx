@@ -69,6 +69,24 @@ interface KnowledgeStats {
   categories: Array<{ category: string; count: number }>;
 }
 
+interface VectorStoreStatus {
+  openai_api_key_configured: boolean;
+  chroma_persist_dir: string;
+  persist_dir_exists: boolean;
+  initialized: boolean;
+  embeddings_ready: boolean;
+  vector_store_ready: boolean;
+  collection_name: string | null;
+  collection_count: number | null;
+  error: string | null;
+}
+
+interface BatchOperationResult {
+  success_count: number;
+  failed_count: number;
+  message: string;
+}
+
 const KNOWLEDGE_TYPES: {
   value: KnowledgeType;
   label: string;
@@ -123,6 +141,17 @@ export default function KnowledgeManagePage() {
     placeholderData: (prev) => prev,
   });
 
+  const vectorStoreStatusQuery = useQuery({
+    queryKey: useMemo(() => queryKeys.knowledgeVectorStoreStatus(), []),
+    queryFn: async () => {
+      const res = await api.get("/knowledge/vector-store/status");
+      return res.data as VectorStoreStatus;
+    },
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  });
+
   const listQuery = useQuery({
     queryKey: listQueryKey,
     queryFn: async () => {
@@ -146,15 +175,16 @@ export default function KnowledgeManagePage() {
   });
 
   useEffect(() => {
-    const err = statsQuery.error || listQuery.error;
+    const err = statsQuery.error || listQuery.error || vectorStoreStatusQuery.error;
     if (!err) return;
     toast.error(getApiErrorMessage(err));
-  }, [listQuery.error, statsQuery.error, toast]);
+  }, [listQuery.error, statsQuery.error, toast, vectorStoreStatusQuery.error]);
 
   const stats = statsQuery.data ?? null;
   const knowledge = listQuery.data?.items ?? [];
   const total = listQuery.data?.total ?? 0;
   const loading = listQuery.isLoading;
+  const vectorStoreStatus = vectorStoreStatusQuery.data ?? null;
 
   const createMutation = useAppMutation<void, KnowledgeUpsertPayload>({
     mutationFn: async (payload) => {
@@ -192,6 +222,73 @@ export default function KnowledgeManagePage() {
     invalidateQueryKeys: [queryKeys.adminKnowledgeListRoot(), queryKeys.knowledgeStats()],
   });
 
+  const syncAllMutation = useAppMutation<BatchOperationResult, void>({
+    mutationFn: async (_: void) => {
+      const res = await api.post("/knowledge/sync-vector-store", {});
+      return res.data as BatchOperationResult;
+    },
+    errorMessageFallback: "操作失败，请稍后重试",
+    invalidateQueryKeys: [
+      queryKeys.adminKnowledgeListRoot(),
+      queryKeys.knowledgeStats(),
+      queryKeys.knowledgeVectorStoreStatus(),
+    ],
+    onSuccess: (data) => {
+      const msg = String(data?.message ?? "").trim();
+      if (msg) {
+        toast.success(msg);
+      } else {
+        toast.success("同步完成");
+      }
+
+      const failed = Number(data?.failed_count ?? 0);
+      if (failed > 0) {
+        toast.warning("部分条目同步失败，可查看下方“向量库状态”的错误信息");
+      }
+    },
+    onError: async () => {
+      try {
+        const res = await api.get("/knowledge/vector-store/status");
+        const status = res.data as VectorStoreStatus;
+        const err = String(status?.error ?? "").trim();
+
+        if (!status?.openai_api_key_configured) {
+          toast.warning("OPENAI_API_KEY 未配置：无法进行向量化/同步");
+          return;
+        }
+        if (err) {
+          toast.warning(`向量库状态异常：${err}`);
+        }
+      } catch {
+        // ignore
+      }
+    },
+  });
+
+  const importSeedMutation = useAppMutation<void, void>({
+    mutationFn: async (_: void) => {
+      await api.post("/knowledge/laws/import-seed", {});
+    },
+    successMessage: "导入完成",
+    errorMessageFallback: "导入失败，请稍后重试",
+    invalidateQueryKeys: [
+      queryKeys.adminKnowledgeListRoot(),
+      queryKeys.knowledgeStats(),
+      queryKeys.knowledgeVectorStoreStatus(),
+    ],
+    onSuccess: () => {
+      if (
+        confirm(
+          "示例法条已导入。是否立即同步向量库？\n\n提示：同步向量库需要已配置 AI Embeddings（如 OPENAI_API_KEY/OPENAI_BASE_URL）。"
+        )
+      ) {
+        if (!syncAllMutation.isPending) {
+          syncAllMutation.mutate();
+        }
+      }
+    },
+  });
+
   const batchVectorizeMutation = useAppMutation<void, number[]>({
     mutationFn: async (ids) => {
       await api.post("/knowledge/laws/batch-vectorize", { ids });
@@ -201,14 +298,6 @@ export default function KnowledgeManagePage() {
     onSuccess: () => {
       setSelectedIds([]);
     },
-  });
-
-  const syncAllMutation = useAppMutation<void, void>({
-    mutationFn: async (_: void) => {
-      await api.post("/knowledge/sync-vector-store", {});
-    },
-    errorMessageFallback: "操作失败，请稍后重试",
-    invalidateQueryKeys: [queryKeys.adminKnowledgeListRoot(), queryKeys.knowledgeStats()],
   });
 
   // 表单状态
@@ -279,6 +368,12 @@ export default function KnowledgeManagePage() {
     syncAllMutation.mutate();
   };
 
+  const handleImportSeed = async () => {
+    if (importSeedMutation.isPending) return;
+    if (!confirm("将导入内置示例法条到数据库（会跳过重复项）。是否继续？")) return;
+    importSeedMutation.mutate();
+  };
+
   const openEditModal = (item: LegalKnowledge) => {
     setEditingItem(item);
     setFormData({
@@ -345,6 +440,9 @@ export default function KnowledgeManagePage() {
           <p className="text-slate-600 mt-1 dark:text-white/50">管理法律条文、案例和司法解释</p>
         </div>
         <div className="flex gap-3">
+          <Button variant="outline" icon={Upload} onClick={handleImportSeed} disabled={importSeedMutation.isPending}>
+            导入示例法条
+          </Button>
           <Button variant="outline" icon={Upload} onClick={handleSyncAll}>
             同步向量库
           </Button>
@@ -411,6 +509,67 @@ export default function KnowledgeManagePage() {
           </Card>
         </div>
       )}
+
+      {/* 向量库状态 */}
+      <Card variant="surface" padding="md">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900 dark:text-white">向量库状态</h2>
+            <p className="text-slate-600 text-sm mt-1 dark:text-white/50">
+              用于诊断同步向量库前的配置与可用性
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            onClick={() => vectorStoreStatusQuery.refetch()}
+            disabled={vectorStoreStatusQuery.isFetching}
+          >
+            刷新
+          </Button>
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="flex items-center justify-between rounded-xl border border-slate-200/70 px-4 py-3 dark:border-white/10">
+            <span className="text-sm text-slate-600 dark:text-white/50">OPENAI_API_KEY 已配置</span>
+            <Badge variant={vectorStoreStatus?.openai_api_key_configured ? "success" : "warning"}>
+              {vectorStoreStatus?.openai_api_key_configured ? "是" : "否"}
+            </Badge>
+          </div>
+          <div className="flex items-center justify-between rounded-xl border border-slate-200/70 px-4 py-3 dark:border-white/10">
+            <span className="text-sm text-slate-600 dark:text-white/50">Chroma 目录存在</span>
+            <Badge variant={vectorStoreStatus?.persist_dir_exists ? "success" : "warning"}>
+              {vectorStoreStatus?.persist_dir_exists ? "是" : "否"}
+            </Badge>
+          </div>
+          <div className="flex items-center justify-between rounded-xl border border-slate-200/70 px-4 py-3 dark:border-white/10">
+            <span className="text-sm text-slate-600 dark:text-white/50">Embeddings 就绪</span>
+            <Badge variant={vectorStoreStatus?.embeddings_ready ? "success" : "warning"}>
+              {vectorStoreStatus?.embeddings_ready ? "是" : "否"}
+            </Badge>
+          </div>
+          <div className="flex items-center justify-between rounded-xl border border-slate-200/70 px-4 py-3 dark:border-white/10">
+            <span className="text-sm text-slate-600 dark:text-white/50">Vector Store 就绪</span>
+            <Badge variant={vectorStoreStatus?.vector_store_ready ? "success" : "warning"}>
+              {vectorStoreStatus?.vector_store_ready ? "是" : "否"}
+            </Badge>
+          </div>
+        </div>
+
+        <div className="mt-3 text-sm text-slate-700 dark:text-white/70">
+          <div className="truncate">
+            Chroma 目录：{vectorStoreStatus?.chroma_persist_dir || "(未配置)"}
+          </div>
+          <div>
+            Collection：{vectorStoreStatus?.collection_name || "(未知)"}
+            {typeof vectorStoreStatus?.collection_count === "number" ? `，文档数：${vectorStoreStatus.collection_count}` : ""}
+          </div>
+          {vectorStoreStatus?.error ? (
+            <div className="mt-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
+              {vectorStoreStatus.error}
+            </div>
+          ) : null}
+        </div>
+      </Card>
 
       {/* 筛选和列表 */}
       <Card variant="surface" padding="md">

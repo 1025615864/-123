@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Plus, Edit, Trash2, MessageSquare, Briefcase, Heart, Car, FileText, HelpCircle } from 'lucide-react'
+import { Plus, Edit, Trash2, MessageSquare, Briefcase, Heart, Car, FileText, HelpCircle, Upload } from 'lucide-react'
 import { Card, Input, Button, Badge, Modal, Textarea, Loading } from '../../components/ui'
 import { useQuery } from '@tanstack/react-query'
 import api from '../../api/client'
@@ -105,6 +105,15 @@ export default function TemplatesManagePage() {
     invalidateQueryKeys: [templatesQueryKey as any],
   })
 
+  const importSeedMutation = useAppMutation<void, void>({
+    mutationFn: async (_: void) => {
+      await api.post('/knowledge/templates/import-seed', {})
+    },
+    successMessage: '导入完成',
+    errorMessageFallback: '导入失败，请稍后重试',
+    invalidateQueryKeys: [templatesQueryKey as any],
+  })
+
   const handleCreate = async () => {
     const payload = {
       ...formData,
@@ -134,6 +143,12 @@ export default function TemplatesManagePage() {
     if (!confirm('确定要删除这个模板吗？')) return
     if (deleteMutation.isPending) return
     deleteMutation.mutate(id)
+  }
+
+  const handleImportSeed = async () => {
+    if (importSeedMutation.isPending) return
+    if (!confirm('将导入内置示例咨询模板（会跳过重复项）。是否继续？')) return
+    importSeedMutation.mutate()
   }
 
   const openEditModal = (item: ConsultationTemplate) => {
@@ -200,9 +215,14 @@ export default function TemplatesManagePage() {
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white">咨询模板管理</h1>
           <p className="text-slate-600 mt-1 dark:text-white/50">管理AI咨询的预设问题模板</p>
         </div>
-        <Button icon={Plus} onClick={() => setShowCreateModal(true)}>
-          添加模板
-        </Button>
+        <div className="flex gap-3">
+          <Button variant="outline" icon={Upload} onClick={handleImportSeed} disabled={importSeedMutation.isPending}>
+            导入示例模板
+          </Button>
+          <Button icon={Plus} onClick={() => setShowCreateModal(true)}>
+            添加模板
+          </Button>
+        </div>
       </div>
 
       {/* 模板列表 */}

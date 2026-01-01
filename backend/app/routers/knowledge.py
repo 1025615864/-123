@@ -2,9 +2,12 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..config import get_settings
 from ..database import get_db
+from ..models.knowledge import LegalKnowledge, ConsultationTemplate
 from ..models.user import User
 from ..schemas.knowledge import (
     KnowledgeType,
@@ -23,7 +26,14 @@ from ..schemas.knowledge import (
 from ..services.knowledge_service import get_knowledge_service, KnowledgeService
 from ..utils.deps import require_admin, get_current_user_optional
 
+import json
+import logging
+from pathlib import Path
+
 router = APIRouter(prefix="/knowledge", tags=["知识库管理"])
+
+logger = logging.getLogger(__name__)
+settings = get_settings()
 
 
 # === 法律知识 API ===
@@ -142,6 +152,70 @@ async def batch_delete_knowledge(
 
 
 # === 向量化 API ===
+
+
+class VectorStoreStatusResponse(BaseModel):
+    openai_api_key_configured: bool
+    chroma_persist_dir: str
+    persist_dir_exists: bool
+    initialized: bool
+    embeddings_ready: bool
+    vector_store_ready: bool
+    collection_name: str | None = None
+    collection_count: int | None = None
+    error: str | None = None
+
+
+@router.get("/vector-store/status", response_model=VectorStoreStatusResponse)
+async def get_vector_store_status(
+    current_user: Annotated[User, Depends(require_admin)],
+):
+    _ = current_user
+
+    persist_dir = str(getattr(settings, "chroma_persist_dir", "") or "")
+    persist_dir_exists = bool(persist_dir) and Path(persist_dir).exists()
+
+    out: dict[str, object] = {
+        "openai_api_key_configured": bool(settings.openai_api_key),
+        "chroma_persist_dir": persist_dir,
+        "persist_dir_exists": bool(persist_dir_exists),
+        "initialized": False,
+        "embeddings_ready": False,
+        "vector_store_ready": False,
+        "collection_name": None,
+        "collection_count": None,
+        "error": None,
+    }
+
+    if not bool(settings.openai_api_key):
+        return out
+
+    try:
+        from ..services.ai_assistant import get_ai_assistant
+
+        assistant = get_ai_assistant()
+        kb = assistant.knowledge_base
+        kb.initialize()
+
+        out["initialized"] = bool(getattr(kb, "_initialized", False))
+        out["embeddings_ready"] = kb.embeddings is not None
+        out["vector_store_ready"] = kb.vector_store is not None
+
+        if kb.vector_store is not None:
+            out["collection_name"] = "legal_knowledge"
+            coll = getattr(kb.vector_store, "_collection", None)
+            if coll is not None:
+                count_fn = getattr(coll, "count", None)
+                if callable(count_fn):
+                    try:
+                        out["collection_count"] = int(count_fn())
+                    except Exception:
+                        out["collection_count"] = None
+    except Exception as e:
+        logger.exception("get_vector_store_status_failed")
+        out["error"] = f"{type(e).__name__}: {str(e)}"
+
+    return out
 
 @router.post("/laws/{knowledge_id}/vectorize")
 async def vectorize_knowledge(
@@ -293,6 +367,118 @@ async def list_templates(
             updated_at=template.updated_at,
         ))
     return result
+
+
+@router.post("/templates/import-seed")
+async def import_seed_templates(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    current_user: Annotated[User, Depends(require_admin)],
+):
+    _ = current_user
+
+    seeds: list[dict[str, object]] = [
+        {
+            "name": "劳动纠纷咨询",
+            "description": "适用于被辞退、拖欠工资、社保争议等场景",
+            "category": "劳动纠纷",
+            "icon": "Briefcase",
+            "questions": [
+                {"question": "我被公司辞退/劝退了，是否合法？", "hint": "说明原因、入职时间、是否签合同"},
+                {"question": "公司拖欠工资/加班费怎么办？", "hint": "说明金额、证据（工资条/转账/考勤）"},
+                {"question": "公司不给交社保怎么办？", "hint": "说明缴纳情况、是否有劳动关系证明"},
+            ],
+            "sort_order": 0,
+            "is_active": True,
+        },
+        {
+            "name": "婚姻家庭咨询",
+            "description": "适用于离婚、抚养权、财产分割等场景",
+            "category": "婚姻家庭",
+            "icon": "Heart",
+            "questions": [
+                {"question": "我想离婚，需要准备什么材料？", "hint": "协议离婚/诉讼离婚"},
+                {"question": "孩子抚养权一般怎么判？", "hint": "孩子年龄、双方抚养条件"},
+                {"question": "房子/存款/债务离婚怎么分？", "hint": "是否婚前财产、共同还贷情况"},
+            ],
+            "sort_order": 1,
+            "is_active": True,
+        },
+        {
+            "name": "合同纠纷咨询",
+            "description": "适用于买卖合同、服务合同、定金违约等场景",
+            "category": "合同纠纷",
+            "icon": "FileText",
+            "questions": [
+                {"question": "对方不履行合同/违约了怎么办？", "hint": "合同条款、违约行为、损失"},
+                {"question": "定金能退吗？违约金怎么计算？", "hint": "支付方式、约定条款"},
+                {"question": "没有签书面合同，微信聊天算证据吗？", "hint": "聊天记录、付款凭证"},
+            ],
+            "sort_order": 2,
+            "is_active": True,
+        },
+        {
+            "name": "交通事故咨询",
+            "description": "适用于责任认定、赔偿项目、保险理赔等场景",
+            "category": "交通事故",
+            "icon": "Car",
+            "questions": [
+                {"question": "交通事故责任怎么认定？", "hint": "是否有责任认定书、现场情况"},
+                {"question": "赔偿包含哪些项目？", "hint": "医疗费、误工费、护理费等"},
+                {"question": "对方不赔钱怎么办？", "hint": "是否有保险、证据材料"},
+            ],
+            "sort_order": 3,
+            "is_active": True,
+        },
+        {
+            "name": "消费维权咨询",
+            "description": "适用于退货退款、虚假宣传、质量问题等场景",
+            "category": "消费维权",
+            "icon": "ShoppingCart",
+            "questions": [
+                {"question": "买到假货/质量问题如何维权？", "hint": "订单、聊天记录、检测报告"},
+                {"question": "商家拒绝退货退款怎么办？", "hint": "是否在7天无理由期限内"},
+                {"question": "虚假宣传能否要求赔偿？", "hint": "宣传页面截图、承诺内容"},
+            ],
+            "sort_order": 4,
+            "is_active": True,
+        },
+    ]
+
+    success_count = 0
+    skipped_count = 0
+    failed_items: list[dict[str, object]] = []
+
+    for seed in seeds:
+        try:
+            name = str(seed.get("name") or "").strip()
+            category = str(seed.get("category") or "").strip()
+            if not name or not category:
+                raise ValueError("missing fields")
+
+            existing = await db.execute(
+                select(ConsultationTemplate).where(
+                    ConsultationTemplate.name == name,
+                    ConsultationTemplate.category == category,
+                )
+            )
+            if existing.scalar_one_or_none() is not None:
+                skipped_count += 1
+                continue
+
+            data = ConsultationTemplateCreate.model_validate(seed)
+            _ = await service.create_template(db, data)
+            success_count += 1
+        except Exception as e:
+            failed_items.append({"name": str(seed.get("name") or ""), "error": str(e)})
+
+    return {
+        "success_count": success_count,
+        "skipped_count": skipped_count,
+        "failed_count": len(failed_items),
+        "failed_items": failed_items[:20],
+        "message": f"导入完成：新增 {success_count} 条，跳过 {skipped_count} 条，失败 {len(failed_items)} 条",
+    }
 
 
 @router.get("/templates/{template_id}", response_model=ConsultationTemplateResponse)
@@ -525,6 +711,100 @@ class BatchImportItem(BaseModel):
 
 class BatchImportRequest(BaseModel):
     items: list[BatchImportItem]
+
+
+@router.post("/laws/import-seed")
+async def import_seed_laws(
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(require_admin)],
+):
+    _ = current_user
+    base_dir = Path(__file__).resolve().parents[2]
+    laws_dir = base_dir / "knowledge_base" / "laws"
+    if not laws_dir.exists() or not laws_dir.is_dir():
+        raise HTTPException(status_code=404, detail="knowledge_base/laws 目录不存在")
+
+    category_map: dict[str, str] = {
+        "civil_code": "民法",
+        "contract_law": "合同法",
+        "labor_law": "劳动法",
+        "marriage_law": "婚姻家庭",
+        "consumer_law": "消费者权益",
+    }
+
+    success_count = 0
+    skipped_count = 0
+    failed_items: list[dict[str, object]] = []
+
+    for p in sorted(laws_dir.glob("*.json")):
+        stem = str(p.stem)
+        category = category_map.get(stem, "其他")
+
+        try:
+            raw = p.read_text(encoding="utf-8")
+            items = json.loads(raw)
+            if not isinstance(items, list):
+                raise ValueError("invalid json")
+        except Exception as e:
+            failed_items.append({"file": p.name, "error": str(e)})
+            continue
+
+        for item in items:
+            try:
+                if not isinstance(item, dict):
+                    raise ValueError("invalid item")
+                title = str(item.get("law_name") or "").strip()
+                article_number = str(item.get("article") or "").strip() or None
+                content = str(item.get("content") or "").strip()
+                if not title or not content:
+                    raise ValueError("missing fields")
+
+                existing = await db.execute(
+                    select(LegalKnowledge).where(
+                        LegalKnowledge.knowledge_type == KnowledgeType.LAW.value,
+                        LegalKnowledge.title == title,
+                        LegalKnowledge.article_number == article_number,
+                        LegalKnowledge.content == content,
+                    )
+                )
+                if existing.scalar_one_or_none() is not None:
+                    skipped_count += 1
+                    continue
+
+                knowledge = LegalKnowledge(
+                    knowledge_type=KnowledgeType.LAW.value,
+                    title=title,
+                    article_number=article_number,
+                    content=content,
+                    summary=None,
+                    category=category,
+                    keywords=None,
+                    source=p.name,
+                    effective_date=None,
+                    weight=1.0,
+                    is_active=True,
+                    is_vectorized=False,
+                    vector_id=None,
+                )
+                db.add(knowledge)
+                success_count += 1
+            except Exception as e:
+                failed_items.append(
+                    {
+                        "file": p.name,
+                        "title": str(item.get("law_name") if isinstance(item, dict) else ""),
+                        "error": str(e),
+                    }
+                )
+
+    await db.commit()
+    return {
+        "success_count": success_count,
+        "skipped_count": skipped_count,
+        "failed_count": len(failed_items),
+        "failed_items": failed_items[:20],
+        "message": f"导入完成：新增 {success_count} 条，跳过 {skipped_count} 条，失败 {len(failed_items)} 条",
+    }
 
 
 @router.post("/laws/batch-import")
