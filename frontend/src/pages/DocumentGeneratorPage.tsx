@@ -1,13 +1,14 @@
-import { useEffect, useState } from 'react'
-import { FileText, Download, Copy, Check, ChevronRight } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { FileText, Download, Copy, Check, ChevronRight, History, Trash2, Eye } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import api from '../api/client'
 import { useAppMutation, useToast } from '../hooks'
 import PageHeader from '../components/PageHeader'
 import { useTheme } from '../contexts/ThemeContext'
-import { Card, Button, Input } from '../components/ui'
+import { Card, Button, Input, Modal, Pagination, EmptyState, Loading } from '../components/ui'
 import { getApiErrorMessage } from '../utils'
 import { queryKeys } from '../queryKeys'
+import { useAuth } from '../contexts/AuthContext'
 
 interface DocumentType {
   type: string
@@ -28,6 +29,7 @@ const CASE_TYPES = [
 ]
 
 export default function DocumentGeneratorPage() {
+  const { isAuthenticated } = useAuth()
   const [step, setStep] = useState(1)
   const [selectedType, setSelectedType] = useState<DocumentType | null>(null)
   const [formData, setFormData] = useState({
@@ -42,6 +44,24 @@ export default function DocumentGeneratorPage() {
   const [copied, setCopied] = useState(false)
   const toast = useToast()
   const { actualTheme } = useTheme()
+
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyPage, setHistoryPage] = useState(1)
+  const historyPageSize = 10
+  const [selectedDocId, setSelectedDocId] = useState<number | null>(null)
+
+  type MyDocItem = { id: number; document_type: string; title: string; created_at: string }
+  type MyDocListResponse = { items: MyDocItem[]; total: number }
+  type MyDocDetail = {
+    id: number
+    user_id: number
+    document_type: string
+    title: string
+    content: string
+    payload_json: string | null
+    created_at: string
+    updated_at: string
+  }
 
   const typesQuery = useQuery({
     queryKey: queryKeys.documentTypes(),
@@ -60,6 +80,48 @@ export default function DocumentGeneratorPage() {
   }, [typesQuery.error, toast])
 
   const documentTypes = Array.isArray(typesQuery.data) && typesQuery.data.length > 0 ? typesQuery.data : DOCUMENT_TYPES
+
+  const myDocsQueryKey = useMemo(
+    () => queryKeys.myDocuments(historyPage, historyPageSize),
+    [historyPage, historyPageSize]
+  )
+
+  const myDocsQuery = useQuery({
+    queryKey: myDocsQueryKey,
+    queryFn: async () => {
+      const params = new URLSearchParams()
+      params.append('page', String(historyPage))
+      params.append('page_size', String(historyPageSize))
+      const res = await api.get(`/documents/my?${params.toString()}`)
+      return res.data as MyDocListResponse
+    },
+    enabled: isAuthenticated && historyOpen,
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  })
+
+  const myDocDetailQuery = useQuery({
+    queryKey: useMemo(() => queryKeys.myDocumentDetail(selectedDocId), [selectedDocId]),
+    queryFn: async () => {
+      const res = await api.get(`/documents/my/${selectedDocId}`)
+      return res.data as MyDocDetail
+    },
+    enabled: isAuthenticated && historyOpen && typeof selectedDocId === 'number' && selectedDocId > 0,
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  })
+
+  useEffect(() => {
+    if (!myDocsQuery.error) return
+    toast.error(getApiErrorMessage(myDocsQuery.error, '文书历史加载失败'))
+  }, [myDocsQuery.error, toast])
+
+  useEffect(() => {
+    if (!myDocDetailQuery.error) return
+    toast.error(getApiErrorMessage(myDocDetailQuery.error, '文书详情加载失败'))
+  }, [myDocDetailQuery.error, toast])
 
   const generateMutation = useAppMutation<{ title: string; content: string }, void>({
     mutationFn: async (_: void) => {
@@ -80,6 +142,53 @@ export default function DocumentGeneratorPage() {
     setSelectedType(type)
     setStep(2)
   }
+
+  const saveMutation = useAppMutation<{ id: number; message?: string }, void>({
+    mutationFn: async (_: void) => {
+      if (!selectedType || !generatedDocument) {
+        throw new Error('NO_DOCUMENT')
+      }
+      const res = await api.post('/documents/save', {
+        document_type: selectedType.type,
+        title: generatedDocument.title,
+        content: generatedDocument.content,
+        payload: {
+          case_type: formData.case_type,
+          plaintiff_name: formData.plaintiff_name,
+          defendant_name: formData.defendant_name,
+          facts: formData.facts,
+          claims: formData.claims,
+          evidence: formData.evidence,
+        },
+      })
+      return res.data as { id: number; message?: string }
+    },
+    errorMessageFallback: '保存失败，请稍后重试',
+    invalidateQueryKeys: [myDocsQueryKey as any],
+    onSuccess: (res) => {
+      toast.success(res?.message ?? '已保存到我的文书')
+    },
+    onError: (err) => {
+      const msg = String(err instanceof Error ? err.message : '')
+      if (msg === 'NO_DOCUMENT') {
+        toast.error('请先生成文书')
+      }
+    },
+  })
+
+  const deleteMutation = useAppMutation<unknown, number>({
+    mutationFn: async (id) => {
+      await api.delete(`/documents/my/${id}`)
+    },
+    errorMessageFallback: '删除失败，请稍后重试',
+    invalidateQueryKeys: [myDocsQueryKey as any],
+    onSuccess: () => {
+      toast.success('已删除')
+      if (selectedDocId != null) {
+        setSelectedDocId(null)
+      }
+    },
+  })
 
   const handleGenerate = async () => {
     if (!selectedType) return
@@ -136,6 +245,13 @@ export default function DocumentGeneratorPage() {
         description="快速生成常用法律文书模板，仅供参考，正式使用前请咨询专业律师。"
         layout="mdStart"
         tone={actualTheme}
+        right={
+          isAuthenticated ? (
+            <Button variant="outline" onClick={() => setHistoryOpen(true)} icon={History}>
+              我的文书
+            </Button>
+          ) : undefined
+        }
       />
 
       {/* 步骤指示器 */}
@@ -294,6 +410,16 @@ export default function DocumentGeneratorPage() {
                 <Download className="h-4 w-4 mr-2" />
                 下载
               </Button>
+              {isAuthenticated ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => saveMutation.mutate()}
+                  disabled={saveMutation.isPending}
+                >
+                  保存
+                </Button>
+              ) : null}
             </div>
           </div>
           
@@ -316,6 +442,98 @@ export default function DocumentGeneratorPage() {
           </div>
         </Card>
       )}
+
+      <Modal isOpen={historyOpen} onClose={() => { setHistoryOpen(false); setSelectedDocId(null) }} title="我的文书" size="lg">
+        {myDocsQuery.isLoading ? (
+          <Loading text="加载中..." tone={actualTheme} />
+        ) : (myDocsQuery.data?.items ?? []).length === 0 ? (
+          <EmptyState
+            icon={FileText}
+            title="暂无保存的文书"
+            description="在生成文书后点击“保存”，即可在这里查看"
+            tone={actualTheme}
+          />
+        ) : (
+          <div className="space-y-4">
+            <div className="divide-y divide-slate-200/70 dark:divide-white/10">
+              {(myDocsQuery.data?.items ?? []).map((item) => (
+                <div key={item.id} className="py-3 flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-slate-900 dark:text-white truncate">
+                      {item.title}
+                    </div>
+                    <div className="text-xs text-slate-500 dark:text-white/45 mt-1">
+                      {new Date(item.created_at).toLocaleString()}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon={Eye}
+                      onClick={() => setSelectedDocId(item.id)}
+                    >
+                      查看
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon={Trash2}
+                      className="text-red-600"
+                      onClick={() => {
+                        if (!confirm('确定删除该文书？')) return
+                        deleteMutation.mutate(item.id)
+                      }}
+                      disabled={deleteMutation.isPending}
+                    >
+                      删除
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <Pagination
+              currentPage={historyPage}
+              totalPages={Math.max(1, Math.ceil(Number(myDocsQuery.data?.total ?? 0) / historyPageSize))}
+              onPageChange={setHistoryPage}
+            />
+
+            {selectedDocId != null ? (
+              <Card variant="surface" padding="md">
+                {myDocDetailQuery.isFetching ? (
+                  <div className="text-sm text-slate-500 dark:text-white/50">加载详情中...</div>
+                ) : myDocDetailQuery.data ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm font-semibold text-slate-900 dark:text-white truncate">
+                        {myDocDetailQuery.data.title}
+                      </div>
+                      <Button variant="outline" size="sm" onClick={() => {
+                        const blob = new Blob([myDocDetailQuery.data?.content ?? ''], { type: 'text/plain;charset=utf-8' })
+                        const url = URL.createObjectURL(blob)
+                        const a = document.createElement('a')
+                        a.href = url
+                        a.download = `${myDocDetailQuery.data.title}.txt`
+                        document.body.appendChild(a)
+                        a.click()
+                        document.body.removeChild(a)
+                        URL.revokeObjectURL(url)
+                        toast.success('文件已下载')
+                      }}>
+                        下载
+                      </Button>
+                    </div>
+                    <pre className="whitespace-pre-wrap text-sm text-slate-800 dark:text-white/90">{myDocDetailQuery.data.content}</pre>
+                  </div>
+                ) : (
+                  <div className="text-sm text-slate-500 dark:text-white/50">未找到文书详情</div>
+                )}
+              </Card>
+            ) : null}
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }

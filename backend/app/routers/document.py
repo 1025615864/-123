@@ -2,13 +2,16 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 from datetime import datetime
+import json
 
 from ..database import get_db
+from ..models.document import GeneratedDocument
 from ..models.user import User
-from ..utils.deps import get_current_user_optional
+from ..utils.deps import get_current_user_optional, get_current_user
 from ..utils.rate_limiter import rate_limit, RateLimitConfig
 
 router = APIRouter(prefix="/documents", tags=["文书生成"])
@@ -212,3 +215,134 @@ async def get_document_types():
         {"type": "agreement", "name": "和解协议书", "description": "双方达成和解的协议文书"},
         {"type": "letter", "name": "律师函", "description": "以律师名义发出的法律文书"},
     ]
+
+
+class DocumentSaveRequest(BaseModel):
+    document_type: str
+    title: str
+    content: str
+    payload: dict[str, object] | None = None
+
+
+class DocumentItem(BaseModel):
+    id: int
+    document_type: str
+    title: str
+    created_at: datetime
+
+
+class DocumentListResponse(BaseModel):
+    items: list[DocumentItem]
+    total: int
+
+
+@router.post("/save")
+async def save_document(
+    data: DocumentSaveRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    payload_json: str | None = None
+    if data.payload is not None:
+        try:
+            payload_json = json.dumps(data.payload, ensure_ascii=False)
+        except Exception:
+            payload_json = None
+
+    doc = GeneratedDocument(
+        user_id=current_user.id,
+        document_type=str(data.document_type or "").strip(),
+        title=str(data.title or "").strip() or "法律文书",
+        content=str(data.content or "").strip(),
+        payload_json=payload_json,
+    )
+    if not doc.document_type:
+        raise HTTPException(status_code=400, detail="document_type 不能为空")
+    if not doc.content:
+        raise HTTPException(status_code=400, detail="content 不能为空")
+
+    db.add(doc)
+    await db.commit()
+    await db.refresh(doc)
+    return {"id": int(doc.id), "message": "保存成功"}
+
+
+@router.get("/my", response_model=DocumentListResponse)
+async def list_my_documents(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    page: int = 1,
+    page_size: int = 20,
+):
+    page = max(1, int(page))
+    page_size = max(1, min(100, int(page_size)))
+
+    base = select(GeneratedDocument).where(GeneratedDocument.user_id == current_user.id)
+    count_query = select(func.count()).select_from(base.subquery())
+    total_result = await db.execute(count_query)
+    total = int(total_result.scalar() or 0)
+
+    q = base.order_by(GeneratedDocument.created_at.desc(), GeneratedDocument.id.desc())
+    q = q.offset((page - 1) * page_size).limit(page_size)
+    res = await db.execute(q)
+    rows = res.scalars().all()
+
+    items = [
+        DocumentItem(
+            id=int(getattr(x, "id")),
+            document_type=str(getattr(x, "document_type")),
+            title=str(getattr(x, "title")),
+            created_at=getattr(x, "created_at"),
+        )
+        for x in rows
+    ]
+    return DocumentListResponse(items=items, total=total)
+
+
+@router.get("/my/{doc_id}")
+async def get_my_document(
+    doc_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    res = await db.execute(
+        select(GeneratedDocument).where(
+            GeneratedDocument.id == int(doc_id),
+            GeneratedDocument.user_id == current_user.id,
+        )
+    )
+    doc = res.scalar_one_or_none()
+    if doc is None:
+        raise HTTPException(status_code=404, detail="文书不存在")
+
+    return {
+        "id": int(getattr(doc, "id")),
+        "user_id": int(getattr(doc, "user_id")),
+        "document_type": str(getattr(doc, "document_type")),
+        "title": str(getattr(doc, "title")),
+        "content": str(getattr(doc, "content")),
+        "payload_json": getattr(doc, "payload_json"),
+        "created_at": getattr(doc, "created_at"),
+        "updated_at": getattr(doc, "updated_at"),
+    }
+
+
+@router.delete("/my/{doc_id}")
+async def delete_my_document(
+    doc_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    res = await db.execute(
+        select(GeneratedDocument).where(
+            GeneratedDocument.id == int(doc_id),
+            GeneratedDocument.user_id == current_user.id,
+        )
+    )
+    doc = res.scalar_one_or_none()
+    if doc is None:
+        raise HTTPException(status_code=404, detail="文书不存在")
+
+    await db.delete(doc)
+    await db.commit()
+    return {"message": "删除成功"}
