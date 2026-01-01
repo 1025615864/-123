@@ -248,7 +248,9 @@ class TestNewsAIPipelineService:
 
             def raise_for_status(self):
                 if int(self.status_code) >= 400:
-                    raise httpx.HTTPStatusError("error", request=None, response=None)
+                    req = httpx.Request("POST", "http://example.com")
+                    resp = httpx.Response(status_code=int(self.status_code), request=req)
+                    raise httpx.HTTPStatusError("error", request=req, response=resp)
 
         class FakeAsyncClient:
             def __init__(self, *args, **kwargs):
