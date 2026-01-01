@@ -201,6 +201,8 @@ export const queryKeys = {
     ["knowledge-templates", { is_active: isActive }] as const,
 
   knowledgeStats: () => ["knowledge-stats"] as const,
+  knowledgeVectorStoreStatus: () =>
+    ["knowledge-vector-store-status"] as const,
   adminKnowledgeListRoot: () => ["admin-knowledge-list"] as const,
   adminKnowledgeList: (
     page: number,
