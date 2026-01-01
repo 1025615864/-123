@@ -23,6 +23,7 @@ class SearchQualityInfo(BaseModel):
     qualified_count: int = Field(0, description="通过阈值过滤的引用数量")
     avg_similarity: float = Field(0.0, description="通过过滤结果的平均相似度")
     confidence: str = Field("low", description="检索置信度等级")
+    fallback_used: bool = Field(False, description="是否使用了 DB 关键词检索作为降级")
 
 
 class ChatResponse(BaseModel):
@@ -101,8 +102,13 @@ class ConsultationListItem(BaseModel):
     title: str | None
     created_at: datetime
     message_count: int = 0
+    is_favorite: bool = False
     
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)
+
+
+class FavoriteToggleResponse(BaseModel):
+    is_favorite: bool
 
 
 class RatingRequest(BaseModel):

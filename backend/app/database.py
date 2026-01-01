@@ -59,6 +59,7 @@ async def init_db() -> None:
         "app.models.notification",
         "app.models.payment",
         "app.models.system",
+        "app.models.document",
         "app.models.calendar",
     ):
         _ = importlib.import_module(module_name)
@@ -67,6 +68,13 @@ async def init_db() -> None:
 
         if engine.url.get_backend_name() == "sqlite":
             try:
+                consult_cols_result = await conn.execute(text("PRAGMA table_info(consultations)"))
+                consult_cols = {row[1] for row in consult_cols_result.fetchall()}
+                if "share_token_version" not in consult_cols:
+                    _ = await conn.execute(
+                        text("ALTER TABLE consultations ADD COLUMN share_token_version INTEGER DEFAULT 0")
+                    )
+
                 news_cols_result = await conn.execute(text("PRAGMA table_info(news)"))
                 news_cols = {row[1] for row in news_cols_result.fetchall()}
                 if "scheduled_publish_at" not in news_cols:

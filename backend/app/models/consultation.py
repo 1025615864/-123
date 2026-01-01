@@ -1,5 +1,5 @@
 """咨询记录模型"""
-from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, UniqueConstraint
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from ..database import Base
@@ -13,10 +13,26 @@ class Consultation(Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     session_id = Column(String(50), unique=True, nullable=False, index=True)
     title = Column(String(200), nullable=True)
+    share_token_version = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     
     messages = relationship("ChatMessage", back_populates="consultation", cascade="all, delete-orphan")
+    favorites = relationship("ConsultationFavorite", back_populates="consultation", cascade="all, delete-orphan")
+
+
+class ConsultationFavorite(Base):
+    __tablename__ = "consultation_favorites"
+    __table_args__ = (
+        UniqueConstraint("user_id", "consultation_id", name="uq_consultation_favorites_user_consultation"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    consultation_id = Column(Integer, ForeignKey("consultations.id"), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    consultation = relationship("Consultation", back_populates="favorites")
 
 
 class ChatMessage(Base):

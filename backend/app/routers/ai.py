@@ -15,9 +15,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, inspect, exists, or_
+from sqlalchemy.exc import IntegrityError
 
 from ..database import get_db
-from ..models.consultation import Consultation, ChatMessage
+from ..models.consultation import Consultation, ChatMessage, ConsultationFavorite
 from ..models.user import User
 from ..config import get_settings
 from ..services.ai_metrics import ai_metrics
@@ -34,6 +35,7 @@ from ..schemas.ai import (
     ShareLinkResponse,
     SharedConsultationResponse,
     SharedMessageResponse,
+    FavoriteToggleResponse,
     RatingRequest,
     RatingResponse,
     QuickRepliesRequest,
@@ -62,6 +64,7 @@ ERROR_AI_RATE_LIMITED = "AI_RATE_LIMITED"
 ERROR_AI_FORBIDDEN = "AI_FORBIDDEN"
 ERROR_AI_UNAUTHORIZED = "AI_UNAUTHORIZED"
 ERROR_AI_BAD_REQUEST = "AI_BAD_REQUEST"
+ERROR_AI_NOT_SUPPORTED = "AI_FEATURE_NOT_SUPPORTED"
 ERROR_AI_INTERNAL_ERROR = "AI_INTERNAL_ERROR"
 
 
@@ -85,6 +88,69 @@ def _error_code_for_http(status_code: int) -> str:
     if sc == 503:
         return ERROR_AI_UNAVAILABLE
     return ERROR_AI_INTERNAL_ERROR
+
+
+def _map_openai_exception(exc: Exception) -> tuple[int, str, str, dict[str, str] | None]:
+    try:
+        from openai import (  # type: ignore
+            APIConnectionError,
+            APITimeoutError,
+            APIStatusError,
+            AuthenticationError,
+            BadRequestError,
+            NotFoundError,
+            PermissionDeniedError,
+            RateLimitError,
+        )
+    except Exception:
+        return (
+            503,
+            ERROR_AI_UNAVAILABLE,
+            "AI服务不可用：缺少 openai 依赖或安装不完整",
+            None,
+        )
+
+    extra_headers: dict[str, str] = {}
+
+    if isinstance(exc, RateLimitError):
+        try:
+            resp = getattr(exc, "response", None)
+            headers = getattr(resp, "headers", None)
+            if headers is not None:
+                retry_after = headers.get("Retry-After") or headers.get("retry-after")
+                if retry_after:
+                    extra_headers["Retry-After"] = str(retry_after)
+        except Exception:
+            pass
+        return (429, ERROR_AI_RATE_LIMITED, "AI服务繁忙，请稍后重试", extra_headers or None)
+
+    if isinstance(exc, AuthenticationError):
+        return (401, ERROR_AI_UNAUTHORIZED, "AI鉴权失败：请检查 OPENAI_API_KEY", None)
+
+    if isinstance(exc, PermissionDeniedError):
+        return (403, ERROR_AI_FORBIDDEN, "AI服务拒绝访问：权限不足或账号受限", None)
+
+    if isinstance(exc, BadRequestError):
+        return (400, ERROR_AI_BAD_REQUEST, "AI请求不合法：请检查输入内容与参数", None)
+
+    if isinstance(exc, NotFoundError):
+        return (
+            501,
+            ERROR_AI_NOT_SUPPORTED,
+            "当前AI服务不支持该功能或接口。请更换可用的AI服务/模型后重试。",
+            None,
+        )
+
+    if isinstance(exc, (APIConnectionError, APITimeoutError)):
+        return (503, ERROR_AI_UNAVAILABLE, "AI服务连接失败，请稍后再试", None)
+
+    if isinstance(exc, APIStatusError):
+        sc = int(getattr(exc, "status_code", 500) or 500)
+        if sc >= 500:
+            return (503, ERROR_AI_UNAVAILABLE, "AI服务暂时不可用，请稍后重试", None)
+        return (sc, _error_code_for_http(sc), "AI服务异常，请稍后重试", None)
+
+    return (500, ERROR_AI_INTERNAL_ERROR, "AI服务异常，请稍后重试", None)
 
 
 def _extract_message(detail: object) -> str:
@@ -358,51 +424,77 @@ async def chat_with_ai(
         else:
             raise RuntimeError("invalid assistant.chat result")
 
-        if consultation is None:
-            result = await db.execute(
-                select(Consultation).where(Consultation.session_id == session_id)
-            )
-            consultation = result.scalar_one_or_none()
+        assistant_message_id: int | None = None
+        try:
+            if consultation is None:
+                result = await db.execute(
+                    select(Consultation).where(Consultation.session_id == session_id)
+                )
+                consultation = result.scalar_one_or_none()
 
-            if consultation is not None:
+                if consultation is not None:
+                    consultation_user_id = cast(int | None, getattr(consultation, "user_id", None))
+                    if consultation_user_id is not None:
+                        if current_user is None or consultation_user_id != current_user.id:
+                            raise HTTPException(status_code=403, detail="无权限访问该咨询会话")
+
+            if not consultation:
+                consultation = Consultation(
+                    session_id=session_id,
+                    title=payload.message[:50] + "..." if len(payload.message) > 50 else payload.message,
+                    user_id=current_user.id if current_user else None,
+                )
+                db.add(consultation)
+                await db.flush()
+            else:
                 consultation_user_id = cast(int | None, getattr(consultation, "user_id", None))
-                if consultation_user_id is not None:
-                    if current_user is None or consultation_user_id != current_user.id:
-                        raise HTTPException(status_code=403, detail="无权限访问该咨询会话")
+                if current_user is not None and consultation_user_id is None:
+                    setattr(consultation, "user_id", current_user.id)
 
-        if not consultation:
-            consultation = Consultation(
-                session_id=session_id,
-                title=payload.message[:50] + "..." if len(payload.message) > 50 else payload.message,
-                user_id=current_user.id if current_user else None,
+            user_message = ChatMessage(
+                consultation_id=consultation.id,
+                role="user",
+                content=payload.message,
             )
-            db.add(consultation)
-            await db.flush()
-        else:
-            consultation_user_id = cast(int | None, getattr(consultation, "user_id", None))
-            if current_user is not None and consultation_user_id is None:
-                setattr(consultation, "user_id", current_user.id)
-        
-        user_message = ChatMessage(
-            consultation_id=consultation.id,
-            role="user",
-            content=payload.message,
-        )
-        db.add(user_message)
-        
-        refs_json = json.dumps([ref.model_dump() for ref in references], ensure_ascii=False)
-        ai_message = ChatMessage(
-            consultation_id=consultation.id,
-            role="assistant",
-            content=answer,
-            references=refs_json,
-        )
-        db.add(ai_message)
+            db.add(user_message)
 
-        await db.flush()
-        assistant_message_id = cast(int | None, getattr(ai_message, "id", None))
-        
-        await db.commit()
+            refs_json = json.dumps([ref.model_dump() for ref in references], ensure_ascii=False)
+            ai_message = ChatMessage(
+                consultation_id=consultation.id,
+                role="assistant",
+                content=answer,
+                references=refs_json,
+            )
+            db.add(ai_message)
+
+            await db.flush()
+            assistant_message_id = cast(int | None, getattr(ai_message, "id", None))
+
+            await db.commit()
+        except HTTPException:
+            raise
+        except Exception as e:
+            await db.rollback()
+            ai_metrics.record_error(
+                endpoint="chat",
+                request_id=request_id,
+                error_code="AI_PERSIST_FAILED",
+                status_code=200,
+                message=str(e),
+            )
+            _audit_event(
+                "chat_persist_error",
+                {
+                    "request_id": request_id,
+                    "endpoint": "chat",
+                    "user_id": user_id_str,
+                    "ip": client_ip,
+                    "session_id": str(session_id),
+                    "duration_ms": int((time.time() - started_at) * 1000),
+                    "error": str(type(e).__name__),
+                },
+            )
+            assistant_message_id = None
 
         logger.info(
             "ai_chat_response request_id=%s user_id=%s session_id=%s assistant_message_id=%s",
@@ -934,6 +1026,7 @@ async def list_consultations(
     skip: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     q: Annotated[str | None, Query(max_length=200)] = None,
+    favorites_only: Annotated[bool, Query()] = False,
 ):
     """
     获取咨询历史列表
@@ -950,10 +1043,17 @@ async def list_consultations(
         .subquery()
     )
     
+    favorite_match = exists(
+        select(1)
+        .where(ConsultationFavorite.consultation_id == Consultation.id)
+        .where(ConsultationFavorite.user_id == current_user.id)
+    )
+
     query = (
         select(
             Consultation,
-            func.coalesce(subquery.c.message_count, 0).label('message_count')
+            func.coalesce(subquery.c.message_count, 0).label('message_count'),
+            favorite_match.label('is_favorite'),
         )
         .outerjoin(subquery, Consultation.id == subquery.c.consultation_id)
         .where(Consultation.user_id == current_user.id)
@@ -971,6 +1071,9 @@ async def list_consultations(
         )
         query = query.where(or_(title_match, message_match))
 
+    if bool(favorites_only):
+        query = query.where(favorite_match)
+
     result = await db.execute(
         query
         .order_by(Consultation.created_at.desc())
@@ -978,9 +1081,9 @@ async def list_consultations(
         .limit(limit)
     )
     
-    rows = cast(list[tuple[Consultation, int]], result.all())
+    rows = cast(list[tuple[Consultation, int, object]], result.all())
     items: list[ConsultationListItem] = []
-    for consultation, message_count in rows:
+    for consultation, message_count, is_favorite in rows:
         items.append(
             ConsultationListItem(
                 id=cast(int, cast(object, consultation.id)),
@@ -988,10 +1091,48 @@ async def list_consultations(
                 title=cast(str | None, cast(object, consultation.title)),
                 created_at=cast(datetime, cast(object, consultation.created_at)),
                 message_count=int(message_count),
+                is_favorite=bool(is_favorite),
             )
         )
 
     return items
+
+
+@router.post("/consultations/{session_id}/favorite", response_model=FavoriteToggleResponse)
+async def toggle_consultation_favorite(
+    session_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    result = await db.execute(select(Consultation).where(Consultation.session_id == session_id))
+    consultation = result.scalar_one_or_none()
+    if not consultation:
+        raise HTTPException(status_code=404, detail="咨询记录不存在")
+
+    consultation_user_id = cast(int | None, getattr(consultation, "user_id", None))
+    if consultation_user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="无权限收藏该咨询记录")
+
+    fav_result = await db.execute(
+        select(ConsultationFavorite)
+        .where(ConsultationFavorite.user_id == current_user.id)
+        .where(ConsultationFavorite.consultation_id == consultation.id)
+    )
+    existing = fav_result.scalar_one_or_none()
+
+    if existing is not None:
+        await db.delete(existing)
+        await db.commit()
+        return FavoriteToggleResponse(is_favorite=False)
+
+    fav = ConsultationFavorite(user_id=current_user.id, consultation_id=cast(int, cast(object, consultation.id)))
+    db.add(fav)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+
+    return FavoriteToggleResponse(is_favorite=True)
 
 
 @router.get("/consultations/{session_id}", response_model=ConsultationResponse)
@@ -1053,10 +1194,13 @@ async def create_consultation_share_link(
     exp_delta = timedelta(days=int(expires_days))
     expires_at = datetime.now(timezone.utc) + exp_delta
 
+    token_ver = int(getattr(consultation, "share_token_version", 0) or 0)
+
     token = create_access_token(
         {
             "type": "consultation_share",
             "session_id": str(session_id),
+            "ver": token_ver,
         },
         expires_delta=exp_delta,
     )
@@ -1066,6 +1210,28 @@ async def create_consultation_share_link(
         share_path=f"/share/{token}",
         expires_at=expires_at,
     )
+
+
+@router.post("/consultations/{session_id}/share/revoke")
+async def revoke_consultation_share_link(
+    session_id: str,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    result = await db.execute(select(Consultation).where(Consultation.session_id == session_id))
+    consultation = result.scalar_one_or_none()
+    if not consultation:
+        raise HTTPException(status_code=404, detail="咨询记录不存在")
+
+    consultation_user_id = cast(int | None, getattr(consultation, "user_id", None))
+    if consultation_user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="无权限撤销该咨询记录分享")
+
+    current_ver = int(getattr(consultation, "share_token_version", 0) or 0)
+    setattr(consultation, "share_token_version", current_ver + 1)
+    await db.commit()
+
+    return {"revoked": True}
 
 
 @router.get("/share/{token}", response_model=SharedConsultationResponse)
@@ -1085,10 +1251,20 @@ async def get_shared_consultation(
     if not sid:
         raise HTTPException(status_code=401, detail="无效的分享链接")
 
+    token_ver = payload.get("ver")
+    try:
+        token_ver_int = int(token_ver) if token_ver is not None else 0
+    except Exception:
+        token_ver_int = 0
+
     result = await db.execute(select(Consultation).where(Consultation.session_id == sid))
     consultation = result.scalar_one_or_none()
     if not consultation:
         raise HTTPException(status_code=404, detail="咨询记录不存在")
+
+    expected_ver = int(getattr(consultation, "share_token_version", 0) or 0)
+    if token_ver_int != expected_ver:
+        raise HTTPException(status_code=401, detail="无效或已过期的分享链接")
 
     messages_result = await db.execute(
         select(ChatMessage)
@@ -1273,6 +1449,7 @@ async def transcribe(
 ):
     started_at = float(time.time())
     request_id = uuid.uuid4().hex
+    response.headers["X-Request-Id"] = request_id
     ai_metrics.record_request("transcribe")
     client_ip = get_client_ip(request)
 
@@ -1329,8 +1506,54 @@ async def transcribe(
         if current_user is None:
             _enforce_guest_ai_quota(request)
 
-        content = await file.read()
+        try:
+            content = await file.read()
+        except Exception as e:
+            ai_metrics.record_error(
+                endpoint="transcribe",
+                request_id=request_id,
+                error_code=ERROR_AI_BAD_REQUEST,
+                status_code=400,
+                message=str(e),
+            )
+            _audit_event(
+                "transcribe_error",
+                {
+                    "request_id": request_id,
+                    "endpoint": "transcribe",
+                    "user_id": user_id_str,
+                    "ip": client_ip,
+                    "status_code": 400,
+                    "error_code": ERROR_AI_BAD_REQUEST,
+                    "duration_ms": int((time.time() - started_at) * 1000),
+                },
+            )
+            return _make_error_response(
+                status_code=400,
+                error_code=ERROR_AI_BAD_REQUEST,
+                message="读取音频文件失败",
+                request_id=request_id,
+            )
         if not content:
+            ai_metrics.record_error(
+                endpoint="transcribe",
+                request_id=request_id,
+                error_code=ERROR_AI_BAD_REQUEST,
+                status_code=400,
+                message="empty audio",
+            )
+            _audit_event(
+                "transcribe_error",
+                {
+                    "request_id": request_id,
+                    "endpoint": "transcribe",
+                    "user_id": user_id_str,
+                    "ip": client_ip,
+                    "status_code": 400,
+                    "error_code": ERROR_AI_BAD_REQUEST,
+                    "duration_ms": int((time.time() - started_at) * 1000),
+                },
+            )
             return _make_error_response(
                 status_code=400,
                 error_code=ERROR_AI_BAD_REQUEST,
@@ -1339,6 +1562,25 @@ async def transcribe(
             )
 
         if len(content) > 10 * 1024 * 1024:
+            ai_metrics.record_error(
+                endpoint="transcribe",
+                request_id=request_id,
+                error_code=ERROR_AI_BAD_REQUEST,
+                status_code=400,
+                message=f"audio too large bytes={len(content)}",
+            )
+            _audit_event(
+                "transcribe_error",
+                {
+                    "request_id": request_id,
+                    "endpoint": "transcribe",
+                    "user_id": user_id_str,
+                    "ip": client_ip,
+                    "status_code": 400,
+                    "error_code": ERROR_AI_BAD_REQUEST,
+                    "duration_ms": int((time.time() - started_at) * 1000),
+                },
+            )
             return _make_error_response(
                 status_code=400,
                 error_code=ERROR_AI_BAD_REQUEST,
@@ -1360,12 +1602,64 @@ async def transcribe(
             res = client.audio.transcriptions.create(model="whisper-1", file=buf)
             return str(getattr(res, "text", "") or "")
 
-        text = await asyncio.to_thread(_transcribe_sync)
-        if not str(text).strip():
+        try:
+            text = await asyncio.to_thread(_transcribe_sync)
+        except Exception as e:
+            status_code, error_code, message, extra_headers = _map_openai_exception(e)
+            if error_code == ERROR_AI_NOT_SUPPORTED:
+                message = "当前AI服务不支持语音转写（audio transcription）。请更换支持 Whisper 的服务或关闭语音输入。"
+            elif error_code == ERROR_AI_BAD_REQUEST:
+                message = "语音转写请求不合法：请检查音频格式/内容"
+            ai_metrics.record_error(
+                endpoint="transcribe",
+                request_id=request_id,
+                error_code=error_code,
+                status_code=status_code,
+                message=str(e),
+            )
+            _audit_event(
+                "transcribe_error",
+                {
+                    "request_id": request_id,
+                    "endpoint": "transcribe",
+                    "user_id": user_id_str,
+                    "ip": client_ip,
+                    "status_code": int(status_code),
+                    "error_code": str(error_code),
+                    "duration_ms": int((time.time() - started_at) * 1000),
+                },
+            )
             return _make_error_response(
-                status_code=500,
-                error_code=ERROR_AI_INTERNAL_ERROR,
-                message="语音转写失败",
+                status_code=status_code,
+                error_code=error_code,
+                message=message,
+                request_id=request_id,
+                headers=extra_headers,
+            )
+        if not str(text).strip():
+            ai_metrics.record_error(
+                endpoint="transcribe",
+                request_id=request_id,
+                error_code=ERROR_AI_UNAVAILABLE,
+                status_code=503,
+                message="empty upstream text",
+            )
+            _audit_event(
+                "transcribe_error",
+                {
+                    "request_id": request_id,
+                    "endpoint": "transcribe",
+                    "user_id": user_id_str,
+                    "ip": client_ip,
+                    "status_code": 503,
+                    "error_code": ERROR_AI_UNAVAILABLE,
+                    "duration_ms": int((time.time() - started_at) * 1000),
+                },
+            )
+            return _make_error_response(
+                status_code=503,
+                error_code=ERROR_AI_UNAVAILABLE,
+                message="语音转写失败：上游返回为空",
                 request_id=request_id,
             )
 
@@ -1381,22 +1675,34 @@ async def transcribe(
             },
         )
 
-        response.headers["X-Request-Id"] = request_id
         return TranscribeResponse(text=str(text))
     except HTTPException:
         raise
-    except Exception:
+    except Exception as e:
+        logger.exception("ai_transcribe_unhandled request_id=%s", request_id)
         ai_metrics.record_error(
             endpoint="transcribe",
             request_id=request_id,
             error_code=ERROR_AI_INTERNAL_ERROR,
             status_code=500,
-            message="transcribe_failed",
+            message=str(e),
+        )
+        _audit_event(
+            "transcribe_error",
+            {
+                "request_id": request_id,
+                "endpoint": "transcribe",
+                "user_id": user_id_str,
+                "ip": client_ip,
+                "status_code": 500,
+                "error_code": ERROR_AI_INTERNAL_ERROR,
+                "duration_ms": int((time.time() - started_at) * 1000),
+            },
         )
         return _make_error_response(
             status_code=500,
             error_code=ERROR_AI_INTERNAL_ERROR,
-            message="语音转写失败",
+            message=(f"语音转写失败：{type(e).__name__}" if bool(settings.debug) else "语音转写失败"),
             request_id=request_id,
         )
 
@@ -1598,19 +1904,33 @@ async def analyze_file(
 
     try:
         summary = await asyncio.to_thread(_summarize_sync)
-    except Exception:
+    except Exception as e:
+        status_code, error_code, message, extra_headers = _map_openai_exception(e)
         ai_metrics.record_error(
             endpoint="file_analyze",
             request_id=request_id,
-            error_code=ERROR_AI_INTERNAL_ERROR,
-            status_code=500,
-            message="summarize_failed",
+            error_code=error_code,
+            status_code=status_code,
+            message=str(e),
+        )
+        _audit_event(
+            "file_analyze_error",
+            {
+                "request_id": request_id,
+                "endpoint": "file_analyze",
+                "user_id": user_id_str,
+                "ip": client_ip,
+                "status_code": int(status_code),
+                "error_code": str(error_code),
+                "duration_ms": int((time.time() - started_at) * 1000),
+            },
         )
         return _make_error_response(
-            status_code=500,
-            error_code=ERROR_AI_INTERNAL_ERROR,
-            message="文件分析失败",
+            status_code=status_code,
+            error_code=error_code,
+            message=message,
             request_id=request_id,
+            headers=extra_headers,
         )
 
     summary_norm = str(summary or "").strip()

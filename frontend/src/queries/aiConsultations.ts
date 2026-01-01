@@ -8,16 +8,28 @@ export interface ConsultationItem {
   title: string
   created_at: string
   message_count: number
+  is_favorite?: boolean
 }
 
-export function useAiConsultationsQuery(enabled = true, q: string = '') {
-  const queryKey = queryKeys.aiConsultations(q)
+export function useAiConsultationsQuery(
+  enabled = true,
+  q: string = '',
+  favoritesOnly: boolean = false
+) {
+  const queryKey = queryKeys.aiConsultations(q, favoritesOnly)
   const query = useQuery({
     queryKey,
     queryFn: async () => {
       const qNorm = String(q ?? '').trim()
+      const favOnly = Boolean(favoritesOnly)
       const res = await api.get('/ai/consultations', {
-        params: qNorm ? { q: qNorm } : undefined,
+        params:
+          qNorm || favOnly
+            ? {
+                ...(qNorm ? { q: qNorm } : null),
+                ...(favOnly ? { favorites_only: true } : null),
+              }
+            : undefined,
       })
       return (Array.isArray(res.data) ? res.data : []) as ConsultationItem[]
     },

@@ -5,6 +5,7 @@ import { ArrowRight, Share2, User, Bot } from 'lucide-react'
 import { Card, Button, Loading, EmptyState } from '../components/ui'
 import PageHeader from '../components/PageHeader'
 import api from '../api/client'
+import { useToast } from '../hooks'
 import { queryKeys } from '../queryKeys'
 import { useTheme } from '../contexts/ThemeContext'
 import { getApiErrorMessage } from '../utils'
@@ -25,6 +26,7 @@ interface SharedConsultationResponse {
 
 export default function SharePage() {
   const { actualTheme } = useTheme()
+  const toast = useToast()
   const params = useParams()
   const token = String(params.token || '').trim()
 
@@ -63,7 +65,7 @@ export default function SharePage() {
     const url = `${window.location.origin}/share/${token}`
     try {
       await navigator.clipboard.writeText(url)
-      window.alert('已复制分享链接')
+      toast.success('已复制分享链接')
     } catch {
       window.prompt('复制分享链接', url)
     }

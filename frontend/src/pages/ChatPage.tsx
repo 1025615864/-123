@@ -57,6 +57,7 @@ interface SearchQualityInfo {
   qualified_count: number;
   avg_similarity: number;
   confidence: string;
+  fallback_used?: boolean;
 }
 
 interface Message {
@@ -82,6 +83,7 @@ const GUEST_AI_LIMIT = 5;
 const GUEST_AI_USED_KEY = "guest_ai_used";
 const GUEST_AI_RESET_AT_KEY = "guest_ai_reset_at";
 const GUEST_AI_WINDOW_MS = 24 * 60 * 60 * 1000;
+const CHAT_ONBOARDING_SEEN_KEY = "chat_onboarding_seen_v1";
 
 export default function ChatPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -114,11 +116,13 @@ export default function ChatPage() {
     sessionId
   );
   const [input, setInput] = useState("");
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const [showTemplateSelector, setShowTemplateSelector] = useState(false);
   const [streaming, setStreaming] = useState(false);
   const [loading, setLoading] = useState(false);
   const [recording, setRecording] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const [transcribeSupported, setTranscribeSupported] = useState(true);
   const [analyzingFile, setAnalyzingFile] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
@@ -133,6 +137,24 @@ export default function ChatPage() {
   const recordingStreamRef = useRef<MediaStream | null>(null);
   const recordingChunksRef = useRef<BlobPart[]>([]);
   const toast = useToast();
+
+  const closeOnboarding = useCallback(() => {
+    setShowOnboarding(false);
+    try {
+      localStorage.setItem(CHAT_ONBOARDING_SEEN_KEY, "1");
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    try {
+      const seen = localStorage.getItem(CHAT_ONBOARDING_SEEN_KEY);
+      if (!seen) {
+        setShowOnboarding(true);
+      }
+    } catch {
+      setShowOnboarding(true);
+    }
+  }, []);
 
   const handleChatScroll = useCallback(() => {
     const el = chatScrollRef.current;
@@ -181,6 +203,10 @@ export default function ChatPage() {
     }
 
     if (loading || streaming || transcribing) return;
+    if (!transcribeSupported) {
+      toast.error("当前AI服务不支持语音转写，请更换支持Whisper的服务或关闭语音输入");
+      return;
+    }
 
     if (!(navigator as any)?.mediaDevices?.getUserMedia) {
       toast.error("当前浏览器不支持语音输入");
@@ -245,7 +271,24 @@ export default function ChatPage() {
             });
             requestAnimationFrame(() => inputRef.current?.focus());
           } catch (e) {
-            toast.error(getApiErrorMessage(e, "语音转写失败，请稍后再试"));
+            const anyErr = e as any;
+            const errorCode =
+              anyErr?.response?.data?.error_code ||
+              anyErr?.errorCode ||
+              anyErr?.error_code ||
+              anyErr?.response?.headers?.["x-error-code"] ||
+              anyErr?.response?.headers?.["X-Error-Code"];
+            if (
+              typeof errorCode === "string" &&
+              errorCode.trim() === "AI_FEATURE_NOT_SUPPORTED"
+            ) {
+              setTranscribeSupported(false);
+              toast.error(
+                "当前AI服务不支持语音转写，请更换支持Whisper的服务或关闭语音输入"
+              );
+            } else {
+              toast.error(getApiErrorMessage(e, "语音转写失败，请稍后再试"));
+            }
           } finally {
             setTranscribing(false);
           }
@@ -260,7 +303,7 @@ export default function ChatPage() {
       setRecording(false);
       toast.error(getApiErrorMessage(e, "无法开始录音"));
     }
-  }, [loading, recording, stopRecordingTracks, streaming, toast, transcribing]);
+  }, [loading, recording, stopRecordingTracks, streaming, toast, transcribeSupported, transcribing]);
 
   useEffect(() => {
     return () => {
@@ -699,6 +742,7 @@ export default function ChatPage() {
                   qualified_count: Number(searchQuality.qualified_count ?? 0),
                   avg_similarity: Number(searchQuality.avg_similarity ?? 0),
                   confidence: String(searchQuality.confidence ?? ""),
+                  fallback_used: Boolean(searchQuality.fallback_used ?? false),
                 }
               : undefined;
 
@@ -980,6 +1024,9 @@ export default function ChatPage() {
                           response.search_quality.avg_similarity ?? 0
                         ),
                         confidence: String(response.search_quality.confidence ?? ""),
+                        fallback_used: Boolean(
+                          response.search_quality.fallback_used ?? false
+                        ),
                       }
                     : undefined,
                 disclaimer:
@@ -1038,6 +1085,9 @@ export default function ChatPage() {
                       response.search_quality.avg_similarity ?? 0
                     ),
                     confidence: String(response.search_quality.confidence ?? ""),
+                    fallback_used: Boolean(
+                      response.search_quality.fallback_used ?? false
+                    ),
                   }
                 : current.searchQuality,
             disclaimer:
@@ -1100,6 +1150,58 @@ export default function ChatPage() {
 
   return (
     <div className="flex flex-col flex-1 min-h-0 w-full max-w-5xl mx-auto">
+      <Modal
+        isOpen={showOnboarding}
+        onClose={closeOnboarding}
+        title="快速上手"
+        description="了解核心功能，3 分钟开始你的第一段咨询。"
+        size="lg"
+      >
+        <div className="space-y-4">
+          <div className="rounded-xl border border-slate-200/70 bg-white/60 p-4 dark:border-white/10 dark:bg-white/5">
+            <div className="flex items-start gap-3">
+              <Sparkles className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5" />
+              <div>
+                <div className="font-semibold text-slate-900 dark:text-white">快速咨询</div>
+                <div className="text-sm text-slate-600 mt-1 dark:text-white/60">
+                  点击右上角“快速咨询”选择模板，或者直接输入问题开始对话。
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200/70 bg-white/60 p-4 dark:border-white/10 dark:bg-white/5">
+            <div className="flex items-start gap-3">
+              <History className="h-5 w-5 text-blue-600 dark:text-blue-400 mt-0.5" />
+              <div>
+                <div className="font-semibold text-slate-900 dark:text-white">历史记录与收藏</div>
+                <div className="text-sm text-slate-600 mt-1 dark:text-white/60">
+                  进入“历史记录”可检索对话；对重要会话点星标收藏，支持“只看收藏”。
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200/70 bg-white/60 p-4 dark:border-white/10 dark:bg-white/5">
+            <div className="flex items-start gap-3">
+              <BookOpen className="h-5 w-5 text-emerald-600 dark:text-emerald-400 mt-0.5" />
+              <div>
+                <div className="font-semibold text-slate-900 dark:text-white">引用与说明</div>
+                <div className="text-sm text-slate-600 mt-1 dark:text-white/60">
+                  回答会尽量给出法条引用；如触发降级检索，会在回答信息中标记。
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-end pt-2">
+            <Button variant="primary" onClick={closeOnboarding}>
+              我知道了
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
       <div className="flex-none px-4 sm:px-0 mb-6">
         <PageHeader
           eyebrow="AI智能咨询"
@@ -1129,6 +1231,15 @@ export default function ChatPage() {
                     <span className="hidden sm:inline">历史记录</span>
                   </Button>
                 </Link>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowOnboarding(true)}
+                  className="px-3 sm:px-4 bg-white/60 backdrop-blur-sm dark:bg-slate-800/50"
+                >
+                  <Info className="h-4 w-4 sm:mr-2" />
+                  <span className="hidden sm:inline">新手引导</span>
+                </Button>
                 {currentSessionId && (
                   <Button
                     variant="outline"
@@ -1342,11 +1453,17 @@ export default function ChatPage() {
                 </Button>
                 <Button
                   onClick={toggleRecording}
-                  disabled={loading || streaming || transcribing}
+                  disabled={loading || streaming || transcribing || !transcribeSupported}
                   isLoading={transcribing}
                   loadingText=""
                   size="sm"
-                  aria-label={recording ? "停止录音" : "语音输入"}
+                  aria-label={
+                    transcribeSupported
+                      ? recording
+                        ? "停止录音"
+                        : "语音输入"
+                      : "语音转写不可用"
+                  }
                   className={`w-10 h-10 p-0 rounded-full transition-all ${
                     recording
                       ? "bg-red-600 hover:bg-red-700 text-white shadow-md hover:shadow-lg"
@@ -2180,6 +2297,9 @@ function AssistantMessage({
                     {Number(searchQuality.avg_similarity ?? 0).toFixed(3)}，置信
                     {" "}
                     {String(searchQuality.confidence ?? "")}
+                    {typeof searchQuality.fallback_used === "boolean"
+                      ? `，降级检索：${searchQuality.fallback_used ? "是" : "否"}`
+                      : ""}
                   </span>
                 </div>
               )}

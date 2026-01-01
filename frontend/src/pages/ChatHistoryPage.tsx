@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, Navigate, useLocation } from 'react-router-dom'
-import { MessageSquare, Clock, Trash2, Download, ArrowRight, Search, X, Share2 } from 'lucide-react'
+import { MessageSquare, Clock, Trash2, Download, ArrowRight, Search, X, Share2, Star } from 'lucide-react'
 import api from '../api/client'
 import { useAppMutation, useToast } from '../hooks'
-import { Card, Button, Loading, EmptyState, Input } from '../components/ui'
+import { Card, Button, Loading, EmptyState, Input, Chip, Modal, ModalActions } from '../components/ui'
 import PageHeader from '../components/PageHeader'
 import { useAuth } from '../contexts/AuthContext'
 import { useTheme } from '../contexts/ThemeContext'
@@ -79,9 +79,14 @@ export default function ChatHistoryPage() {
   const location = useLocation()
 
   const [q, setQ] = useState('')
+  const [favoritesOnly, setFavoritesOnly] = useState(false)
+  const [shareModalOpen, setShareModalOpen] = useState(false)
+  const [shareModalSessionId, setShareModalSessionId] = useState<string | null>(null)
+  const [shareModalUrl, setShareModalUrl] = useState('')
+  const [shareModalExpiresAt, setShareModalExpiresAt] = useState('')
 
   const debouncedQ = useDebouncedValue(q, 300)
-  const { query: consultationsQuery } = useAiConsultationsQuery(isAuthenticated, debouncedQ)
+  const { query: consultationsQuery } = useAiConsultationsQuery(isAuthenticated, debouncedQ, favoritesOnly)
 
   useEffect(() => {
     if (!consultationsQuery.error) return
@@ -103,6 +108,15 @@ export default function ChatHistoryPage() {
     invalidateQueryKeys: [queryKeys.aiConsultationsBase()],
   })
 
+  const favoriteMutation = useAppMutation<{ is_favorite: boolean }, string>({
+    mutationFn: async (sid: string) => {
+      const res = await api.post(`/ai/consultations/${sid}/favorite`)
+      return (res.data ?? {}) as { is_favorite: boolean }
+    },
+    errorMessageFallback: '收藏失败，请稍后重试',
+    invalidateQueryKeys: [queryKeys.aiConsultationsBase()],
+  })
+
   const shareMutation = useAppMutation<ShareLinkResponse, string>({
     mutationFn: async (sid: string) => {
       const res = await api.post(`/ai/consultations/${sid}/share`, null, {
@@ -113,9 +127,35 @@ export default function ChatHistoryPage() {
     errorMessageFallback: '生成分享链接失败，请稍后重试',
   })
 
+  const revokeShareMutation = useAppMutation<{ revoked: boolean }, string>({
+    mutationFn: async (sid: string) => {
+      const res = await api.post(`/ai/consultations/${sid}/share/revoke`)
+      return (res.data ?? {}) as { revoked: boolean }
+    },
+    errorMessageFallback: '撤销分享失败，请稍后重试',
+  })
+
   const handleDelete = async (sessionId: string) => {
     if (!confirm('确定要删除这条咨询记录吗？')) return
     deleteMutation.mutate(sessionId)
+  }
+
+  const closeShareModal = () => {
+    setShareModalOpen(false)
+    setShareModalSessionId(null)
+    setShareModalUrl('')
+    setShareModalExpiresAt('')
+  }
+
+  const copyShareUrl = async (url: string) => {
+    const u = String(url || '').trim()
+    if (!u) return
+    try {
+      await navigator.clipboard.writeText(u)
+      toast.success('已复制分享链接')
+    } catch {
+      window.prompt('复制分享链接', u)
+    }
   }
 
   const handleShare = async (sessionId: string) => {
@@ -127,12 +167,10 @@ export default function ChatHistoryPage() {
           ? sharePath
           : `${window.location.origin}${sharePath}`
 
-        try {
-          await navigator.clipboard.writeText(url)
-          toast.success('已复制分享链接')
-        } catch {
-          window.prompt('复制分享链接', url)
-        }
+        setShareModalSessionId(sessionId)
+        setShareModalUrl(url)
+        setShareModalExpiresAt(String(data?.expires_at || '').trim())
+        setShareModalOpen(true)
       },
     })
   }
@@ -281,6 +319,89 @@ export default function ChatHistoryPage() {
 
   return (
     <div className="space-y-12">
+      <Modal
+        isOpen={shareModalOpen}
+        onClose={closeShareModal}
+        title="分享咨询记录"
+        description="链接默认有效期 7 天，请注意隐私。"
+        size="lg"
+      >
+        <div className="space-y-4">
+          <Input
+            label="分享链接"
+            value={shareModalUrl}
+            readOnly
+            onChange={() => {}}
+            right={
+              <Button
+                variant="outline"
+                size="sm"
+                type="button"
+                disabled={!shareModalUrl}
+                onClick={() => void copyShareUrl(shareModalUrl)}
+              >
+                复制
+              </Button>
+            }
+          />
+          {shareModalExpiresAt ? (
+            <div className="text-sm text-slate-600 dark:text-white/60">
+              过期时间：{new Date(shareModalExpiresAt).toLocaleString('zh-CN')}
+            </div>
+          ) : null}
+          <div className="rounded-xl border border-slate-200/70 bg-white/60 p-4 text-sm text-slate-600 dark:border-white/10 dark:bg-white/5 dark:text-white/60">
+            该链接可公开访问此咨询记录内容。若包含敏感信息，建议先删除或不要分享。
+          </div>
+          <ModalActions>
+            <Button variant="outline" type="button" onClick={closeShareModal}>
+              关闭
+            </Button>
+            <Button
+              variant="danger"
+              type="button"
+              disabled={!shareModalSessionId || revokeShareMutation.isPending}
+              isLoading={revokeShareMutation.isPending}
+              onClick={() => {
+                if (!shareModalSessionId) return
+                const ok = confirm('撤销后，之前已分享的链接将立即失效。确定要撤销吗？')
+                if (!ok) return
+                revokeShareMutation.mutate(shareModalSessionId, {
+                  onSuccess: () => {
+                    setShareModalUrl('')
+                    setShareModalExpiresAt('')
+                    toast.success('已撤销分享链接')
+                  },
+                })
+              }}
+            >
+              撤销分享
+            </Button>
+            <Button
+              variant="primary"
+              type="button"
+              disabled={!shareModalSessionId || shareMutation.isPending}
+              isLoading={shareMutation.isPending}
+              onClick={() => {
+                if (!shareModalSessionId) return
+                shareMutation.mutate(shareModalSessionId, {
+                  onSuccess: (data) => {
+                    const sharePath = String(data?.share_path || '').trim()
+                    const url = sharePath.startsWith('http')
+                      ? sharePath
+                      : `${window.location.origin}${sharePath}`
+                    setShareModalUrl(url)
+                    setShareModalExpiresAt(String(data?.expires_at || '').trim())
+                    toast.success('已生成新的分享链接')
+                  },
+                })
+              }}
+            >
+              重新生成
+            </Button>
+          </ModalActions>
+        </div>
+      </Modal>
+
       <PageHeader
         eyebrow="咨询记录"
         title="历史咨询"
@@ -315,6 +436,24 @@ export default function ChatHistoryPage() {
               ) : null
             }
           />
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Chip
+              active={!favoritesOnly}
+              onClick={() => setFavoritesOnly(false)}
+              disabled={consultationsQuery.isLoading}
+            >
+              全部
+            </Chip>
+            <Chip
+              active={favoritesOnly}
+              onClick={() => setFavoritesOnly(true)}
+              disabled={consultationsQuery.isLoading}
+              className="inline-flex items-center gap-1.5"
+            >
+              <Star className="h-4 w-4" />
+              只看收藏
+            </Chip>
+          </div>
         </div>
       </Card>
 
@@ -376,6 +515,19 @@ export default function ChatHistoryPage() {
                     variant="ghost"
                     size="sm"
                     type="button"
+                    onClick={() => favoriteMutation.mutate(item.session_id)}
+                    disabled={favoriteMutation.isPending}
+                    className={`p-2 hover:text-slate-900 dark:hover:text-white ${
+                      item.is_favorite ? 'text-amber-600 dark:text-amber-400' : ''
+                    }`}
+                    aria-label={item.is_favorite ? '取消收藏' : '收藏'}
+                  >
+                    <Star className="h-4 w-4" fill={item.is_favorite ? 'currentColor' : 'none'} />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    type="button"
                     onClick={() => handleExport(item)}
                     className="p-2 hover:text-slate-900 dark:hover:text-white"
                     aria-label="导出报告"
@@ -388,7 +540,7 @@ export default function ChatHistoryPage() {
                     type="button"
                     onClick={() => handleShare(item.session_id)}
                     className="p-2 hover:text-slate-900 dark:hover:text-white"
-                    aria-label="分享链接"
+                    aria-label="分享"
                   >
                     <Share2 className="h-4 w-4" />
                   </Button>

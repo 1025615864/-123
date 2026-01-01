@@ -7,7 +7,8 @@ export const queryKeys = {
   calendarReminders: (page: number, pageSize: number, done: boolean | null) =>
     ["calendar-reminders", { page, pageSize, done }] as const,
   aiConsultationsBase: () => ["ai-consultations"] as const,
-  aiConsultations: (q: string = "") => ["ai-consultations", { q }] as const,
+  aiConsultations: (q: string = "", favoritesOnly: boolean = false) =>
+    ["ai-consultations", { q, favoritesOnly }] as const,
   adminDashboardStats: () => ["admin-dashboard-stats"] as const,
   adminDashboardTrends: (days: number) =>
     ["admin-dashboard-trends", { days }] as const,
@@ -24,7 +25,8 @@ export const queryKeys = {
 
   publicFaq: () => ["public-faq"] as const,
 
-  sharedConsultation: (token: string) => ["shared-consultation", { token }] as const,
+  sharedConsultation: (token: string) =>
+    ["shared-consultation", { token }] as const,
 
   lawFirms: (keyword: string, city: string) =>
     ["lawfirms", { keyword, city }] as const,
@@ -142,6 +144,10 @@ export const queryKeys = {
     ] as const,
 
   documentTypes: () => ["document-types"] as const,
+  myDocuments: (page: number, pageSize: number) =>
+    ["my-documents", { page, pageSize }] as const,
+  myDocumentDetail: (id: number | null | undefined) =>
+    ["my-document", { id }] as const,
 
   systemConfigs: () => ["system-configs"] as const,
 
@@ -201,6 +207,7 @@ export const queryKeys = {
     ["knowledge-templates", { is_active: isActive }] as const,
 
   knowledgeStats: () => ["knowledge-stats"] as const,
+  knowledgeVectorStoreStatus: () => ["knowledge-vector-store-status"] as const,
   adminKnowledgeListRoot: () => ["admin-knowledge-list"] as const,
   adminKnowledgeList: (
     page: number,
