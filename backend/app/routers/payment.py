@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import uuid
 from decimal import Decimal, ROUND_HALF_UP
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update, cast as sa_cast, Integer
 from pydantic import BaseModel
@@ -633,6 +633,7 @@ async def admin_refund(
     order_no: str,
     current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
 ):
     """管理员退款"""
     _ = current_user
@@ -699,6 +700,18 @@ async def admin_refund(
             )
             db.add(transaction)
 
+        from ..routers.system import log_admin_action
+
+        await log_admin_action(
+            db,
+            int(current_user.id),
+            "refund",
+            "payment",
+            target_id=int(order.id),
+            description=f"refund order_no={str(order_no)}",
+            request=request,
+        )
+
         await db.commit()
     except HTTPException:
         await db.rollback()
@@ -716,6 +729,7 @@ async def admin_mark_paid(
     data: MarkPaidRequest,
     current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
 ):
     """管理员标记订单已支付（开发环境/人工对账用）"""
     _ = current_user
@@ -801,6 +815,18 @@ async def admin_mark_paid(
             description=f"充值: {order.title}",
         )
         db.add(transaction)
+
+        from ..routers.system import log_admin_action
+
+        await log_admin_action(
+            db,
+            int(current_user.id),
+            "mark_paid",
+            "payment",
+            target_id=int(order.id),
+            description=f"mark_paid order_no={str(order_no)} method={str(getattr(data, 'payment_method', '') or '')}",
+            request=request,
+        )
 
         await db.commit()
     except HTTPException:

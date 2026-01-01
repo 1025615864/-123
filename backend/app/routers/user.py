@@ -28,7 +28,12 @@ router = APIRouter(prefix="/user", tags=["用户管理"])
 
 
 @router.post("/register", response_model=RegisterResponse, summary="用户注册")
-async def register(user_data: UserCreate, db: Annotated[AsyncSession, Depends(get_db)]):
+@rate_limit(*RateLimitConfig.AUTH_REGISTER, by_ip=True)
+async def register(
+    user_data: UserCreate,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
     """
     用户注册接口
     
@@ -37,6 +42,7 @@ async def register(user_data: UserCreate, db: Annotated[AsyncSession, Depends(ge
     - **password**: 密码（至少6位）
     - **nickname**: 昵称（可选）
     """
+    _ = request
     try:
         if await user_service.is_username_taken(db, user_data.username):
             raise HTTPException(
@@ -72,13 +78,19 @@ async def register(user_data: UserCreate, db: Annotated[AsyncSession, Depends(ge
 
 
 @router.post("/login", response_model=LoginResponse, summary="用户登录")
-async def login(login_data: UserLogin, db: Annotated[AsyncSession, Depends(get_db)]):
+@rate_limit(*RateLimitConfig.AUTH_LOGIN, by_ip=True)
+async def login(
+    login_data: UserLogin,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
     """
     用户登录接口
     
     - **username**: 用户名或邮箱
     - **password**: 密码
     """
+    _ = request
     user = await user_service.authenticate(db, login_data.username, login_data.password)
     
     if not user:
@@ -224,6 +236,7 @@ async def admin_list_users(
 async def admin_toggle_user_active(
     user_id: int,
     current_user: Annotated[User, Depends(require_admin)],
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """切换用户激活状态（需要管理员权限）"""
@@ -235,6 +248,18 @@ async def admin_toggle_user_active(
         raise HTTPException(status_code=400, detail="不能修改自己的状态")
     
     user.is_active = not user.is_active
+    from ..routers.system import log_admin_action
+    from ..models.system import LogAction, LogModule
+
+    await log_admin_action(
+        db,
+        int(current_user.id),
+        LogAction.ENABLE if bool(user.is_active) else LogAction.DISABLE,
+        LogModule.USER,
+        target_id=int(user.id),
+        description=f"toggle_active -> {str(user.is_active).lower()}",
+        request=request,
+    )
     db.add(user)
     await db.commit()
     await db.refresh(user)
@@ -246,6 +271,7 @@ async def admin_update_user_role(
     user_id: int,
     role: str,
     current_user: Annotated[User, Depends(require_admin)],
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """修改用户角色（需要管理员权限）"""
@@ -259,7 +285,20 @@ async def admin_update_user_role(
     if user.id == current_user.id:
         raise HTTPException(status_code=400, detail="不能修改自己的角色")
     
+    prev_role = str(getattr(user, "role", "") or "")
     user.role = role
+    from ..routers.system import log_admin_action
+    from ..models.system import LogAction, LogModule
+
+    await log_admin_action(
+        db,
+        int(current_user.id),
+        LogAction.UPDATE,
+        LogModule.USER,
+        target_id=int(user.id),
+        description=f"role: {prev_role} -> {str(role)}",
+        request=request,
+    )
     db.add(user)
     await db.commit()
     await db.refresh(user)

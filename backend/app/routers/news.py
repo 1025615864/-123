@@ -541,8 +541,9 @@ async def admin_list_news_sources(
 @router.post("/admin/sources", response_model=NewsSourceResponse, summary="管理员创建采集来源")
 async def admin_create_news_source(
     data: NewsSourceCreate,
-    _current_user: Annotated[User, Depends(require_admin)],
+    current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
 ):
     feed_url = str(getattr(data, "feed_url", "") or "").strip()
     if not feed_url:
@@ -565,6 +566,18 @@ async def admin_create_news_source(
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="feed_url已存在")
     await db.refresh(src)
+    from ..routers.system import log_admin_action
+
+    await log_admin_action(
+        db,
+        int(current_user.id),
+        "create",
+        "news",
+        target_id=int(src.id),
+        description=f"create_news_source feed_url={feed_url}",
+        request=request,
+    )
+    await db.commit()
     return NewsSourceResponse.model_validate(src)
 
 
@@ -572,8 +585,9 @@ async def admin_create_news_source(
 async def admin_update_news_source(
     source_id: int,
     data: NewsSourceUpdate,
-    _current_user: Annotated[User, Depends(require_admin)],
+    current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
 ):
     res = await db.execute(select(NewsSource).where(NewsSource.id == int(source_id)))
     src = res.scalar_one_or_none()
@@ -605,14 +619,28 @@ async def admin_update_news_source(
         await db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="feed_url已存在")
     await db.refresh(src)
+
+    from ..routers.system import log_admin_action
+
+    await log_admin_action(
+        db,
+        int(current_user.id),
+        "update",
+        "news",
+        target_id=int(src.id),
+        description=f"update_news_source source_id={int(source_id)}",
+        request=request,
+    )
+    await db.commit()
     return NewsSourceResponse.model_validate(src)
 
 
 @router.delete("/admin/sources/{source_id}", summary="管理员删除采集来源")
 async def admin_delete_news_source(
     source_id: int,
-    _current_user: Annotated[User, Depends(require_admin)],
+    current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
 ):
     res = await db.execute(select(NewsSource).where(NewsSource.id == int(source_id)))
     src = res.scalar_one_or_none()
@@ -621,6 +649,19 @@ async def admin_delete_news_source(
 
     _ = await db.execute(delete(NewsIngestRun).where(NewsIngestRun.source_id == int(source_id)))
     await db.delete(src)
+
+    from ..routers.system import log_admin_action
+
+    await log_admin_action(
+        db,
+        int(current_user.id),
+        "delete",
+        "news",
+        target_id=int(source_id),
+        description=f"delete_news_source source_id={int(source_id)}",
+        request=request,
+    )
+
     await db.commit()
     return {"message": "删除成功"}
 
@@ -628,8 +669,9 @@ async def admin_delete_news_source(
 @router.post("/admin/sources/{source_id}/ingest/run-once", summary="管理员手动触发单个来源采集")
 async def admin_run_ingest_once(
     source_id: int,
-    _current_user: Annotated[User, Depends(require_admin)],
+    current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
 ):
     res = await db.execute(select(NewsSource.id).where(NewsSource.id == int(source_id)))
     exists = res.scalar_one_or_none()
@@ -637,7 +679,20 @@ async def admin_run_ingest_once(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="来源不存在")
 
     stats = await rss_ingest_service.run_once(db, source_id=int(source_id))
-    return {"message": "ok", **{k: int(v) for k, v in stats.items()}}
+
+    from ..routers.system import log_admin_action
+
+    await log_admin_action(
+        db,
+        int(current_user.id),
+        "import",
+        "news",
+        target_id=int(source_id),
+        description=f"ingest_run_once source_id={int(source_id)}",
+        request=request,
+    )
+    await db.commit()
+    return {"message": "ok", "stats": stats}
 
 
 @router.get("/admin/ingest-runs", response_model=NewsIngestRunListResponse, summary="管理员获取采集运行记录")
@@ -1369,8 +1424,9 @@ async def admin_review_news(
 @router.post("/admin/{news_id}/ai/rerun", summary="管理员重跑新闻AI标注")
 async def admin_rerun_news_ai(
     news_id: int,
-    _current_user: Annotated[User, Depends(require_admin)],
+    current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
 ):
     from ..services.news_ai_pipeline_service import news_ai_pipeline_service
 
@@ -1379,6 +1435,17 @@ async def admin_rerun_news_ai(
     except ValueError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="新闻不存在")
 
+    from ..routers.system import log_admin_action
+
+    await log_admin_action(
+        db,
+        int(current_user.id),
+        "rerun_ai",
+        "news",
+        target_id=int(news_id),
+        description=f"rerun_news_ai news_id={int(news_id)}",
+        request=request,
+    )
     return {"message": "ok"}
 
 

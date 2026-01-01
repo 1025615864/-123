@@ -1,7 +1,7 @@
 """通知消息API路由"""
 from typing import Annotated, ClassVar, cast
 
-from fastapi import APIRouter, Depends, Query, HTTPException, status
+from fastapi import APIRouter, Depends, Query, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update
 from pydantic import BaseModel, ConfigDict
@@ -288,8 +288,9 @@ class SystemNotificationResponse(BaseModel):
 @router.post("/admin/broadcast", summary="发布系统通知（管理员）")
 async def broadcast_notification(
     data: SystemNotificationCreate,
-    _current_user: Annotated[User, Depends(require_admin)],
+    current_user: Annotated[User, Depends(require_admin)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
 ):
     """
     向所有用户发布系统通知
@@ -321,6 +322,19 @@ async def broadcast_notification(
         notifications.append(notification)
     
     db.add_all(notifications)
+
+    from ..routers.system import log_admin_action
+    from ..models.system import LogAction, LogModule
+
+    await log_admin_action(
+        db,
+        int(current_user.id),
+        LogAction.CREATE,
+        LogModule.SYSTEM,
+        target_id=None,
+        description=f"broadcast_notification title={str(getattr(data, 'title', '') or '').strip()} targets={len(user_ids)}",
+        request=request,
+    )
     await db.commit()
     
     # 通过WebSocket推送实时通知
