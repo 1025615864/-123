@@ -10,8 +10,11 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pydantic import SecretStr
+from sqlalchemy import select, or_
 
 from ..config import get_settings
+from ..database import AsyncSessionLocal
+from ..models.knowledge import LegalKnowledge
 from ..schemas.ai import LawReference
 from .ai_response_strategy import ResponseStrategy, ResponseStrategyDecider, SearchQuality
 from .ai_intent import AiIntentClassifier
@@ -365,6 +368,94 @@ class AILegalAssistant:
     def clear_session(self, session_id: str) -> None:
         _ = self.conversation_histories.pop(str(session_id), None)
         _ = self._last_seen.pop(str(session_id), None)
+
+    async def _search_references_with_db_fallback(
+        self,
+        query: str,
+        *,
+        k: int = 5,
+    ) -> tuple[list[tuple[str, dict[str, object], float]], SearchQuality, bool]:
+        refs, quality = self.knowledge_base.search_with_quality_control(query, k=k)
+        if refs:
+            return refs, quality, False
+
+        q = str(query or "").strip()
+        if not q:
+            return refs, quality, False
+
+        keyword = q[:200]
+        pattern = f"%{keyword}%"
+
+        try:
+            async with AsyncSessionLocal() as session:
+                stmt = (
+                    select(LegalKnowledge)
+                    .where(
+                        LegalKnowledge.is_active == True,
+                        or_(
+                            LegalKnowledge.title.ilike(pattern),
+                            LegalKnowledge.content.ilike(pattern),
+                            LegalKnowledge.keywords.ilike(pattern),
+                            LegalKnowledge.category.ilike(pattern),
+                        ),
+                    )
+                    .order_by(LegalKnowledge.weight.desc(), LegalKnowledge.created_at.desc())
+                    .limit(int(max(1, min(10, k))))
+                )
+                rows = (await session.execute(stmt)).scalars().all()
+
+            if not rows:
+                return refs, quality, True
+
+            packed: list[tuple[str, dict[str, object], float]] = []
+            for item in rows:
+                title = str(getattr(item, "title", "") or "").strip()
+                article = str(getattr(item, "article_number", "") or "").strip()
+                content = str(getattr(item, "content", "") or "").strip()
+
+                if not content:
+                    continue
+
+                display = f"【{title}】{article}\n{content}" if article else f"【{title}】\n{content}"
+
+                metadata: dict[str, object] = {
+                    "law_name": title or "未知法律",
+                    "article": article or "",
+                    "source": str(getattr(item, "source", "") or getattr(item, "category", "") or ""),
+                }
+
+                similarity = 0.6
+                if title and keyword in title:
+                    similarity = 0.75
+                elif keyword in content:
+                    similarity = 0.65
+
+                packed.append((display, metadata, float(similarity)))
+
+            if not packed:
+                return refs, quality, True
+
+            avg_similarity = sum(float(r[2]) for r in packed) / float(len(packed))
+            confidence = "medium" if len(packed) >= 2 else "low"
+            logger.info(
+                "kb_fallback_db_search used=1 results=%s avg_similarity=%.3f",
+                str(len(packed)),
+                float(avg_similarity),
+            )
+
+            return (
+                packed,
+                SearchQuality(
+                    total_candidates=len(packed),
+                    qualified_count=len(packed),
+                    avg_similarity=float(avg_similarity),
+                    confidence=str(confidence),
+                ),
+                True,
+            )
+        except Exception:
+            logger.exception("kb_fallback_db_search failed")
+            return refs, quality, True
     
     async def chat(
         self, 
@@ -417,6 +508,7 @@ class AILegalAssistant:
                     "qualified_count": 0,
                     "avg_similarity": 0.0,
                     "confidence": "low",
+                    "fallback_used": False,
                 },
                 "disclaimer": str(disclaimer),
                 "model_used": None,
@@ -425,7 +517,7 @@ class AILegalAssistant:
             }
             return session_id, answer, [], meta
 
-        references, quality = self.knowledge_base.search_with_quality_control(message, k=5)
+        references, quality, kb_fallback_used = await self._search_references_with_db_fallback(message, k=5)
         decision = self.strategy_decider.decide(message, quality, risk_level=safety.risk_level)
         disclaimer = self.disclaimer_manager.get_disclaimer(risk_level=safety.risk_level, strategy=decision.strategy)
         context = self._build_context(references)
@@ -515,6 +607,7 @@ class AILegalAssistant:
                 "qualified_count": int(quality.qualified_count),
                 "avg_similarity": float(quality.avg_similarity),
                 "confidence": str(quality.confidence),
+                "fallback_used": bool(kb_fallback_used),
             },
             "disclaimer": str(disclaimer),
             "model_used": model_used_out,
@@ -567,6 +660,7 @@ class AILegalAssistant:
                         "qualified_count": 0,
                         "avg_similarity": 0.0,
                         "confidence": "low",
+                        "fallback_used": False,
                     },
                     "disclaimer": str(disclaimer),
                     "model_used": None,
@@ -600,6 +694,13 @@ class AILegalAssistant:
                     "risk_level": str(safety.risk_level.value),
                     "intent": str(intent_result.intent),
                     "needs_clarification": bool(intent_result.needs_clarification),
+                    "search_quality": {
+                        "total_candidates": 0,
+                        "qualified_count": 0,
+                        "avg_similarity": 0.0,
+                        "confidence": "low",
+                        "fallback_used": False,
+                    },
                     "model_used": None,
                     "fallback_used": False,
                     "model_attempts": [],
@@ -607,7 +708,7 @@ class AILegalAssistant:
             )
             return
 
-        references, quality = self.knowledge_base.search_with_quality_control(message, k=5)
+        references, quality, kb_fallback_used = await self._search_references_with_db_fallback(message, k=5)
         decision = self.strategy_decider.decide(message, quality, risk_level=safety.risk_level)
         disclaimer = self.disclaimer_manager.get_disclaimer(risk_level=safety.risk_level, strategy=decision.strategy)
         context = self._build_context(references)
@@ -665,6 +766,7 @@ class AILegalAssistant:
                         "qualified_count": int(quality.qualified_count),
                         "avg_similarity": float(quality.avg_similarity),
                         "confidence": str(quality.confidence),
+                        "fallback_used": bool(kb_fallback_used),
                     },
                     "disclaimer": str(disclaimer),
                     "model_used": None,
@@ -696,6 +798,7 @@ class AILegalAssistant:
                         "qualified_count": int(quality.qualified_count),
                         "avg_similarity": float(quality.avg_similarity),
                         "confidence": str(quality.confidence),
+                        "fallback_used": bool(kb_fallback_used),
                     },
                     "disclaimer": str(disclaimer),
                     "model_used": None,
@@ -753,6 +856,7 @@ class AILegalAssistant:
                         "qualified_count": int(quality.qualified_count),
                         "avg_similarity": float(quality.avg_similarity),
                         "confidence": str(quality.confidence),
+                        "fallback_used": bool(kb_fallback_used),
                     },
                     "disclaimer": str(disclaimer),
                     "model_used": model_used,
@@ -838,6 +942,13 @@ class AILegalAssistant:
                 "risk_level": str(safety.risk_level.value),
                 "intent": str(intent_result.intent),
                 "needs_clarification": bool(intent_result.needs_clarification),
+                "search_quality": {
+                    "total_candidates": int(quality.total_candidates),
+                    "qualified_count": int(quality.qualified_count),
+                    "avg_similarity": float(quality.avg_similarity),
+                    "confidence": str(quality.confidence),
+                    "fallback_used": bool(kb_fallback_used),
+                },
                 "model_used": cast(str | None, locals().get("model_used")),
                 "fallback_used": bool(locals().get("fallback_used") or False),
                 "model_attempts": list(locals().get("model_attempts") or []),
