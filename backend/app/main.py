@@ -218,6 +218,15 @@ async def response_validation_exception_handler(request: Request, exc: ResponseV
         content={"detail": exc.errors() if settings.debug else "服务器错误"},
     )
 
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    return response
+
 app.add_middleware(ErrorLoggingMiddleware)
 app.add_middleware(RequestLoggingMiddleware)
 
