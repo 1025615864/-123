@@ -70,7 +70,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             _ = self.request_records.pop(ip, None)
             _ = self._ip_last_seen.pop(ip, None)
     
-    def _check_rate_limit(self, ip: str) -> tuple[bool, str]:
+    def _check_rate_limit(self, ip: str) -> tuple[bool, str, int]:
         """检查是否超过速率限制"""
         current_time = time.time()
         self._clean_old_records(ip, current_time)
@@ -86,16 +86,21 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         one_second_ago = current_time - 1
         requests_last_second = sum(1 for t in records if t > one_second_ago)
         if requests_last_second >= self.requests_per_second:
-            return False, f"每秒请求过多，请稍后再试"
+            recent = [t for t in records if t > one_second_ago]
+            oldest_recent = min(recent) if recent else current_time
+            retry_after = int(max(1.0, oldest_recent + 1 - current_time))
+            return False, f"每秒请求过多，请稍后再试", retry_after
         
         # 检查每分钟请求数
         if len(records) >= self.requests_per_minute:
-            return False, f"请求过于频繁，请稍后再试"
+            oldest = min(records) if records else current_time
+            retry_after = int(max(1.0, oldest + 60 - current_time))
+            return False, f"请求过于频繁，请稍后再试", retry_after
         
         # 记录本次请求
         self.request_records[ip].append(current_time)
         self._ip_last_seen[ip] = current_time
-        return True, ""
+        return True, "", 0
     
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         """处理请求"""
@@ -108,12 +113,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         client_ip = self._get_client_ip(request)
         
         # 检查速率限制
-        allowed, message = self._check_rate_limit(client_ip)
+        allowed, message, retry_after = self._check_rate_limit(client_ip)
         if not allowed:
+            reset = str(int(time.time() + float(max(0, int(retry_after)))))
             return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 content={"detail": message},
-                headers={"Retry-After": "60"},
+                headers={
+                    "Retry-After": str(int(max(1, int(retry_after) or 1))),
+                    "X-RateLimit-Limit": str(self.requests_per_minute),
+                    "X-RateLimit-Remaining": "0",
+                    "X-RateLimit-Reset": reset,
+                },
             )
         
         # 继续处理请求
