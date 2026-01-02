@@ -1,6 +1,7 @@
 """Pytest配置文件"""
 import importlib
 import inspect
+from typing import Any, cast
 import pytest
 import pytest_asyncio
 from collections.abc import AsyncGenerator
@@ -65,10 +66,10 @@ async def client(test_session: AsyncSession) -> AsyncGenerator[AsyncClient, None
     
     app.dependency_overrides[get_db] = override_get_db
     
-    transport_kwargs = {"app": app}
+    extra_transport_kwargs: dict[str, Any] = {}
     if "lifespan" in inspect.signature(ASGITransport.__init__).parameters:
-        transport_kwargs["lifespan"] = "off"
-    transport = ASGITransport(**transport_kwargs)
+        extra_transport_kwargs["lifespan"] = "off"
+    transport = ASGITransport(app=app, **cast(Any, extra_transport_kwargs))
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
     
