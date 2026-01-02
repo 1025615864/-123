@@ -29,6 +29,7 @@ from ..services.report_generator import (
 from ..schemas.ai import (
     ChatRequest, 
     ChatResponse, 
+    SearchQualityInfo,
     ConsultationResponse,
     ConsultationListItem,
     MessageResponse,
@@ -436,7 +437,14 @@ async def chat_with_ai(
                 "duration_ms": int((time.time() - started_at) * 1000),
             },
         )
-        
+
+        search_quality_raw = meta.get("search_quality")
+        search_quality = (
+            SearchQualityInfo.model_validate(search_quality_raw)
+            if isinstance(search_quality_raw, dict)
+            else None
+        )
+
         return ChatResponse(
             session_id=session_id,
             answer=answer,
@@ -446,7 +454,7 @@ async def chat_with_ai(
             strategy_reason=cast(str | None, meta.get("strategy_reason")) if isinstance(meta.get("strategy_reason"), str) else None,
             confidence=cast(str | None, meta.get("confidence")) if isinstance(meta.get("confidence"), str) else None,
             risk_level=cast(str | None, meta.get("risk_level")) if isinstance(meta.get("risk_level"), str) else None,
-            search_quality=cast(object, meta.get("search_quality")) if isinstance(meta.get("search_quality"), dict) else None,
+            search_quality=search_quality,
             disclaimer=cast(str | None, meta.get("disclaimer")) if isinstance(meta.get("disclaimer"), str) else None,
             model_used=cast(str | None, meta.get("model_used")) if isinstance(meta.get("model_used"), str) else None,
             fallback_used=cast(bool | None, meta.get("fallback_used")) if isinstance(meta.get("fallback_used"), bool) else None,
