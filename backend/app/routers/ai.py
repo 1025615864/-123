@@ -8,7 +8,8 @@ import logging
 import time
 import inspect as py_inspect
 import urllib.parse
-from typing import Annotated, cast
+from collections.abc import Callable
+from typing import Annotated, Any, cast
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, UploadFile, File, status
@@ -160,7 +161,7 @@ def _enforce_guest_ai_quota(request: Request) -> None:
     )
 
 
-def _try_get_ai_assistant():
+def _try_get_ai_assistant() -> Any | None:
     try:
         from ..services.ai_assistant import get_ai_assistant
 
@@ -169,7 +170,9 @@ def _try_get_ai_assistant():
         return None
 
 
-def _supports_kwarg(func: object, name: str) -> bool:
+def _supports_kwarg(func: Callable[..., Any] | None, name: str) -> bool:
+    if func is None:
+        return False
     try:
         sig = py_inspect.signature(func)
         params = sig.parameters
@@ -338,7 +341,7 @@ async def chat_with_ai(
             )
 
         user_profile = _build_user_profile(current_user)
-        chat_kwargs: dict[str, object] = {
+        chat_kwargs: dict[str, Any] = {
             "message": payload.message,
             "session_id": payload.session_id,
             "initial_history": seed_history,
@@ -346,17 +349,24 @@ async def chat_with_ai(
         if user_profile and _supports_kwarg(getattr(assistant, "chat", None), "user_profile"):
             chat_kwargs["user_profile"] = user_profile
 
-        chat_result = await assistant.chat(**cast(dict, chat_kwargs))
+        chat_result: object = await cast(Any, assistant).chat(**chat_kwargs)
 
-        meta: dict[str, object] = {}
-        if isinstance(chat_result, tuple) and len(chat_result) == 3:
-            session_id, answer, references = chat_result
-        elif isinstance(chat_result, tuple) and len(chat_result) == 4:
-            session_id, answer, references, meta_obj = chat_result
+        meta: dict[str, Any] = {}
+        if not isinstance(chat_result, tuple):
+            raise RuntimeError("invalid assistant.chat result")
+
+        if len(chat_result) == 3:
+            session_id_obj, answer_obj, references_obj = chat_result
+        elif len(chat_result) == 4:
+            session_id_obj, answer_obj, references_obj, meta_obj = chat_result
             if isinstance(meta_obj, dict):
-                meta = cast(dict[str, object], meta_obj)
+                meta = cast(dict[str, Any], meta_obj)
         else:
             raise RuntimeError("invalid assistant.chat result")
+
+        session_id = cast(str, session_id_obj) if isinstance(session_id_obj, str) else str(session_id_obj)
+        answer = cast(str, answer_obj) if isinstance(answer_obj, str) else str(answer_obj)
+        references: list[Any] = cast(list[Any], references_obj) if isinstance(references_obj, list) else []
 
         if consultation is None:
             result = await db.execute(
