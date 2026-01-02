@@ -24,7 +24,8 @@ export const queryKeys = {
 
   publicFaq: () => ["public-faq"] as const,
 
-  sharedConsultation: (token: string) => ["shared-consultation", { token }] as const,
+  sharedConsultation: (token: string) =>
+    ["shared-consultation", { token }] as const,
 
   lawFirms: (keyword: string, city: string) =>
     ["lawfirms", { keyword, city }] as const,
@@ -142,6 +143,9 @@ export const queryKeys = {
     ] as const,
 
   documentTypes: () => ["document-types"] as const,
+  myDocuments: (page: number, pageSize: number) =>
+    ["my-documents", { page, pageSize }] as const,
+  myDocumentDetail: (docId: number | null) => ["my-document", docId] as const,
 
   systemConfigs: () => ["system-configs"] as const,
 
