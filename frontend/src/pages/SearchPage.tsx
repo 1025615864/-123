@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
-import { Search, TrendingUp, Trash2, History } from "lucide-react";
+import { Link, useSearchParams } from "react-router-dom";
+import { Search, TrendingUp, Trash2, History, ArrowRight, Sparkles } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import PageHeader from "../components/PageHeader";
 import {
@@ -18,6 +18,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
 import { getApiErrorMessage } from "../utils";
 import { queryKeys } from "../queryKeys";
+import { toolNavItems } from "../navigation";
 
 interface SearchResultItemBase {
   id: number;
@@ -69,6 +70,7 @@ interface HotKeyword {
 }
 
 export default function SearchPage() {
+  const [urlParams, setUrlParams] = useSearchParams();
   const { isAuthenticated } = useAuth();
   const { actualTheme } = useTheme();
   const toast = useToast();
@@ -77,6 +79,15 @@ export default function SearchPage() {
   const [q, setQ] = useState("");
   const [submittedQuery, setSubmittedQuery] = useState("");
   const [suggestionsEnabled, setSuggestionsEnabled] = useState(true);
+
+  useEffect(() => {
+    if (submittedQuery.trim()) return;
+    const initial = String(urlParams.get("q") ?? "").trim();
+    if (!initial) return;
+    setQ(initial);
+    setSubmittedQuery(initial);
+    setSuggestionsEnabled(false);
+  }, [submittedQuery, urlParams]);
 
   const [debouncedQ, setDebouncedQ] = useState("");
 
@@ -204,20 +215,54 @@ export default function SearchPage() {
       setQ(query);
       setSuggestionsEnabled(false);
       setSubmittedQuery(query);
+      setUrlParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("q", query);
+        return next;
+      });
       if (isAuthenticated) {
         queryClient.invalidateQueries({
           queryKey: queryKeys.searchHistoryRoot(),
         });
       }
     },
-    [isAuthenticated, q, queryClient, toast]
+    [isAuthenticated, q, queryClient, toast, setUrlParams]
   );
 
   const suggestions = suggestionsQuery.data ?? [];
   const hotKeywords = hotQuery.data ?? [];
   const history = isAuthenticated ? historyQuery.data ?? [] : [];
-  const results = searchQuery.data ?? null;
+  const results = useMemo(() => {
+    if (submittedQuery.trim().length < 2) return null;
+    return searchQuery.data ?? null;
+  }, [searchQuery.data, submittedQuery]);
   const searching = searchQuery.isFetching;
+
+  const categoryCounts = useMemo(() => {
+    if (!results) return null;
+    const news = results.news.length;
+    const posts = results.posts.length;
+    const lawfirms = results.lawfirms.length;
+    const lawyers = results.lawyers.length;
+    const knowledge = results.knowledge.length;
+    const total = news + posts + lawfirms + lawyers + knowledge;
+    return { total, news, posts, lawfirms, lawyers, knowledge };
+  }, [results]);
+
+  const clearAllConditions = useCallback(() => {
+    setQ("");
+    setDebouncedQ("");
+    setSubmittedQuery("");
+    setSuggestionsEnabled(true);
+
+    setUrlParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.delete("q");
+      return next;
+    });
+
+    queryClient.removeQueries({ queryKey: ["search"] });
+  }, [queryClient, setUrlParams]);
 
   const escapeRegExp = useCallback((value: string) => {
     return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -292,6 +337,13 @@ export default function SearchPage() {
             <Button onClick={() => performSearch()} disabled={searching}>
               搜索
             </Button>
+            <Button
+              variant="outline"
+              onClick={clearAllConditions}
+              disabled={searching && submittedQuery.trim().length > 0}
+            >
+              清空条件
+            </Button>
             {isAuthenticated && (
               <Button variant="outline" icon={Trash2} onClick={clearHistory}>
                 清空历史
@@ -302,7 +354,7 @@ export default function SearchPage() {
       </Card>
 
       <div className="grid lg:grid-cols-2 gap-6">
-        <Card variant="surface" padding="lg">
+        <Card variant="surface" padding="lg" data-testid="search-hot-card">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold text-slate-900 flex items-center gap-2 dark:text-white">
               <TrendingUp className="h-5 w-5 text-amber-600 dark:text-amber-400" />
@@ -385,16 +437,118 @@ export default function SearchPage() {
             title="请输入关键词开始搜索"
             description="你可以从热门词或历史记录开始"
             tone={actualTheme}
+            action={
+              <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    document.querySelector('[data-testid="search-hot-card"]')?.scrollIntoView({
+                      behavior: "smooth",
+                      block: "center",
+                    });
+                  }}
+                >
+                  看看热门搜索
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+                <Link
+                  to="/chat"
+                  className="inline-flex items-center justify-center gap-2 rounded-lg font-semibold transition-all outline-none focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 active:scale-[0.99] px-5 py-3 text-sm btn-primary text-white"
+                >
+                  去 AI 咨询
+                  <Sparkles className="h-4 w-4" />
+                </Link>
+              </div>
+            }
           />
         ) : !hasAnyResults ? (
           <EmptyState
             icon={Search}
             title="没有找到相关内容"
-            description="尝试更换关键词或减少条件"
+            description="试试换个关键词、减少限制，或直接进入 AI 咨询获得建议"
             tone={actualTheme}
+            action={
+              <div className="space-y-6">
+                <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+                  <Button variant="outline" onClick={clearAllConditions}>
+                    清空条件
+                  </Button>
+                  <Link
+                    to={`/chat?draft=${encodeURIComponent(submittedQuery.trim())}`}
+                    className="inline-flex items-center justify-center gap-2 rounded-lg font-semibold transition-all outline-none focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 active:scale-[0.99] px-5 py-3 text-sm btn-primary text-white"
+                  >
+                    让 AI 帮我分析
+                    <Sparkles className="h-4 w-4" />
+                  </Link>
+                  <Link
+                    to="/lawfirm"
+                    className="inline-flex items-center justify-center gap-2 rounded-lg font-semibold transition-all outline-none focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 active:scale-[0.99] px-5 py-3 text-sm btn-outline"
+                  >
+                    找律师
+                    <ArrowRight className="h-4 w-4" />
+                  </Link>
+                </div>
+
+                <div className="text-left max-w-3xl mx-auto">
+                  <div className="text-sm font-medium text-slate-900 mb-3 dark:text-white">
+                    你可以尝试：
+                  </div>
+                  <div className="grid md:grid-cols-3 gap-3">
+                    <div className="p-4 rounded-xl bg-slate-900/5 border border-slate-200/70 text-sm text-slate-700 dark:bg-white/5 dark:border-white/10 dark:text-white/70">
+                      换同义词（如“辞退/解除/补偿”）
+                    </div>
+                    <div className="p-4 rounded-xl bg-slate-900/5 border border-slate-200/70 text-sm text-slate-700 dark:bg-white/5 dark:border-white/10 dark:text-white/70">
+                      增加关键事实（时间、金额、地区）
+                    </div>
+                    <div className="p-4 rounded-xl bg-slate-900/5 border border-slate-200/70 text-sm text-slate-700 dark:bg-white/5 dark:border-white/10 dark:text-white/70">
+                      先用工具自查，再去咨询
+                    </div>
+                  </div>
+                </div>
+
+                <div className="max-w-3xl mx-auto text-left">
+                  <div className="text-sm font-medium text-slate-900 mb-3 dark:text-white">
+                    热门工具推荐
+                  </div>
+                  <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    {toolNavItems.map(({ path, label, icon: Icon }) => (
+                      <Link
+                        key={path}
+                        to={path}
+                        className="group p-4 rounded-xl bg-white border border-slate-200/70 hover:bg-slate-50 transition-colors dark:bg-white/5 dark:border-white/10 dark:hover:bg-white/10"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center">
+                            <Icon className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-slate-900 dark:text-white">
+                              {label}
+                            </div>
+                            <div className="text-xs text-slate-500 dark:text-white/40">
+                              立即使用
+                            </div>
+                          </div>
+                        </div>
+                      </Link>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            }
           />
         ) : (
           <div className="space-y-8">
+            {categoryCounts && (
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="info">共 {categoryCounts.total} 条</Badge>
+                <Badge variant="default">新闻 {categoryCounts.news}</Badge>
+                <Badge variant="default">帖子 {categoryCounts.posts}</Badge>
+                <Badge variant="default">律所 {categoryCounts.lawfirms}</Badge>
+                <Badge variant="default">律师 {categoryCounts.lawyers}</Badge>
+                <Badge variant="default">知识库 {categoryCounts.knowledge}</Badge>
+              </div>
+            )}
             {results.news.length > 0 && (
               <div>
                 <h4 className="text-slate-700 font-medium mb-3 dark:text-white/80">

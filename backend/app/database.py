@@ -1,6 +1,7 @@
 """数据库配置"""
 import importlib
 import logging
+import os
 from pathlib import Path
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
@@ -18,9 +19,18 @@ if settings.database_url.startswith("sqlite"):
         if db_path.startswith("./"):
             Path(db_path).parent.mkdir(parents=True, exist_ok=True)
 
+sql_echo_raw = os.getenv("SQL_ECHO", "").strip().lower()
+engine_echo = sql_echo_raw in {"1", "true", "yes", "on"}
+
+sql_level = logging.INFO if engine_echo else logging.WARNING
+logging.getLogger("sqlalchemy").setLevel(sql_level)
+logging.getLogger("sqlalchemy.engine").setLevel(sql_level)
+logging.getLogger("sqlalchemy.engine.Engine").setLevel(sql_level)
+logging.getLogger("sqlalchemy.pool").setLevel(sql_level)
+
 engine = create_async_engine(
     settings.database_url,
-    echo=settings.debug,
+    echo=engine_echo,
     future=True
 )
 

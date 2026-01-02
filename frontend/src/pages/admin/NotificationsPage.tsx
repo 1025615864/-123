@@ -182,7 +182,7 @@ export default function NotificationsPage() {
             <Input
               value={newNotification.link}
               onChange={(e) => setNewNotification({ ...newNotification, link: e.target.value })}
-              placeholder="https://example.com/page"
+              placeholder="https://baixinghelper.cn/page"
             />
           </div>
           <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3">

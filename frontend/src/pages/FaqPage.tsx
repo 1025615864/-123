@@ -1,7 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { HelpCircle, ChevronDown, ChevronUp, ArrowRight } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { Card, Button, EmptyState, Loading } from '../components/ui'
 import PageHeader from '../components/PageHeader'
 import api from '../api/client'
@@ -127,9 +129,52 @@ export default function FaqPage() {
                 </button>
                 {expanded === idx && (
                   <div id={`faq-panel-${idx}`} className="px-4 pb-4">
-                    <p className="text-sm text-slate-600 leading-relaxed dark:text-white/60">
-                      {faq.answer}
-                    </p>
+                    <div className="text-sm text-slate-600 leading-relaxed dark:text-white/60">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          p: ({ children }: { children?: ReactNode }) => (
+                            <p className="mt-2 first:mt-0">{children}</p>
+                          ),
+                          h1: ({ children }: { children?: ReactNode }) => (
+                            <div className="text-base font-semibold mt-3 first:mt-0 text-slate-900 dark:text-white">{children}</div>
+                          ),
+                          h2: ({ children }: { children?: ReactNode }) => (
+                            <div className="text-base font-semibold mt-3 first:mt-0 text-slate-900 dark:text-white">{children}</div>
+                          ),
+                          h3: ({ children }: { children?: ReactNode }) => (
+                            <div className="text-sm font-semibold mt-3 first:mt-0 text-slate-900 dark:text-white">{children}</div>
+                          ),
+                          ul: ({ children }: { children?: ReactNode }) => (
+                            <ul className="list-disc pl-5 mt-2 space-y-1">{children}</ul>
+                          ),
+                          ol: ({ children }: { children?: ReactNode }) => (
+                            <ol className="list-decimal pl-5 mt-2 space-y-1">{children}</ol>
+                          ),
+                          li: ({ children }: { children?: ReactNode }) => (
+                            <li className="">{children}</li>
+                          ),
+                          a: ({
+                            children,
+                            href,
+                          }: {
+                            children?: ReactNode
+                            href?: string
+                          }) => (
+                            <a
+                              href={href}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-blue-600 hover:underline dark:text-blue-400"
+                            >
+                              {children}
+                            </a>
+                          ),
+                        }}
+                      >
+                        {faq.answer}
+                      </ReactMarkdown>
+                    </div>
                   </div>
                 )}
               </div>

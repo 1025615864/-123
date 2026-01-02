@@ -86,6 +86,9 @@ cd backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+# 推荐先复制一份本地配置（默认 SQLite，可直接跑）：
+# cp env.example .env
+# 如需查看 SQL（排障用）：设置 SQL_ECHO=1
 # Windows 上如果 `pip`/`python` 指向 WindowsApps 的 stub，可改用：
 # py -m pip install -r requirements.txt
 # Windows 上如果 `python` 指向 WindowsApps 的 stub，可改用：

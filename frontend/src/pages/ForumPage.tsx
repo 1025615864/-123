@@ -1,8 +1,8 @@
-import { useMemo, useState, useEffect, useCallback } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useMemo, useState, useEffect, useCallback, useRef } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { FileText, MessageSquare, Plus, Search, Trash2 } from 'lucide-react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Card, Input, Button, Chip, EmptyState, LinkButton, PostCardSkeleton, VirtualWindowList } from '../components/ui'
+import { Card, Input, Button, Chip, EmptyState, LinkButton, PostCardSkeleton, VirtualWindowList, Pagination } from '../components/ui'
 import PageHeader from '../components/PageHeader'
 import PostCard from '../components/PostCard'
 import api from '../api/client'
@@ -19,6 +19,9 @@ interface PostsListResponse {
 }
 
 export default function ForumPage() {
+  const [urlParams, setUrlParams] = useSearchParams()
+  const didInitFromUrlRef = useRef(false)
+
   const [page, setPage] = useState(1)
   const pageSize = 20
   const [activeCategory, setActiveCategory] = useState('全部')
@@ -30,6 +33,63 @@ export default function ForumPage() {
   const navigate = useNavigate()
 
   const { prefetch } = usePrefetchLimiter()
+
+  const postCategories = useMemo(() => ['法律咨询', '经验分享', '案例讨论', '政策解读', '其他'], [])
+
+  const categories = useMemo(
+    () =>
+      isAuthenticated
+        ? ['我的帖子', '我的收藏', '全部', ...postCategories]
+        : ['全部', ...postCategories],
+    [isAuthenticated, postCategories]
+  )
+
+  useEffect(() => {
+    if (didInitFromUrlRef.current) return
+
+    const rawPage = Number(String(urlParams.get('page') ?? '1'))
+    const nextPage = Number.isFinite(rawPage) && rawPage >= 1 ? Math.floor(rawPage) : 1
+
+    const rawCat = String(urlParams.get('cat') ?? '').trim()
+    const nextCategory = rawCat && categories.includes(rawCat) ? rawCat : '全部'
+
+    const nextKeyword = String(urlParams.get('kw') ?? '')
+
+    setPage(nextPage)
+    setActiveCategory(nextCategory)
+    setKeyword(nextKeyword)
+    didInitFromUrlRef.current = true
+  }, [categories, urlParams])
+
+  useEffect(() => {
+    if (!didInitFromUrlRef.current) return
+    if (isAuthenticated) return
+    if (activeCategory !== '我的收藏' && activeCategory !== '我的帖子') return
+    setActiveCategory('全部')
+    setPage(1)
+  }, [activeCategory, isAuthenticated])
+
+  useEffect(() => {
+    if (!didInitFromUrlRef.current) return
+    setUrlParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+
+        if (page > 1) next.set('page', String(page))
+        else next.delete('page')
+
+        if (activeCategory && activeCategory !== '全部') next.set('cat', activeCategory)
+        else next.delete('cat')
+
+        const kw = keyword.trim()
+        if (kw) next.set('kw', kw)
+        else next.delete('kw')
+
+        return next
+      },
+      { replace: true }
+    )
+  }, [activeCategory, keyword, page, setUrlParams])
 
   const [debouncedKeyword, setDebouncedKeyword] = useState('')
 
@@ -134,19 +194,25 @@ export default function ForumPage() {
           .filter((p) => (isFavoritesMode ? p.is_favorited : true))
         return { ...old, items: nextItems, total: isFavoritesMode ? nextItems.length : old.total }
       })
+
+      if (result?.favorited) {
+        toast.success('已收藏')
+      } else {
+        toast.success('已取消收藏')
+      }
     },
   })
 
   const handleToggleFavorite = useCallback(
     async (postId: number) => {
-      if (!isAuthenticated) return
+      if (!isAuthenticated) {
+        toast.info('登录后可收藏')
+        return
+      }
       toggleFavoriteMutation.mutate(postId)
     },
-    [isAuthenticated, toggleFavoriteMutation]
+    [isAuthenticated, toast, toggleFavoriteMutation]
   )
-
-  const postCategories = ['法律咨询', '经验分享', '案例讨论', '政策解读', '其他']
-  const categories = isAuthenticated ? ['我的帖子', '我的收藏', '全部', ...postCategories] : ['全部', ...postCategories]
 
   const hotLimit = 8
   const activeCategoryForHot = !isFavoritesMode && !isMyPostsMode && activeCategory && activeCategory !== '全部' ? activeCategory : null
@@ -181,6 +247,18 @@ export default function ForumPage() {
   }
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
+
+  const emptyStateTitle = isFavoritesMode
+    ? '暂无收藏帖子'
+    : isMyPostsMode
+    ? '你还没有发布帖子'
+    : '暂无符合条件的帖子'
+
+  const emptyStateDescription = isFavoritesMode
+    ? '去论坛逛逛，收藏感兴趣的帖子会显示在这里'
+    : isMyPostsMode
+    ? '发布你的第一篇帖子，获取社区帮助'
+    : '试试切换分类或修改搜索关键词'
 
   const prefetchPostDetail = (id: number) => {
     const postId = String(id)
@@ -230,7 +308,10 @@ export default function ForumPage() {
               <Input
                 icon={Search}
                 value={keyword}
-                onChange={(e) => setKeyword(e.target.value)}
+                onChange={(e) => {
+                  setPage(1)
+                  setKeyword(e.target.value)
+                }}
                 placeholder="搜索帖子..."
                 className="py-2.5"
               />
@@ -288,7 +369,14 @@ export default function ForumPage() {
 
       <div className="flex flex-wrap gap-3">
         {categories.map((cat) => (
-          <Chip key={cat} active={activeCategory === cat} onClick={() => setActiveCategory(cat)}>
+          <Chip
+            key={cat}
+            active={activeCategory === cat}
+            onClick={() => {
+              setPage(1)
+              setActiveCategory(cat)
+            }}
+          >
             {cat}
           </Chip>
         ))}
@@ -299,11 +387,25 @@ export default function ForumPage() {
           {posts.length === 0 ? (
             <EmptyState
               icon={MessageSquare}
-              title="暂无符合条件的帖子"
-              description="试试切换分类或修改搜索关键词"
+              title={emptyStateTitle}
+              description={emptyStateDescription}
               size="lg"
               action={
-                isAuthenticated ? (
+                isFavoritesMode ? (
+                  <div className="mt-6">
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        setActiveCategory('全部')
+                        setKeyword('')
+                        setPage(1)
+                      }}
+                      className="py-2.5"
+                    >
+                      去逛逛论坛
+                    </Button>
+                  </div>
+                ) : isAuthenticated ? (
                   <div className="mt-6">
                     <Button
                       onClick={() => navigate('/forum/new')}
@@ -334,38 +436,28 @@ export default function ForumPage() {
             />
           )}
 
-          {totalPages > 1 ? (
-            <div className="flex items-center justify-center gap-4 pt-2">
-              <Button
-                variant="outline"
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={page <= 1}
-                className="px-5"
-              >
-                上一页
-              </Button>
-              <div className="text-sm text-slate-600 dark:text-white/60">
-                第 {page} / {totalPages} 页
-              </div>
-              <Button
-                variant="outline"
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                disabled={page >= totalPages}
-                className="px-5"
-              >
-                下一页
-              </Button>
-            </div>
-          ) : null}
+          <Pagination
+            currentPage={page}
+            totalPages={totalPages}
+            onPageChange={(p) => setPage(p)}
+            className="pt-2"
+          />
         </div>
 
         <aside className="lg:col-span-4 space-y-6">
           <Card variant="surface" padding="lg" className="rounded-3xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-semibold text-slate-900 dark:text-white">热度榜</h3>
-              <Link to="/forum" className="text-xs text-slate-500 hover:text-slate-900 dark:text-white/40 dark:hover:text-white">
+              <button
+                type="button"
+                className="text-xs text-slate-500 hover:text-slate-900 dark:text-white/40 dark:hover:text-white"
+                onClick={() => {
+                  hotQuery.refetch()
+                  postsQuery.refetch()
+                }}
+              >
                 刷新
-              </Link>
+              </button>
             </div>
 
             {hotQuery.isLoading && (hotQuery.data ?? []).length === 0 ? (

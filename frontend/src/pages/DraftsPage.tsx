@@ -4,6 +4,7 @@ import { ArrowLeft, FileText, Plus, Trash2 } from 'lucide-react'
 
 import { Button, Card, EmptyState } from '../components/ui'
 import PageHeader from '../components/PageHeader'
+import { useToast } from '../hooks'
 import { storage } from '../utils'
 import { useTheme } from '../contexts/ThemeContext'
 
@@ -42,6 +43,7 @@ function getExcerpt(content: string, maxLen: number): string {
 export default function DraftsPage() {
   const navigate = useNavigate()
   const { actualTheme } = useTheme()
+  const toast = useToast()
 
   const [drafts, setDrafts] = useState<DraftItem[]>([])
 
@@ -73,6 +75,7 @@ export default function DraftsPage() {
     const next = drafts.filter((d) => d.id !== id)
     storage.set(DRAFTS_KEY, next)
     setDrafts(next)
+    toast.success('已删除草稿')
   }
 
   return (

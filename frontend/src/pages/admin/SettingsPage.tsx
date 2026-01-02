@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Save, Key, Globe, Bell, Shield, HelpCircle, Sparkles } from "lucide-react";
 import { Card, Input, Button, Textarea } from "../../components/ui";
 import { useQuery } from "@tanstack/react-query";
@@ -6,7 +7,6 @@ import api from "../../api/client";
 import { useAppMutation, useToast } from "../../hooks";
 import { getApiErrorMessage } from "../../utils";
 import { queryKeys } from "../../queryKeys";
-import { useMemo } from "react";
 
 interface ConfigItem {
   key: string;
@@ -131,8 +131,8 @@ export default function SettingsPage() {
   const [settings, setSettings] = useState({
     siteName: "百姓法律助手",
     siteDescription: "为普通百姓提供专业法律咨询服务",
-    contactEmail: "contact@example.com",
-    contactPhone: "400-123-4567",
+    contactEmail: "support@baixinghelper.cn",
+    contactPhone: "400-800-1234",
     enableAI: true,
     newsAiSummaryLlmEnabled: false,
     newsAiProviderStrategy: "priority",
@@ -145,6 +145,41 @@ export default function SettingsPage() {
     enableNotifications: true,
     maintenanceMode: false,
   });
+
+  const tabItems = [
+    { key: "base", label: "站点与基础", icon: Globe },
+    { key: "ai", label: "AI 咨询", icon: Shield },
+    { key: "news_ai", label: "新闻 AI", icon: Key },
+    { key: "content", label: "内容与审核", icon: HelpCircle },
+    { key: "notify", label: "通知与维护", icon: Bell },
+  ] as const;
+
+  type SettingsTabKey = (typeof tabItems)[number]["key"];
+  const [activeTab, setActiveTab] = useState<SettingsTabKey>("base");
+
+  const [urlParams, setUrlParams] = useSearchParams();
+  const didInitTabFromUrlRef = useRef(false);
+
+  useEffect(() => {
+    if (didInitTabFromUrlRef.current) return;
+    const rawTab = String(urlParams.get("tab") ?? "").trim();
+    const nextTab = tabItems.some((t) => t.key === rawTab) ? (rawTab as SettingsTabKey) : "base";
+    setActiveTab(nextTab);
+    didInitTabFromUrlRef.current = true;
+  }, [tabItems, urlParams]);
+
+  useEffect(() => {
+    if (!didInitTabFromUrlRef.current) return;
+    setUrlParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (activeTab !== "base") next.set("tab", activeTab);
+        else next.delete("tab");
+        return next;
+      },
+      { replace: true }
+    );
+  }, [activeTab, setUrlParams]);
 
   const faqPublicQuery = useQuery({
     queryKey: queryKeys.publicFaq(),
@@ -426,9 +461,35 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      <div className="grid lg:grid-cols-2 gap-6">
-        {/* 基本设置 */}
-        <Card variant="surface" padding="lg">
+      <div className="flex flex-wrap gap-2">
+        {tabItems.map((t) => {
+          const Icon = t.icon;
+          const isActive = activeTab === t.key;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setActiveTab(t.key)}
+              className={
+                "inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium border transition-all outline-none focus-visible:ring-2 focus-visible:ring-amber-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 " +
+                (isActive
+                  ? "bg-amber-500 border-amber-500 text-white"
+                  : "bg-white border-slate-200/70 text-slate-700 hover:bg-slate-50 hover:border-slate-300 dark:bg-white/5 dark:border-white/10 dark:text-white/70 dark:hover:bg-white/10 dark:hover:border-white/20")
+              }
+              aria-current={isActive ? "page" : undefined}
+            >
+              <Icon className="h-4 w-4" />
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className={activeTab === "base" ? "grid gap-6" : "grid lg:grid-cols-2 gap-6"}>
+        {activeTab === "base" ? (
+          <>
+            {/* 基本设置 */}
+            <Card variant="surface" padding="lg">
           <div className="flex items-center gap-3 mb-6">
             <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center">
               <Globe className="h-5 w-5 text-amber-600 dark:text-amber-400" />
@@ -479,9 +540,12 @@ export default function SettingsPage() {
               }
             />
           </div>
-        </Card>
+            </Card>
+          </>
+        ) : null}
 
-        <Card variant="surface" padding="lg">
+        {activeTab === "content" ? (
+          <Card variant="surface" padding="lg">
           <div className="flex items-center justify-between gap-3 mb-6">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center">
@@ -556,10 +620,13 @@ export default function SettingsPage() {
               )}
             </div>
           )}
-        </Card>
+          </Card>
+        ) : null}
 
-        {/* AI咨询运维状态 */}
-        <Card variant="surface" padding="lg">
+        {activeTab === "ai" ? (
+          <>
+            {/* AI咨询运维状态 */}
+            <Card variant="surface" padding="lg">
           <div className="flex items-center justify-between gap-3 mb-6">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-indigo-500/10 flex items-center justify-center">
@@ -701,10 +768,14 @@ export default function SettingsPage() {
               </div>
             </div>
           </div>
-        </Card>
+            </Card>
+          </>
+        ) : null}
 
-        {/* 新闻AI配置 */}
-        <Card variant="surface" padding="lg">
+        {activeTab === "news_ai" ? (
+          <>
+            {/* 新闻AI配置 */}
+            <Card variant="surface" padding="lg">
           <div className="flex items-center gap-3 mb-6">
             <div className="w-10 h-10 rounded-xl bg-emerald-500/10 flex items-center justify-center">
               <Key className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
@@ -828,9 +899,12 @@ export default function SettingsPage() {
               rows={5}
             />
           </div>
-        </Card>
+            </Card>
+          </>
+        ) : null}
 
-        <Card variant="surface" padding="lg">
+        {activeTab === "content" ? (
+          <Card variant="surface" padding="lg">
           <div className="flex items-center gap-3 mb-6">
             <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center">
               <Shield className="h-5 w-5 text-blue-600 dark:text-blue-400" />
@@ -891,10 +965,13 @@ export default function SettingsPage() {
               rows={6}
             />
           </div>
-        </Card>
+          </Card>
+        ) : null}
 
-        {/* 新闻AI运维状态 */}
-        <Card variant="surface" padding="lg">
+        {activeTab === "news_ai" ? (
+          <>
+            {/* 新闻AI运维状态 */}
+            <Card variant="surface" padding="lg">
           <div className="flex items-center gap-3 mb-6">
             <div className="w-10 h-10 rounded-xl bg-slate-500/10 flex items-center justify-center">
               <Shield className="h-5 w-5 text-slate-600 dark:text-white/70" />
@@ -1076,10 +1153,14 @@ export default function SettingsPage() {
               </div>
             </div>
           </div>
-        </Card>
+            </Card>
+          </>
+        ) : null}
 
-        {/* AI设置 */}
-        <Card variant="surface" padding="lg">
+        {activeTab === "ai" ? (
+          <>
+            {/* AI设置 */}
+            <Card variant="surface" padding="lg">
           <div className="flex items-center gap-3 mb-6">
             <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center">
               <Key className="h-5 w-5 text-purple-400" />
@@ -1129,10 +1210,14 @@ export default function SettingsPage() {
               </button>
             </div>
           </div>
-        </Card>
+            </Card>
+          </>
+        ) : null}
 
-        {/* 通知设置 */}
-        <Card variant="surface" padding="lg">
+        {activeTab === "notify" ? (
+          <>
+            {/* 通知设置 */}
+            <Card variant="surface" padding="lg">
           <div className="flex items-center gap-3 mb-6">
             <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center">
               <Bell className="h-5 w-5 text-blue-400" />
@@ -1180,10 +1265,10 @@ export default function SettingsPage() {
               </button>
             </div>
           </div>
-        </Card>
+            </Card>
 
-        {/* 维护模式 */}
-        <Card variant="surface" padding="lg">
+            {/* 维护模式 */}
+            <Card variant="surface" padding="lg">
           <div className="flex items-center gap-3 mb-6">
             <div className="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center">
               <Shield className="h-5 w-5 text-red-400" />
@@ -1231,7 +1316,9 @@ export default function SettingsPage() {
               </button>
             </div>
           </div>
-        </Card>
+            </Card>
+          </>
+        ) : null}
       </div>
 
       <div className="flex justify-end">

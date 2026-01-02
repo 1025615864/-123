@@ -1,26 +1,25 @@
 // 移动端底部导航组件
 import { Link, useLocation } from 'react-router-dom';
 import { useMemo, useState } from 'react';
-import { Calendar, Home, MessageSquare, MoreHorizontal, Newspaper, Scale, User, Search } from 'lucide-react';
+import { MoreHorizontal } from 'lucide-react';
 import { Modal } from './ui';
 
-interface NavItem {
-  path: string;
-  label: string;
-  icon: typeof Home;
-}
+import {
+  isRouteActive,
+  primaryNavItems,
+  secondaryNavItems,
+  toolNavItems,
+  type NavItem,
+} from '../navigation';
 
-const primaryNavItems: NavItem[] = [
-  { path: '/', label: '首页', icon: Home },
-  { path: '/news', label: '资讯', icon: Newspaper },
-  { path: '/chat', label: '咨询', icon: Scale },
-  { path: '/search', label: '搜索', icon: Search },
-  { path: '/profile', label: '我的', icon: User },
-];
+const bottomNavPaths: string[] = ['/', '/news', '/chat', '/forum', '/profile'];
+
+const bottomNavItems: NavItem[] = primaryNavItems.filter((it) => bottomNavPaths.includes(it.path));
 
 const moreNavItems: NavItem[] = [
-  { path: '/forum', label: '论坛', icon: MessageSquare },
-  { path: '/calendar', label: '日历', icon: Calendar },
+  ...primaryNavItems.filter((it) => !bottomNavPaths.includes(it.path)),
+  ...toolNavItems,
+  ...secondaryNavItems,
 ];
 
 export function MobileNav() {
@@ -29,7 +28,7 @@ export function MobileNav() {
 
   const isMoreActive = useMemo(() => {
     return moreNavItems.some(
-      (item) => location.pathname === item.path || location.pathname.startsWith(item.path)
+      (item) => isRouteActive(location.pathname, item.path)
     );
   }, [location.pathname]);
 
@@ -50,9 +49,8 @@ export function MobileNav() {
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-50 md:hidden pb-[env(safe-area-inset-bottom)] bg-white/95 dark:bg-slate-900/90 backdrop-blur-xl border-t border-slate-200/70 dark:border-white/10 shadow-[0_-12px_30px_-20px_rgba(15,23,42,0.22)] dark:shadow-[0_-12px_30px_-20px_rgba(0,0,0,0.65)]">
       <div className="flex justify-around items-center h-14">
-        {primaryNavItems.map(({ path, label, icon: Icon }) => {
-          const isActive = location.pathname === path || 
-            (path !== '/' && location.pathname.startsWith(path));
+        {bottomNavItems.map(({ path, label, icon: Icon }) => {
+          const isActive = isRouteActive(location.pathname, path);
           
           return (
             <Link
@@ -102,9 +100,7 @@ export function MobileNav() {
       >
         <div className="grid grid-cols-2 gap-3">
           {moreNavItems.map(({ path, label, icon: Icon }) => {
-            const isActive =
-              location.pathname === path ||
-              (path !== '/' && location.pathname.startsWith(path));
+            const isActive = isRouteActive(location.pathname, path);
             return (
               <Link
                 key={path}

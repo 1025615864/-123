@@ -484,7 +484,7 @@ export default function NewsSourcesManagePage() {
             label="Feed URL"
             value={form.feed_url}
             onChange={(e) => setForm({ ...form, feed_url: e.target.value })}
-            placeholder="https://example.com/rss.xml"
+            placeholder="https://baixinghelper.cn/rss.xml"
           />
           <div className="grid grid-cols-2 gap-3">
             <Input

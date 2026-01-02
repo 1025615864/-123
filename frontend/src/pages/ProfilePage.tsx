@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   User,
   Mail,
@@ -38,6 +38,10 @@ export default function ProfilePage() {
   const toast = useToast();
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [urlParams, setUrlParams] = useSearchParams();
+  const didInitFromUrlRef = useRef(false);
+  const lastUserIdRef = useRef<number | null>(null);
 
   const [formData, setFormData] = useState({
     nickname: user?.nickname || "",
@@ -320,8 +324,44 @@ export default function ProfilePage() {
   }, [user]);
 
   useEffect(() => {
+    if (didInitFromUrlRef.current) return;
+    const raw = Number(String(urlParams.get("postsPage") ?? "1"));
+    const next = Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 1;
+    setMyPostsPage(next);
+    didInitFromUrlRef.current = true;
+  }, [urlParams]);
+
+  useEffect(() => {
+    const currentUserId = typeof user?.id === "number" ? user.id : null;
+    if (lastUserIdRef.current === null) {
+      lastUserIdRef.current = currentUserId;
+      return;
+    }
+    if (lastUserIdRef.current === currentUserId) return;
+    lastUserIdRef.current = currentUserId;
     setMyPostsPage(1);
-  }, [user?.id]);
+    setUrlParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("postsPage");
+        return next;
+      },
+      { replace: true }
+    );
+  }, [setUrlParams, user?.id]);
+
+  useEffect(() => {
+    if (!didInitFromUrlRef.current) return;
+    setUrlParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (myPostsPage > 1) next.set("postsPage", String(myPostsPage));
+        else next.delete("postsPage");
+        return next;
+      },
+      { replace: true }
+    );
+  }, [myPostsPage, setUrlParams]);
 
   const handleAvatarClick = () => {
     fileInputRef.current?.click();
@@ -723,7 +763,7 @@ export default function ProfilePage() {
                 </div>
               </div>
               <Link
-                to="/forum"
+                to="/forum/new"
                 className="text-amber-600 text-sm hover:text-amber-700 flex items-center gap-1 dark:text-amber-400 dark:hover:text-amber-300"
               >
                 去发布
@@ -828,7 +868,7 @@ export default function ProfilePage() {
                 description="去论坛发布你的第一篇帖子"
                 tone={actualTheme}
                 action={
-                  <Link to="/forum">
+                  <Link to="/forum/new">
                     <Button variant="outline">去发布</Button>
                   </Link>
                 }
@@ -849,7 +889,7 @@ export default function ProfilePage() {
                 </div>
               </div>
               <Link 
-                to="/forum" 
+                to={`/forum?cat=${encodeURIComponent('我的收藏')}`} 
                 className="text-amber-600 text-sm hover:text-amber-700 flex items-center gap-1 dark:text-amber-400 dark:hover:text-amber-300"
               >
                 查看全部

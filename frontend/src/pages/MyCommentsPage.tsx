@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, MessageSquare } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 
@@ -54,13 +54,46 @@ export default function MyCommentsPage() {
   const { actualTheme } = useTheme()
   const toast = useToast()
 
+  const [urlParams, setUrlParams] = useSearchParams()
+  const didInitFromUrlRef = useRef(false)
+
   const [page, setPage] = useState(1)
   const pageSize = 20
   const [status, setStatus] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all')
 
   useEffect(() => {
-    setPage(1)
-  }, [status])
+    if (didInitFromUrlRef.current) return
+
+    const rawPage = Number(String(urlParams.get('page') ?? '1'))
+    const nextPage = Number.isFinite(rawPage) && rawPage >= 1 ? Math.floor(rawPage) : 1
+
+    const rawStatus = String(urlParams.get('status') ?? '').trim() as any
+    const nextStatus = (['all', 'pending', 'approved', 'rejected'] as const).includes(rawStatus)
+      ? (rawStatus as typeof status)
+      : 'all'
+
+    setPage(nextPage)
+    setStatus(nextStatus)
+    didInitFromUrlRef.current = true
+  }, [urlParams])
+
+  useEffect(() => {
+    if (!didInitFromUrlRef.current) return
+    setUrlParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+
+        if (page > 1) next.set('page', String(page))
+        else next.delete('page')
+
+        if (status !== 'all') next.set('status', status)
+        else next.delete('status')
+
+        return next
+      },
+      { replace: true }
+    )
+  }, [page, setUrlParams, status])
 
   const queryKey = useMemo(() => queryKeys.forumMyComments(page, pageSize, status), [page, pageSize, status])
 
@@ -148,7 +181,14 @@ export default function MyCommentsPage() {
             { key: 'rejected', label: '已驳回' },
           ] as const
         ).map((it) => (
-          <Chip key={it.key} active={status === it.key} onClick={() => setStatus(it.key)}>
+          <Chip
+            key={it.key}
+            active={status === it.key}
+            onClick={() => {
+              setPage(1)
+              setStatus(it.key)
+            }}
+          >
             {it.label}
           </Chip>
         ))}

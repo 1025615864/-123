@@ -20,7 +20,7 @@ async def create_users(db: AsyncSession):
     users = [
         User(
             username="admin",
-            email="admin@example.com",
+            email="admin@baixinghelper.cn",
             nickname="管理员",
             hashed_password=hash_password("admin123"),
             role="admin",
@@ -28,7 +28,7 @@ async def create_users(db: AsyncSession):
         ),
         User(
             username="lawyer1",
-            email="lawyer1@example.com",
+            email="lawyer1@baixinghelper.cn",
             nickname="李律师",
             hashed_password=hash_password("lawyer123"),
             role="lawyer",
@@ -36,7 +36,7 @@ async def create_users(db: AsyncSession):
         ),
         User(
             username="user1",
-            email="user1@example.com",
+            email="user1@baixinghelper.cn",
             nickname="张三",
             hashed_password=hash_password("user123"),
             role="user",

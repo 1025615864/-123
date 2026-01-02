@@ -1,6 +1,6 @@
 # 项目报告（百姓法律助手 / 百姓助手）
 
-更新时间：2026-01-01
+更新时间：2026-01-03
 
 > 目的：为下一位接手工程师提供“一份文档就能上手”的项目报告。
 >
@@ -94,6 +94,8 @@
   - `PAYMENT_WEBHOOK_SECRET`
 - **强烈推荐**
   - `REDIS_URL`（`DEBUG=false` 且 Redis 不可用时会禁用周期任务/News AI pipeline）
+- **开发辅助**
+  - `SQL_ECHO`：控制 SQLAlchemy SQL 日志（默认关闭；仅本地排障时建议开启）
 - **AI 相关**
   - `OPENAI_API_KEY`
   - `OPENAI_BASE_URL`（可选）
@@ -111,6 +113,7 @@
     - 通常在 `backend/` 目录启动，所以实际会读到 `backend/.env`
   - `DEBUG` 默认：测试环境自动为 `true`（因为 `pytest` 在 `sys.modules`）
   - `DATABASE_URL` 默认：`sqlite+aiosqlite:///./data/app.db`
+  - 本仓库提供 `backend/env.example` 作为本地默认配置模板（当前默认已对齐 SQLite，开箱即用）
 - 后端对生产配置有强制校验：
   - 当 `DEBUG=false` 时：
     - `SECRET_KEY/JWT_SECRET_KEY` 必须足够安全（长度 >= 32 且不能用默认值），否则启动直接报错
@@ -154,6 +157,9 @@
 ### 5.1 后端
 
 - 在 `backend/` 下复制示例：`backend/env.example` -> `backend/.env`
+  - 当前 `env.example` 默认使用 SQLite：`sqlite+aiosqlite:///./data/app.db`，本地可直接启动
+  - 如要切换 Postgres：将 `DATABASE_URL` 改为 `postgresql+asyncpg://...`
+  - 如需查看 SQL（排障用）：设置 `SQL_ECHO=1`（默认不输出 SQL）
 - 创建虚拟环境并安装依赖
 
 说明：Windows 环境如果 `python` 指向 WindowsApps stub，建议使用 `py -m ...`。
@@ -418,6 +424,7 @@ AI 咨询模块的实现细节与已知风险点已合并到本文档的「12.5 
 - `_archive/DEV_GUIDE.md`
 - `_archive/AI_CONSULTATION_STATUS.md`
 - `_archive/UPDATE_LOG.md`
+- `_archive/反馈与建议.md`
 
 ---
 

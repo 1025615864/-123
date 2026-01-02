@@ -37,6 +37,9 @@ cp env.example .env
 - `REDIS_URL`: Redis 连接串（生产推荐；`DEBUG=false` 时未连接会禁用定时任务与 News AI pipeline）
 - `OPENAI_API_KEY`: LLM API Key（**必须走环境变量/Secret**，禁止写入 SystemConfig 入库）
 - `OPENAI_BASE_URL`: LLM API Base URL（可切换 OpenAI-compat 供应商）
+- `SQL_ECHO`: （可选）输出 SQLAlchemy SQL 日志（默认关闭；仅本地排障建议开启）
+
+说明：`env.example` 当前默认使用 SQLite（`sqlite+aiosqlite:///./data/app.db`），本地可直接跑；生产建议按需切换 Postgres。
 
 #### 2.1 生产配置要点（建议先读）
 

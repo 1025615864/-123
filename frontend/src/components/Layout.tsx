@@ -1,11 +1,7 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Outlet, Link, useLocation } from "react-router-dom";
 import {
   Scale,
-  MessageCircle,
-  Users,
-  Newspaper,
-  Search,
   Building2,
   LogOut,
   User,
@@ -13,11 +9,6 @@ import {
   X,
   Phone,
   Mail,
-  Calculator,
-  Clock,
-  Calendar,
-  FileText,
-  HelpCircle,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
@@ -27,12 +18,19 @@ import { MobileNav } from "./MobileNav";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { useIsMobile } from "../hooks/useMediaQuery";
+import {
+  isRouteActive,
+  primaryNavItems,
+  secondaryNavItems,
+  toolNavItems,
+} from "../navigation";
 
 export default function Layout() {
   const location = useLocation();
   const { isAuthenticated, user, logout } = useAuth();
   const { actualTheme } = useTheme();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [toolsMenuOpen, setToolsMenuOpen] = useState(false);
   const isMobile = useIsMobile();
 
   const mobileMenuId = "layout-mobile-menu";
@@ -46,19 +44,25 @@ export default function Layout() {
 
   const showMobileBottomNav = isMobile && !hideFooter;
 
-  const navItems = [
-    { path: "/", label: "首页", icon: Scale },
-    { path: "/chat", label: "AI咨询", icon: MessageCircle },
-    { path: "/forum", label: "论坛", icon: Users },
-    { path: "/news", label: "新闻", icon: Newspaper },
-    { path: "/search", label: "搜索", icon: Search },
-    { path: "/lawfirm", label: "律所", icon: Building2 },
-    { path: "/calculator", label: "费用计算", icon: Calculator },
-    { path: "/limitations", label: "时效计算", icon: Clock },
-    { path: "/calendar", label: "日历", icon: Calendar },
-    { path: "/documents", label: "文书生成", icon: FileText },
-    { path: "/faq", label: "FAQ", icon: HelpCircle },
-  ];
+  const toolsActive = useMemo(() => {
+    return toolNavItems.some((it) => isRouteActive(location.pathname, it.path));
+  }, [location.pathname]);
+
+  const desktopNavPrefixItems = primaryNavItems.slice(0, 2);
+  const desktopNavSuffixItems = primaryNavItems.slice(2);
+
+  const mobileMenuItems = useMemo(() => {
+    return [
+      ...primaryNavItems,
+      ...toolNavItems,
+      ...secondaryNavItems.filter((it) => it.path !== "/search"),
+    ];
+  }, []);
+
+  useEffect(() => {
+    setToolsMenuOpen(false);
+    setMobileMenuOpen(false);
+  }, [location.pathname]);
 
   return (
     <div className="min-h-[100dvh] flex flex-col font-sans">
@@ -81,23 +85,91 @@ export default function Layout() {
 
             <nav className="hidden lg:flex flex-1 items-center justify-center">
               <div className="flex items-center gap-8">
-                {navItems.map(({ path, label }) => (
-                  <Link
-                    key={path}
-                    to={path}
-                    aria-current={location.pathname === path ? "page" : undefined}
+                {desktopNavPrefixItems.map(({ path, label }) => {
+                  const active = isRouteActive(location.pathname, path);
+                  return (
+                    <Link
+                      key={path}
+                      to={path}
+                      aria-current={active ? "page" : undefined}
+                      className={`text-sm font-medium transition-colors relative py-1 outline-none rounded-md focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 ${
+                        active
+                          ? "text-blue-600 dark:text-blue-400"
+                          : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
+                      }`}
+                    >
+                      {label}
+                      {active && (
+                        <span className="absolute bottom-0 left-0 w-full h-0.5 bg-blue-600 rounded-full dark:bg-blue-400" />
+                      )}
+                    </Link>
+                  );
+                })}
+
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setToolsMenuOpen((v) => !v)}
+                    aria-expanded={toolsMenuOpen}
                     className={`text-sm font-medium transition-colors relative py-1 outline-none rounded-md focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 ${
-                      location.pathname === path
+                      toolsActive
                         ? "text-blue-600 dark:text-blue-400"
                         : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
                     }`}
                   >
-                    {label}
-                    {location.pathname === path && (
+                    法律工具
+                    {toolsActive && (
                       <span className="absolute bottom-0 left-0 w-full h-0.5 bg-blue-600 rounded-full dark:bg-blue-400" />
                     )}
-                  </Link>
-                ))}
+                  </button>
+
+                  {toolsMenuOpen ? (
+                    <div className="absolute left-1/2 -translate-x-1/2 mt-3 w-56 rounded-2xl border border-slate-200/70 bg-white shadow-xl shadow-slate-900/10 overflow-hidden dark:border-white/10 dark:bg-slate-900">
+                      <div className="p-2">
+                        {toolNavItems.map(({ path, label, icon: Icon }) => {
+                          const active = isRouteActive(location.pathname, path);
+                          return (
+                            <Link
+                              key={path}
+                              to={path}
+                              onClick={() => setToolsMenuOpen(false)}
+                              aria-current={active ? "page" : undefined}
+                              className={`flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium transition-all outline-none active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 ${
+                                active
+                                  ? "bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400"
+                                  : "text-slate-700 hover:bg-slate-50 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-white/5"
+                              }`}
+                            >
+                              <Icon className="h-4 w-4" />
+                              <span>{label}</span>
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+
+                {desktopNavSuffixItems.map(({ path, label }) => {
+                  const active = isRouteActive(location.pathname, path);
+                  return (
+                    <Link
+                      key={path}
+                      to={path}
+                      aria-current={active ? "page" : undefined}
+                      className={`text-sm font-medium transition-colors relative py-1 outline-none rounded-md focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 ${
+                        active
+                          ? "text-blue-600 dark:text-blue-400"
+                          : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
+                      }`}
+                    >
+                      {label}
+                      {active && (
+                        <span className="absolute bottom-0 left-0 w-full h-0.5 bg-blue-600 rounded-full dark:bg-blue-400" />
+                      )}
+                    </Link>
+                  );
+                })}
               </div>
             </nav>
 
@@ -180,14 +252,16 @@ export default function Layout() {
             className="lg:hidden border-t animate-fade-in border-slate-200 bg-white/95 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/95"
           >
             <div className="px-6 py-6 space-y-2">
-              {navItems.map(({ path, label, icon: Icon }) => (
+              {mobileMenuItems.map(({ path, label, icon: Icon }) => {
+                const active = isRouteActive(location.pathname, path);
+                return (
                 <Link
                   key={path}
                   to={path}
                   onClick={() => setMobileMenuOpen(false)}
-                  aria-current={location.pathname === path ? "page" : undefined}
+                  aria-current={active ? "page" : undefined}
                   className={`flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-medium transition-all outline-none active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 ${
-                    location.pathname === path
+                    active
                       ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400'
                       : 'text-slate-700 hover:bg-slate-50 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800'
                   }`}
@@ -195,7 +269,8 @@ export default function Layout() {
                   <Icon className="h-5 w-5" />
                   <span>{label}</span>
                 </Link>
-              ))}
+                );
+              })}
               <div className="pt-4 border-t border-slate-200 dark:border-slate-800 mt-4">
                 {isAuthenticated ? (
                   <Button
@@ -285,7 +360,7 @@ export default function Layout() {
             <div>
               <h3 className="text-sm font-bold text-slate-900 mb-6 dark:text-white">快速链接</h3>
               <ul className="space-y-3">
-                {navItems.slice(0, 5).map(({ path, label }) => (
+                {primaryNavItems.slice(0, 5).map(({ path, label }) => (
                   <li key={path}>
                     <Link
                       to={path}
@@ -303,11 +378,11 @@ export default function Layout() {
               <ul className="space-y-4 text-sm text-slate-500 dark:text-slate-400">
                 <li className="flex items-center space-x-3">
                   <Phone className="h-4 w-4 text-blue-500" />
-                  <span>400-123-4567</span>
+                  <span>400-800-1234</span>
                 </li>
                 <li className="flex items-center space-x-3">
                   <Mail className="h-4 w-4 text-blue-500" />
-                  <span>help@baixing-law.com</span>
+                  <span>support@baixinghelper.cn</span>
                 </li>
                 <li className="flex items-center space-x-3">
                   <Building2 className="h-4 w-4 text-blue-500" />

@@ -1291,10 +1291,14 @@ export default function ChatPage() {
                   <button
                     key={p}
                     onClick={() => {
-                      setInput(p);
-                      requestAnimationFrame(() => inputRef.current?.focus());
+                      if (loading || streaming) {
+                        setInput(p);
+                        requestAnimationFrame(() => inputRef.current?.focus());
+                        return;
+                      }
+                      void sendMessage(p);
                     }}
-                    disabled={loading}
+                    disabled={loading || streaming}
                     className="px-3 py-1.5 rounded-full bg-slate-100 hover:bg-slate-200 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:bg-slate-800 dark:hover:bg-slate-700 dark:focus-visible:ring-offset-slate-900 text-xs text-slate-600 dark:text-slate-300 transition-all"
                   >
                     {p}
@@ -1395,9 +1399,13 @@ export default function ChatPage() {
       {showTemplateSelector && (
         <TemplateSelector
           onSelectQuestion={(question) => {
-            setInput(question);
             setShowTemplateSelector(false);
-            requestAnimationFrame(() => inputRef.current?.focus());
+            if (loading || streaming) {
+              setInput(question);
+              requestAnimationFrame(() => inputRef.current?.focus());
+              return;
+            }
+            void sendMessage(question);
           }}
           onClose={() => setShowTemplateSelector(false)}
           theme={actualTheme}

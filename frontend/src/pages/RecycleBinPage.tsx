@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Eye, RotateCcw, Search, Trash2 } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
@@ -48,6 +48,10 @@ export default function RecycleBinPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
 
+  const [urlParams, setUrlParams] = useSearchParams()
+  const didInitFromUrlRef = useRef(false)
+  const lastKeywordRef = useRef<string | null>(null)
+
   const [page, setPage] = useState(1)
   const pageSize = 20
   const [keyword, setKeyword] = useState('')
@@ -66,8 +70,48 @@ export default function RecycleBinPage() {
   }, [keyword])
 
   useEffect(() => {
+    if (!didInitFromUrlRef.current) return
+    if (lastKeywordRef.current === null) {
+      lastKeywordRef.current = keyword
+      return
+    }
+    if (lastKeywordRef.current === keyword) return
+    lastKeywordRef.current = keyword
     setPage(1)
   }, [keyword])
+
+  useEffect(() => {
+    if (didInitFromUrlRef.current) return
+
+    const rawPage = Number(String(urlParams.get('page') ?? '1'))
+    const nextPage = Number.isFinite(rawPage) && rawPage >= 1 ? Math.floor(rawPage) : 1
+
+    const nextKeyword = String(urlParams.get('kw') ?? '')
+
+    setPage(nextPage)
+    setKeyword(nextKeyword)
+    lastKeywordRef.current = nextKeyword
+    didInitFromUrlRef.current = true
+  }, [urlParams])
+
+  useEffect(() => {
+    if (!didInitFromUrlRef.current) return
+    setUrlParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+
+        if (page > 1) next.set('page', String(page))
+        else next.delete('page')
+
+        const kw = keyword.trim()
+        if (kw) next.set('kw', kw)
+        else next.delete('kw')
+
+        return next
+      },
+      { replace: true }
+    )
+  }, [keyword, page, setUrlParams])
 
   const queryKey = useMemo(
     () => ['forum-recycle-bin', { page, pageSize, keyword: debouncedKeyword.trim() }] as const,
