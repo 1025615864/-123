@@ -613,10 +613,33 @@ async def get_metrics(
     from ..services.ai_metrics import ai_metrics
 
     snap = ai_metrics.snapshot()
-    started_at = float(snap.get("started_at") or 0.0)
-    chat_total = int(snap.get("chat_requests_total") or 0)
-    chat_stream_total = int(snap.get("chat_stream_requests_total") or 0)
-    errors_total = int(snap.get("errors_total") or 0)
+    started_at_obj = snap.get("started_at")
+    started_at = (
+        float(started_at_obj)
+        if isinstance(started_at_obj, (int, float)) and not isinstance(started_at_obj, bool)
+        else 0.0
+    )
+
+    chat_total_obj = snap.get("chat_requests_total")
+    chat_total = (
+        int(chat_total_obj)
+        if isinstance(chat_total_obj, (int, float)) and not isinstance(chat_total_obj, bool)
+        else 0
+    )
+
+    chat_stream_total_obj = snap.get("chat_stream_requests_total")
+    chat_stream_total = (
+        int(chat_stream_total_obj)
+        if isinstance(chat_stream_total_obj, (int, float)) and not isinstance(chat_stream_total_obj, bool)
+        else 0
+    )
+
+    errors_total_obj = snap.get("errors_total")
+    errors_total = (
+        int(errors_total_obj)
+        if isinstance(errors_total_obj, (int, float)) and not isinstance(errors_total_obj, bool)
+        else 0
+    )
 
     error_code_counts_obj = snap.get("error_code_counts")
     endpoint_error_counts_obj = snap.get("endpoint_error_counts")

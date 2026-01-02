@@ -1270,8 +1270,8 @@ class TestSystemAiFeedbackStats:
         assert _as_int(data.get("good")) == 1
         assert _as_int(data.get("neutral")) == 0
         assert _as_int(data.get("bad")) == 1
-        assert abs(float(data.get("satisfaction_rate") or 0.0) - 50.0) < 1e-6
-        assert abs(float(data.get("rating_rate") or 0.0) - 100.0) < 1e-6
+        assert abs(_as_float(data.get("satisfaction_rate"), 0.0) - 50.0) < 1e-6
+        assert abs(_as_float(data.get("rating_rate"), 0.0) - 100.0) < 1e-6
 
         rr = data.get("recent_ratings")
         assert isinstance(rr, list)
