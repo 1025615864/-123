@@ -13,6 +13,7 @@ from ..schemas.knowledge import (
     ConsultationTemplateCreate,
     ConsultationTemplateUpdate,
     TemplateQuestionItem,
+    KnowledgeCategoryCount,
     KnowledgeStats,
 )
 
@@ -282,8 +283,9 @@ class KnowledgeService:
                 func.count(LegalKnowledge.id).label("count")
             ).group_by(LegalKnowledge.category)
         )
+
         categories = [
-            {"category": row[0], "count": row[1]}
+            KnowledgeCategoryCount(category=str(row[0] or ""), count=int(row[1] or 0))
             for row in category_result.all()
         ]
         
