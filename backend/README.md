@@ -67,6 +67,94 @@ python -m app.main
 - Swagger UI: http://localhost:8000/docs
 - ReDoc: http://localhost:8000/redoc
 
+## 数据库备份 / 恢复 / 演练（运维）
+
+本仓库提供了可直接运行的脚本：
+
+- `scripts/db_backup.py`：备份（SQLite / Postgres）
+- `scripts/db_restore.py`：从备份恢复（SQLite / Postgres）
+- `scripts/db_drill.py`：灾备演练（当前支持 SQLite）
+
+数据库连接串的来源优先级：
+
+- `--database-url`
+- 环境变量 `DATABASE_URL`
+- `.env` / 默认配置（默认：`sqlite+aiosqlite:///./data/app.db`）
+
+### 备份
+
+SQLite（默认配置直接执行即可，会在 `backend/backups/` 下生成文件并输出路径）：
+
+```bash
+python scripts/db_backup.py
+```
+
+备份保留策略（仅对默认 `backend/backups/` 目录生效）：
+
+```bash
+# 仅保留最近 14 份（更旧的会被自动清理）
+python scripts/db_backup.py --retention-count 14
+
+# 仅保留最近 7 天
+python scripts/db_backup.py --retention-days 7
+```
+
+Postgres（需要本机安装并可执行 `pg_dump`）：
+
+```bash
+python scripts/db_backup.py --database-url "postgresql+asyncpg://USER:PASSWORD@HOST:5432/DB" --verify
+```
+
+### 恢复
+
+SQLite（恢复会覆盖目标 DB，必须显式 `--force`）：
+
+```bash
+python scripts/db_restore.py ./backups/sqlite_YYYYMMDD_HHMMSS.db --force
+```
+
+Postgres（需要本机安装并可执行 `pg_restore`；**请务必指向独立的恢复库/演练库，避免误覆盖生产库**）：
+
+```bash
+python scripts/db_restore.py ./backups/postgres_YYYYMMDD_HHMMSS.dump \
+  --database-url "postgresql+asyncpg://USER:PASSWORD@HOST:5432/RESTORE_DB" --verify
+```
+
+### 灾备演练（Drill）
+
+SQLite：会创建备份，然后恢复到一个单独的 `drill_restore_*.db` 并执行一次 `init_db()` 校验；默认会清理演练恢复库文件。
+
+```bash
+python scripts/db_drill.py
+
+# 保留演练恢复库文件（便于人工检查）
+python scripts/db_drill.py --keep
+```
+
+Postgres：必须显式指定独立的演练库（`--drill-database-url`），脚本会先备份源库，再用 `pg_restore --clean --if-exists` 恢复到演练库，然后执行一次 `init_db()` 校验。
+
+```bash
+python scripts/db_drill.py \
+  --database-url "postgresql+asyncpg://USER:PASSWORD@HOST:5432/PROD_DB" \
+  --drill-database-url "postgresql+asyncpg://USER:PASSWORD@HOST:5432/DRILL_DB" \
+  --verify
+```
+
+### 定时备份（示例）
+
+Linux cron（每天 03:10 备份一次，并保留最近 14 份）：
+
+```bash
+10 3 * * * cd /path/to/backend && /usr/bin/python3 scripts/db_backup.py --retention-count 14 >> backups/cron.log 2>&1
+```
+
+Windows 计划任务（示例思路）：
+
+- 通过“任务计划程序”创建任务
+- 操作选择启动程序：`python`
+- 参数：`scripts\db_backup.py --retention-count 14`
+- 起始于：`<你的 backend 目录>`
+
 ## API 接口
 
 ### AI 咨询

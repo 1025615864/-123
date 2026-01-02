@@ -1,6 +1,6 @@
 # 项目报告（百姓法律助手 / 百姓助手）
 
-更新时间：2025-12-31
+更新时间：2026-01-01
 
 > 目的：为下一位接手工程师提供“一份文档就能上手”的项目报告。
 >
@@ -104,9 +104,52 @@
 - `VITE_API_BASE_URL`
   - 本地开发通常为 `/api`（由 Vite proxy / Ingress / Nginx 转发到后端）。
 
+### 4.4 配置来源与默认值（建议接手时先读）
+
+- 后端设置定义：`backend/app/config.py`（Pydantic Settings）
+  - **默认读取“当前工作目录下的 `.env`”**（测试运行 `pytest` 时不读 `.env`）
+    - 通常在 `backend/` 目录启动，所以实际会读到 `backend/.env`
+  - `DEBUG` 默认：测试环境自动为 `true`（因为 `pytest` 在 `sys.modules`）
+  - `DATABASE_URL` 默认：`sqlite+aiosqlite:///./data/app.db`
+- 后端对生产配置有强制校验：
+  - 当 `DEBUG=false` 时：
+    - `SECRET_KEY/JWT_SECRET_KEY` 必须足够安全（长度 >= 32 且不能用默认值），否则启动直接报错
+    - `PAYMENT_WEBHOOK_SECRET` 必须配置且长度 >= 16，否则启动直接报错
+
+### 4.5 常用配置项速查（后端）
+
+- **基础**
+  - `DEBUG`：开发建议 `true`；生产必须 `false`
+  - `DATABASE_URL`：支持 SQLite（默认）/ Postgres（生产推荐）
+  - `SECRET_KEY` / `JWT_SECRET_KEY`：二选一（后端会读这两者之一）
+  - `PAYMENT_WEBHOOK_SECRET`：生产必填（`DEBUG=false` 时强校验）
+- **网络与代理**
+  - `CORS_ALLOW_ORIGINS`：可用逗号分隔字符串（后端会自动拆分）
+  - `FRONTEND_BASE_URL`：用于构造部分跳转链接/回调等（默认 `http://localhost:5173`）
+  - `TRUSTED_PROXIES`：受信任代理列表（逗号分隔或 JSON 数组字符串）
+- **AI**
+  - `OPENAI_API_KEY`：必须通过环境变量/Secret 注入（禁止入库）
+  - `OPENAI_BASE_URL`：OpenAI-compatible base（默认 `https://api.openai.com/v1`）
+  - `AI_MODEL`：默认 `deepseek-chat`
+  - `AI_FALLBACK_MODELS`：可选，逗号分隔
+- **Redis 与周期任务（生产强烈建议）**
+  - `REDIS_URL`：生产建议必配。`DEBUG=false` 且 Redis 不可用时，会禁用 RSS ingest / News AI 等周期任务
+- **News AI（周期 pipeline）**
+  - `NEWS_AI_ENABLED`：`true/1/on` 才启用
+  - `NEWS_AI_INTERVAL_SECONDS`：默认 `120`
+  - `NEWS_AI_BATCH_SIZE`：默认由服务端实现决定（E2E 会覆盖为较大值以减少等待）
+
 ---
 
 ## 5. 本地启动（开发）
+
+### 5.0 常用端口（建议记住）
+
+- **后端开发**：`8000`（FastAPI / Swagger：`/docs`）
+- **前端开发**：`5173`（Vite）
+- **Docker 前端**：`3000`
+- **Postgres（compose）**：`5432`
+- **Playwright E2E（隔离端口）**：后端默认 `8001`，前端默认 `5174`
 
 ### 5.1 后端
 
@@ -117,11 +160,17 @@
 
 启动：
 
-- `python -m uvicorn app.main:app --reload --port 8000`
+- 推荐（在 `backend/` 目录执行，能直接读取 `backend/.env`）：
+  - `py -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000`
+- 或者（在仓库根目录执行）：
+  - `py -m uvicorn app.main:app --app-dir backend --reload --host 0.0.0.0 --port 8000`
+  - 注意：此时 `Settings` 默认读取的是“根目录 `.env`”。如果你只配置了 `backend/.env`，需要复制/同步到根目录 `.env`，或在 shell 中注入对应环境变量。
 
 验证：
 
 - `GET http://localhost:8000/health`
+- `GET http://localhost:8000/api/health`（兼容前端 proxy 的别名）
+- `GET http://localhost:8000/health/detailed`（包含 DB/AI 配置等详细检查）
 - Swagger：`http://localhost:8000/docs`
 
 ### 5.2 前端
@@ -130,6 +179,14 @@
 - `npm run dev`
 
 访问：`http://localhost:5173`
+
+补充：前端 API / WebSocket 代理
+
+- Vite proxy 配置：`frontend/vite.config.ts`
+  - `/api` 默认转发到 `http://localhost:8000`（可用 `VITE_PROXY_TARGET` 覆盖）
+  - `/ws` 默认转发到 `ws://localhost:8000`（可用 `VITE_WS_PROXY_TARGET` 覆盖）
+- 前端请求基址：`frontend/src/api/client.ts`
+  - `VITE_API_BASE_URL` 默认回落 `/api`（通常无需额外配置）
 
 ### 5.3 一键启动（Docker Compose）
 
@@ -216,6 +273,10 @@ AI 咨询模块的实现细节与已知风险点已合并到本文档的「12.5 
 - build：`npm run build`
 - E2E：`npm run test:e2e`
   - Playwright 默认会用隔离端口拉起后端/前端 dev server（避免与本地开发端口冲突）。
+  - 默认端口：后端 `8001`、前端 `5174`（见 `frontend/playwright.config.ts`）
+  - 如需复用你已经启动的服务：设置 `E2E_REUSE_EXISTING=1`（仅本地建议）
+  - Windows 注意：命令行传 `tests/e2e/chat-*.spec.ts` 这类通配符可能匹配不到文件，建议显式列出文件或仅传目录/单文件。
+  - 如需隔离 E2E 数据库：设置 `E2E_DATABASE_URL`（否则默认使用 `sqlite+aiosqlite:///../backend/data/app.db`）
 
 ---
 
@@ -357,3 +418,16 @@ AI 咨询模块的实现细节与已知风险点已合并到本文档的「12.5 
 - `_archive/DEV_GUIDE.md`
 - `_archive/AI_CONSULTATION_STATUS.md`
 - `_archive/UPDATE_LOG.md`
+
+---
+
+### 12.8 前端布局与滚动约束（避免回归）
+
+- **布局基线**：`frontend/src/components/Layout.tsx`
+  - 根容器使用 `min-h-[100dvh] flex flex-col`（更适配移动端动态地址栏）
+  - 内容区 `main` 必须是 `flex-1 min-h-0`，让子页面能在 flex 容器内正确滚动
+- **Chat 页**：`frontend/src/pages/ChatPage.tsx`
+  - 页面根容器应使用 `flex-1 min-h-0`，避免 `h-[calc(100vh-...)]` 这类“魔法高度”导致的双滚动/高度不准
+  - 消息列表区域通过内部 `overflow-y-auto` 实现滚动
+- **Modal 层级**：`frontend/src/components/ui/Modal.tsx`
+  - 默认 `zIndexClass` 需要高于 sticky header / mobile nav（避免弹窗被遮挡）
