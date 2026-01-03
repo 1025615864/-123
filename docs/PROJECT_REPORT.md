@@ -304,13 +304,40 @@ AI 咨询模块的实现细节与已知风险点已合并到本文档的「12.5 
 - `../.github/workflows/post-deploy-smoke.yml`
   - 部署后手动触发冒烟（需要 Secrets：`BASE_URL`、`ADMIN_TOKEN`）。
 
+### 9.3 GitHub PR 流程与分支策略（重要）
+
+当前仓库已启用较严格的主干保护与合并策略，目标是：**禁止直推 main**、**所有改动走 PR**、**CI 通过后才能合并**、并保持 **线性提交历史**。
+
+- **仓库合并策略（Settings -> General -> Pull Requests）**
+
+  - **仅允许 Squash 合并**：`Allow squash merging = true`
+  - 禁用其它合并方式：
+    - `Allow merge commits = false`
+    - `Allow rebase merging = false`
+  - **合并后自动删除分支**：`Automatically delete head branches = true`
+
+- **main 分支保护（Settings -> Branches -> Branch protection rules: main）**
+
+  - `Require a pull request before merging = true`
+  - `Require status checks to pass before merging = true`
+    - Required checks：`required-checks`（由 `ci.yml` 的聚合 job 提供）
+  - `Require branches to be up to date before merging = true`
+  - `Do not allow bypassing the above settings = true`（管理员也不能绕过）
+  - `Require linear history = true`（禁止 merge commit，保证线性历史）
+  - `Require approvals = false`（避免因无人审核导致阻塞）
+
+- **建议的日常 PR 流程**
+  - 从 `main` 拉分支（如 `feat/...` / `fix/...` / `chore/...`）
+  - Push 后创建 PR
+  - 等待 CI 全绿（含 `required-checks` 与 `Type Check`）
+  - 使用 **Squash and merge** 合并，合并后分支会自动删除
+
 ---
 
 ## 10. 常见问题（FAQ）
 
 - **Windows 上 python/pip/uvicorn 启动异常**
   - 优先使用 `py -m pip ...` / `py -m uvicorn ...`。
-  - 中文路径下 `.venv\Scripts\uvicorn.exe` launcher 可能失败，使用 `python -m uvicorn ...` 规避。
 - **生产环境 News AI 不跑**
   - `NEWS_AI_ENABLED=true` 才会启用周期任务。
   - `DEBUG=false` 且 Redis 不可用会禁用周期任务（检查 `REDIS_URL`）。
