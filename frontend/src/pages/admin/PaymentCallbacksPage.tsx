@@ -1,0 +1,1031 @@
+import { useEffect, useMemo, useState } from "react";
+import {
+  CreditCard,
+  RefreshCw,
+  Filter,
+  ShieldCheck,
+  ShieldAlert,
+  KeyRound,
+  Search,
+} from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import api from "../../api/client";
+import {
+  Card,
+  Input,
+  Button,
+  Badge,
+  Pagination,
+  Textarea,
+} from "../../components/ui";
+import { useAppMutation, useToast } from "../../hooks";
+import { getApiErrorMessage } from "../../utils";
+import { queryKeys } from "../../queryKeys";
+
+type CallbackEventItem = {
+  id: number;
+  provider: string;
+  order_no: string | null;
+  trade_no: string | null;
+  amount: number | null;
+  verified: boolean;
+  error_message: string | null;
+  created_at: string;
+};
+
+type CallbackEventsResponse = {
+  items: CallbackEventItem[];
+  total: number;
+};
+
+type CallbackStatsResponse = {
+  minutes: number;
+  provider: string | null;
+  all_total: number;
+  all_verified: number;
+  all_failed: number;
+  window_total: number;
+  window_verified: number;
+  window_failed: number;
+};
+
+type PlatformCertItem = { serial_no: string; expire_time: string | null };
+
+type PlatformCertListResponse = {
+  items: PlatformCertItem[];
+  total: number;
+};
+
+type PaymentChannelStatusResponse = {
+  alipay_configured: boolean;
+  wechatpay_configured: boolean;
+  payment_webhook_secret_configured: boolean;
+  wechatpay_platform_certs_cached: boolean;
+  wechatpay_platform_certs_total: number;
+  wechatpay_platform_certs_updated_at: number | null;
+  wechatpay_cert_refresh_enabled: boolean;
+  details: Record<string, unknown>;
+};
+
+type ReconcileResponse = {
+  order_no: string;
+  order_status: string;
+  payment_method: string | null;
+  actual_amount: number;
+  trade_no: string | null;
+  callbacks_total: number;
+  callbacks_verified: number;
+  callbacks_failed: number;
+  diagnosis: string;
+  details: Record<string, unknown>;
+  paid_at: string | null;
+  recent_events: Array<{
+    provider: string;
+    order_no: string | null;
+    trade_no: string | null;
+    amount: number | null;
+    verified: boolean;
+    error_message: string | null;
+    created_at: string;
+  }>;
+};
+
+function formatTime(dateStr: string) {
+  const date = new Date(dateStr);
+  return date.toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function providerLabel(provider: string) {
+  const p = String(provider || "").toLowerCase();
+  if (p === "alipay") return "支付宝";
+  if (p === "wechat") return "微信";
+  return provider;
+}
+
+function diagnosisLabel(d: string) {
+  switch (d) {
+    case "ok":
+      return { label: "正常", color: "success" as const };
+    case "no_callback":
+      return { label: "无回调", color: "warning" as const };
+    case "amount_mismatch":
+      return { label: "金额不一致", color: "danger" as const };
+    case "decrypt_failed":
+      return { label: "解密失败", color: "danger" as const };
+    case "signature_failed":
+      return { label: "验签失败", color: "danger" as const };
+    case "paid_without_success_callback":
+      return { label: "已支付但无成功回调", color: "warning" as const };
+    case "success_callback_but_order_not_paid":
+      return { label: "有成功回调但订单未支付", color: "warning" as const };
+    default:
+      return { label: d || "unknown", color: "info" as const };
+  }
+}
+
+export default function PaymentCallbacksPage() {
+  const toast = useToast();
+
+  const [page, setPage] = useState(1);
+  const pageSize = 50;
+
+  const [provider, setProvider] = useState("");
+  const [orderNo, setOrderNo] = useState("");
+  const [tradeNo, setTradeNo] = useState("");
+  const [verified, setVerified] = useState<"" | "true" | "false">("");
+
+  const [statsMinutes, setStatsMinutes] = useState(60);
+
+  const [reconcileOrderNo, setReconcileOrderNo] = useState("");
+  const [reconcileResult, setReconcileResult] =
+    useState<ReconcileResponse | null>(null);
+
+  const [platformCertImportJson, setPlatformCertImportJson] = useState("");
+  const [platformCertImportPem, setPlatformCertImportPem] = useState("");
+  const [platformCertImportSerialNo, setPlatformCertImportSerialNo] =
+    useState("");
+  const [platformCertImportExpireTime, setPlatformCertImportExpireTime] =
+    useState("");
+  const [platformCertImportMerge, setPlatformCertImportMerge] = useState(true);
+
+  const listQueryKey = useMemo(
+    () =>
+      queryKeys.adminPaymentCallbackEvents(
+        page,
+        pageSize,
+        provider.trim(),
+        orderNo.trim(),
+        tradeNo.trim(),
+        verified
+      ),
+    [page, pageSize, provider, orderNo, tradeNo, verified]
+  );
+
+  const listQuery = useQuery({
+    queryKey: listQueryKey,
+    queryFn: async () => {
+      const res = await api.get("/payment/admin/callback-events", {
+        params: {
+          page,
+          page_size: pageSize,
+          ...(provider.trim() ? { provider: provider.trim() } : {}),
+          ...(orderNo.trim() ? { order_no: orderNo.trim() } : {}),
+          ...(tradeNo.trim() ? { trade_no: tradeNo.trim() } : {}),
+          ...(verified ? { verified: verified === "true" } : {}),
+        },
+      });
+      const data = res.data;
+      return {
+        items: Array.isArray(data?.items)
+          ? (data.items as CallbackEventItem[])
+          : ([] as CallbackEventItem[]),
+        total: Number(data?.total || 0),
+      } satisfies CallbackEventsResponse;
+    },
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  });
+
+  const statsQuery = useQuery({
+    queryKey: queryKeys.adminPaymentCallbackStats(
+      statsMinutes,
+      provider.trim() || null
+    ),
+    queryFn: async () => {
+      const res = await api.get("/payment/admin/callback-events/stats", {
+        params: {
+          minutes: statsMinutes,
+          ...(provider.trim() ? { provider: provider.trim() } : {}),
+        },
+      });
+      return res.data as CallbackStatsResponse;
+    },
+    retry: 1,
+    refetchOnWindowFocus: false,
+  });
+
+  const channelStatusQuery = useQuery({
+    queryKey: ["admin-payment-channel-status"],
+    queryFn: async () => {
+      const res = await api.get("/payment/admin/channel-status");
+      return res.data as PaymentChannelStatusResponse;
+    },
+    retry: 1,
+    refetchOnWindowFocus: false,
+  });
+
+  const platformCertsQuery = useQuery({
+    queryKey: queryKeys.adminWeChatPlatformCerts(),
+    queryFn: async () => {
+      const res = await api.get("/payment/admin/wechat/platform-certs");
+      const data = res.data;
+      return {
+        items: Array.isArray(data?.items)
+          ? (data.items as PlatformCertItem[])
+          : ([] as PlatformCertItem[]),
+        total: Number(data?.total || 0),
+      } satisfies PlatformCertListResponse;
+    },
+    retry: 1,
+    refetchOnWindowFocus: false,
+  });
+
+  useEffect(() => {
+    if (listQuery.error) toast.error(getApiErrorMessage(listQuery.error));
+  }, [listQuery.error, toast]);
+
+  useEffect(() => {
+    if (statsQuery.error) toast.error(getApiErrorMessage(statsQuery.error));
+  }, [statsQuery.error, toast]);
+
+  useEffect(() => {
+    if (platformCertsQuery.error)
+      toast.error(getApiErrorMessage(platformCertsQuery.error));
+  }, [platformCertsQuery.error, toast]);
+
+  useEffect(() => {
+    if (channelStatusQuery.error)
+      toast.error(getApiErrorMessage(channelStatusQuery.error));
+  }, [channelStatusQuery.error, toast]);
+
+  const refreshCertsMutation = useAppMutation<
+    { message: string; count: number },
+    void
+  >({
+    mutationFn: async () => {
+      const res = await api.post(
+        "/payment/admin/wechat/platform-certs/refresh"
+      );
+      return res.data as { message: string; count: number };
+    },
+    errorMessageFallback: "刷新失败",
+    invalidateQueryKeys: [queryKeys.adminWeChatPlatformCerts()],
+    onSuccess: (data) => {
+      toast.success(`已刷新平台证书：${Number((data as any)?.count ?? 0)} 条`);
+    },
+  });
+
+  const importCertsMutation = useAppMutation<
+    { message: string; count: number },
+    {
+      platform_certs_json?: string;
+      cert_pem?: string;
+      serial_no?: string;
+      expire_time?: string;
+      merge: boolean;
+    }
+  >({
+    mutationFn: async (payload) => {
+      const res = await api.post(
+        "/payment/admin/wechat/platform-certs/import",
+        payload
+      );
+      return res.data as { message: string; count: number };
+    },
+    errorMessageFallback: "导入失败",
+    invalidateQueryKeys: [
+      queryKeys.adminWeChatPlatformCerts(),
+      ["admin-payment-channel-status"],
+    ],
+    onSuccess: (data) => {
+      toast.success(`已导入平台证书：${Number((data as any)?.count ?? 0)} 条`);
+      setPlatformCertImportJson("");
+      setPlatformCertImportPem("");
+      setPlatformCertImportSerialNo("");
+      setPlatformCertImportExpireTime("");
+    },
+  });
+
+  const reconcileMutation = useAppMutation<ReconcileResponse, string>({
+    mutationFn: async (orderNoValue) => {
+      const res = await api.get(
+        `/payment/admin/reconcile/${encodeURIComponent(orderNoValue)}`
+      );
+      return res.data as ReconcileResponse;
+    },
+    errorMessageFallback: "对账失败",
+    onSuccess: (data) => {
+      setReconcileResult(data);
+    },
+  });
+
+  const total = listQuery.data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const items = listQuery.data?.items ?? [];
+
+  const stat = statsQuery.data;
+
+  const clearFilters = () => {
+    setProvider("");
+    setOrderNo("");
+    setTradeNo("");
+    setVerified("");
+    setPage(1);
+  };
+
+  const doReconcile = () => {
+    const v = reconcileOrderNo.trim();
+    if (!v) {
+      toast.error("请输入订单号");
+      return;
+    }
+    setReconcileResult(null);
+    reconcileMutation.mutate(v);
+  };
+
+  const reconcileBadge = reconcileResult
+    ? diagnosisLabel(String(reconcileResult.diagnosis || ""))
+    : null;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">
+            支付回调审计
+          </h1>
+          <p className="text-slate-600 mt-1 dark:text-white/50">
+            回调事件列表、统计、微信平台证书、订单对账
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <Button
+            variant="outline"
+            onClick={() => {
+              listQuery.refetch();
+              statsQuery.refetch();
+              platformCertsQuery.refetch();
+              channelStatusQuery.refetch();
+            }}
+            disabled={
+              listQuery.isFetching ||
+              statsQuery.isFetching ||
+              platformCertsQuery.isFetching ||
+              channelStatusQuery.isFetching
+            }
+          >
+            <RefreshCw
+              className={`h-4 w-4 mr-2 ${
+                listQuery.isFetching || statsQuery.isFetching
+                  ? "animate-spin"
+                  : ""
+              }`}
+            />
+            刷新
+          </Button>
+        </div>
+      </div>
+
+      <Card variant="surface" padding="md">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+              支付渠道配置状态
+            </h2>
+            <p className="text-slate-600 text-sm mt-1 dark:text-white/50">
+              出于安全原因不会回显密钥，仅展示是否已配置与就绪状态
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
+          <div className="p-3 rounded-lg bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10">
+            <div className="text-xs text-slate-500 dark:text-white/40">支付宝</div>
+            <div className="mt-1">
+              {channelStatusQuery.isLoading ? (
+                <span className="text-slate-500 text-sm dark:text-white/50">
+                  加载中...
+                </span>
+              ) : channelStatusQuery.data?.alipay_configured ? (
+                <Badge variant="success" size="sm">
+                  已配置
+                </Badge>
+              ) : (
+                <Badge variant="warning" size="sm">
+                  未配置
+                </Badge>
+              )}
+            </div>
+          </div>
+
+          <div className="p-3 rounded-lg bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10">
+            <div className="text-xs text-slate-500 dark:text-white/40">微信支付</div>
+            <div className="mt-1">
+              {channelStatusQuery.isLoading ? (
+                <span className="text-slate-500 text-sm dark:text-white/50">
+                  加载中...
+                </span>
+              ) : channelStatusQuery.data?.wechatpay_configured ? (
+                <Badge variant="success" size="sm">
+                  已配置
+                </Badge>
+              ) : (
+                <Badge variant="warning" size="sm">
+                  未配置
+                </Badge>
+              )}
+            </div>
+          </div>
+
+          <div className="p-3 rounded-lg bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10">
+            <div className="text-xs text-slate-500 dark:text-white/40">平台证书缓存</div>
+            <div className="mt-1">
+              {channelStatusQuery.isLoading ? (
+                <span className="text-slate-500 text-sm dark:text-white/50">
+                  加载中...
+                </span>
+              ) : channelStatusQuery.data?.wechatpay_platform_certs_cached ? (
+                <Badge variant="success" size="sm">
+                  {channelStatusQuery.data?.wechatpay_platform_certs_total ?? 0} 条
+                </Badge>
+              ) : (
+                <Badge variant="warning" size="sm">
+                  无
+                </Badge>
+              )}
+            </div>
+          </div>
+
+          <div className="p-3 rounded-lg bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10">
+            <div className="text-xs text-slate-500 dark:text-white/40">证书自动刷新</div>
+            <div className="mt-1">
+              {channelStatusQuery.isLoading ? (
+                <span className="text-slate-500 text-sm dark:text-white/50">
+                  加载中...
+                </span>
+              ) : channelStatusQuery.data?.wechatpay_cert_refresh_enabled ? (
+                <Badge variant="success" size="sm">
+                  已启用
+                </Badge>
+              ) : (
+                <Badge variant="info" size="sm">
+                  未启用
+                </Badge>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-3 text-xs text-slate-500 dark:text-white/40">
+          {channelStatusQuery.data?.wechatpay_platform_certs_updated_at
+            ? `证书缓存更新时间戳：${channelStatusQuery.data.wechatpay_platform_certs_updated_at}`
+            : "证书缓存更新时间戳：-"}
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card variant="surface" padding="md">
+          <div className="flex items-center gap-4">
+            <div className="p-3 rounded-xl bg-amber-500/15">
+              <CreditCard className="h-6 w-6 text-amber-600 dark:text-amber-400" />
+            </div>
+            <div>
+              <p className="text-slate-600 text-sm dark:text-white/50">
+                回调总数
+              </p>
+              <p className="text-2xl font-bold text-slate-900 dark:text-white">
+                {stat ? stat.window_total : "-"}
+              </p>
+              <p className="text-xs text-slate-500 dark:text-white/40">
+                最近 {statsMinutes} 分钟
+              </p>
+            </div>
+          </div>
+        </Card>
+
+        <Card variant="surface" padding="md">
+          <div className="flex items-center gap-4">
+            <div className="p-3 rounded-xl bg-green-500/15">
+              <ShieldCheck className="h-6 w-6 text-green-600 dark:text-green-400" />
+            </div>
+            <div>
+              <p className="text-slate-600 text-sm dark:text-white/50">
+                验签/解密成功
+              </p>
+              <p className="text-2xl font-bold text-slate-900 dark:text-white">
+                {stat ? stat.window_verified : "-"}
+              </p>
+              <p className="text-xs text-slate-500 dark:text-white/40">
+                最近 {statsMinutes} 分钟
+              </p>
+            </div>
+          </div>
+        </Card>
+
+        <Card variant="surface" padding="md">
+          <div className="flex items-center gap-4">
+            <div className="p-3 rounded-xl bg-red-500/15">
+              <ShieldAlert className="h-6 w-6 text-red-600 dark:text-red-400" />
+            </div>
+            <div>
+              <p className="text-slate-600 text-sm dark:text-white/50">
+                失败/异常
+              </p>
+              <p className="text-2xl font-bold text-slate-900 dark:text-white">
+                {stat ? stat.window_failed : "-"}
+              </p>
+              <p className="text-xs text-slate-500 dark:text-white/40">
+                最近 {statsMinutes} 分钟
+              </p>
+            </div>
+          </div>
+        </Card>
+      </div>
+
+      <Card variant="surface" padding="md">
+        <div className="flex flex-wrap gap-3 items-center justify-between">
+          <div className="flex flex-wrap gap-3 items-center">
+            <div className="flex items-center gap-2">
+              <Filter className="h-4 w-4 text-slate-500 dark:text-white/50" />
+              <span className="text-slate-700 text-sm dark:text-white/70">
+                筛选：
+              </span>
+            </div>
+
+            <select
+              value={provider}
+              onChange={(e) => {
+                setProvider(e.target.value);
+                setPage(1);
+              }}
+              className="px-3 py-2 rounded-lg border border-slate-200/70 bg-white text-slate-900 text-sm outline-none dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
+            >
+              <option value="">全部渠道</option>
+              <option value="alipay">支付宝</option>
+              <option value="wechat">微信</option>
+            </select>
+
+            <select
+              value={verified}
+              onChange={(e) => {
+                setVerified(e.target.value as any);
+                setPage(1);
+              }}
+              className="px-3 py-2 rounded-lg border border-slate-200/70 bg-white text-slate-900 text-sm outline-none dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
+            >
+              <option value="">全部结果</option>
+              <option value="true">已验证</option>
+              <option value="false">未验证</option>
+            </select>
+
+            <div className="w-56">
+              <Input
+                value={orderNo}
+                onChange={(e) => {
+                  setOrderNo(e.target.value);
+                  setPage(1);
+                }}
+                placeholder="订单号 order_no"
+              />
+            </div>
+
+            <div className="w-56">
+              <Input
+                value={tradeNo}
+                onChange={(e) => {
+                  setTradeNo(e.target.value);
+                  setPage(1);
+                }}
+                placeholder="流水号 trade_no"
+              />
+            </div>
+
+            {(provider || orderNo || tradeNo || verified) && (
+              <Button variant="ghost" size="sm" onClick={clearFilters}>
+                清除筛选
+              </Button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-slate-600 text-sm dark:text-white/50">
+                统计窗口
+              </span>
+              <select
+                value={statsMinutes}
+                onChange={(e) => setStatsMinutes(Number(e.target.value))}
+                className="px-3 py-2 rounded-lg border border-slate-200/70 bg-white text-slate-900 text-sm outline-none dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
+              >
+                <option value={15}>15 分钟</option>
+                <option value={60}>60 分钟</option>
+                <option value={6 * 60}>6 小时</option>
+                <option value={24 * 60}>24 小时</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </Card>
+
+      <Card variant="surface" padding="none">
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-slate-200/70 dark:border-white/10">
+                <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
+                  时间
+                </th>
+                <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
+                  渠道
+                </th>
+                <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
+                  订单号
+                </th>
+                <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
+                  流水号
+                </th>
+                <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
+                  金额
+                </th>
+                <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
+                  验证
+                </th>
+                <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
+                  错误
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {listQuery.isLoading ? (
+                <tr>
+                  <td
+                    colSpan={7}
+                    className="py-10 text-center text-slate-500 dark:text-white/50"
+                  >
+                    加载中...
+                  </td>
+                </tr>
+              ) : items.length === 0 ? (
+                <tr>
+                  <td
+                    colSpan={7}
+                    className="py-10 text-center text-slate-500 dark:text-white/50"
+                  >
+                    暂无数据
+                  </td>
+                </tr>
+              ) : (
+                items.map((it) => (
+                  <tr
+                    key={it.id}
+                    className="border-b border-slate-200/50 hover:bg-slate-50 dark:border-white/5 dark:hover:bg-white/5"
+                  >
+                    <td className="py-3 px-4 text-slate-600 text-sm dark:text-white/60">
+                      {formatTime(it.created_at)}
+                    </td>
+                    <td className="py-3 px-4 text-slate-900 text-sm dark:text-white">
+                      {providerLabel(it.provider)}
+                    </td>
+                    <td className="py-3 px-4 text-slate-700 text-sm dark:text-white/70">
+                      {it.order_no || "-"}
+                    </td>
+                    <td className="py-3 px-4 text-slate-700 text-sm dark:text-white/70">
+                      {it.trade_no || "-"}
+                    </td>
+                    <td className="py-3 px-4 text-slate-700 text-sm dark:text-white/70">
+                      {typeof it.amount === "number"
+                        ? it.amount.toFixed(2)
+                        : "-"}
+                    </td>
+                    <td className="py-3 px-4">
+                      {it.verified ? (
+                        <Badge variant="success" size="sm">
+                          已验证
+                        </Badge>
+                      ) : (
+                        <Badge variant="danger" size="sm">
+                          未验证
+                        </Badge>
+                      )}
+                    </td>
+                    <td className="py-3 px-4 text-slate-600 text-sm dark:text-white/60">
+                      {it.error_message || "-"}
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="p-4">
+          <Pagination
+            currentPage={page}
+            totalPages={totalPages}
+            onPageChange={(p) => setPage(p)}
+          />
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card variant="surface" padding="md">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+                微信平台证书
+              </h2>
+              <p className="text-slate-600 text-sm mt-1 dark:text-white/50">
+                用于微信支付 V3 回调验签（可多证书轮换）
+              </p>
+            </div>
+            <Button
+              icon={KeyRound}
+              onClick={() => refreshCertsMutation.mutate()}
+              disabled={refreshCertsMutation.isPending}
+            >
+              {refreshCertsMutation.isPending ? "刷新中..." : "刷新证书"}
+            </Button>
+          </div>
+
+          <div className="mt-4 space-y-2">
+            {platformCertsQuery.isLoading ? (
+              <div className="text-center py-8 text-slate-500 dark:text-white/50">
+                加载中...
+              </div>
+            ) : (platformCertsQuery.data?.items?.length ?? 0) === 0 ? (
+              <div className="text-center py-8 text-slate-500 dark:text-white/50">
+                暂无证书
+              </div>
+            ) : (
+              (platformCertsQuery.data?.items ?? []).map((c) => (
+                <div
+                  key={c.serial_no}
+                  className="p-3 rounded-lg bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-slate-900 text-sm font-medium dark:text-white">
+                      {c.serial_no}
+                    </div>
+                    <div className="text-slate-500 text-xs dark:text-white/40">
+                      {c.expire_time || "-"}
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          <div className="mt-6 border-t border-slate-200/70 pt-4 dark:border-white/10">
+            <div className="text-slate-900 text-sm font-semibold dark:text-white">
+              离线导入证书（当无法刷新/无法访问微信接口时）
+            </div>
+            <div className="text-slate-600 text-xs mt-1 dark:text-white/50">
+              支持两种方式：1) 粘贴平台证书 JSON（dump 格式）；2) 粘贴单个证书 PEM（可选填 serial/expire）
+            </div>
+
+            <div className="mt-3 grid grid-cols-1 gap-3">
+              <Textarea
+                value={platformCertImportJson}
+                onChange={(e) => setPlatformCertImportJson(e.target.value)}
+                rows={5}
+                placeholder='平台证书 JSON（示例：{"updated_at":...,"certs":[{"serial_no":"...","pem":"-----BEGIN CERTIFICATE-----...","expire_time":"..."}]})'
+              />
+
+              <Textarea
+                value={platformCertImportPem}
+                onChange={(e) => setPlatformCertImportPem(e.target.value)}
+                rows={5}
+                placeholder="单个证书 PEM（-----BEGIN CERTIFICATE----- ... -----END CERTIFICATE-----）"
+              />
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <Input
+                  value={platformCertImportSerialNo}
+                  onChange={(e) => setPlatformCertImportSerialNo(e.target.value)}
+                  placeholder="serial_no（可选）"
+                />
+                <Input
+                  value={platformCertImportExpireTime}
+                  onChange={(e) => setPlatformCertImportExpireTime(e.target.value)}
+                  placeholder="expire_time（可选，ISO8601）"
+                />
+              </div>
+
+              <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-white/70">
+                <input
+                  type="checkbox"
+                  checked={platformCertImportMerge}
+                  onChange={(e) => setPlatformCertImportMerge(e.target.checked)}
+                />
+                合并导入（保留已有证书）
+              </label>
+
+              <div className="flex items-center gap-3">
+                <Button
+                  onClick={() => {
+                    const payload = {
+                      merge: platformCertImportMerge,
+                      ...(platformCertImportJson.trim()
+                        ? { platform_certs_json: platformCertImportJson.trim() }
+                        : {}),
+                      ...(platformCertImportPem.trim()
+                        ? {
+                            cert_pem: platformCertImportPem.trim(),
+                            ...(platformCertImportSerialNo.trim()
+                              ? { serial_no: platformCertImportSerialNo.trim() }
+                              : {}),
+                            ...(platformCertImportExpireTime.trim()
+                              ? { expire_time: platformCertImportExpireTime.trim() }
+                              : {}),
+                          }
+                        : {}),
+                    };
+
+                    if (!payload.platform_certs_json && !payload.cert_pem) {
+                      toast.error("请至少填写 platform_certs_json 或 cert_pem");
+                      return;
+                    }
+                    importCertsMutation.mutate(payload);
+                  }}
+                  disabled={importCertsMutation.isPending}
+                >
+                  {importCertsMutation.isPending ? "导入中..." : "导入证书"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setPlatformCertImportJson("");
+                    setPlatformCertImportPem("");
+                    setPlatformCertImportSerialNo("");
+                    setPlatformCertImportExpireTime("");
+                  }}
+                >
+                  清空
+                </Button>
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        <Card variant="surface" padding="md">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+                订单对账
+              </h2>
+              <p className="text-slate-600 text-sm mt-1 dark:text-white/50">
+                输入订单号，返回回调情况诊断（无回调/验签失败/金额不一致等）
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 flex items-center gap-3">
+            <div className="flex-1">
+              <Input
+                value={reconcileOrderNo}
+                onChange={(e) => setReconcileOrderNo(e.target.value)}
+                placeholder="请输入订单号"
+              />
+            </div>
+            <Button
+              icon={Search}
+              onClick={doReconcile}
+              disabled={reconcileMutation.isPending}
+            >
+              {reconcileMutation.isPending ? "查询中..." : "对账"}
+            </Button>
+          </div>
+
+          {reconcileResult ? (
+            <div className="mt-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="text-slate-700 text-sm dark:text-white/70">
+                  诊断：
+                </span>
+                {reconcileBadge ? (
+                  <Badge variant={reconcileBadge.color} size="sm">
+                    {reconcileBadge.label}
+                  </Badge>
+                ) : null}
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 rounded-lg bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10">
+                  <div className="text-xs text-slate-500 dark:text-white/40">
+                    订单状态
+                  </div>
+                  <div className="text-sm font-medium text-slate-900 dark:text-white">
+                    {reconcileResult.order_status}
+                  </div>
+                </div>
+                <div className="p-3 rounded-lg bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10">
+                  <div className="text-xs text-slate-500 dark:text-white/40">
+                    支付方式
+                  </div>
+                  <div className="text-sm font-medium text-slate-900 dark:text-white">
+                    {reconcileResult.payment_method || "-"}
+                  </div>
+                </div>
+                <div className="p-3 rounded-lg bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10">
+                  <div className="text-xs text-slate-500 dark:text-white/40">
+                    金额
+                  </div>
+                  <div className="text-sm font-medium text-slate-900 dark:text-white">
+                    {Number(reconcileResult.actual_amount).toFixed(2)}
+                  </div>
+                </div>
+                <div className="p-3 rounded-lg bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10">
+                  <div className="text-xs text-slate-500 dark:text-white/40">
+                    订单流水号
+                  </div>
+                  <div className="text-sm font-medium text-slate-900 dark:text-white">
+                    {reconcileResult.trade_no || "-"}
+                  </div>
+                </div>
+                <div className="p-3 rounded-lg bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10">
+                  <div className="text-xs text-slate-500 dark:text-white/40">
+                    回调总数
+                  </div>
+                  <div className="text-sm font-medium text-slate-900 dark:text-white">
+                    {reconcileResult.callbacks_total}
+                  </div>
+                </div>
+                <div className="p-3 rounded-lg bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10">
+                  <div className="text-xs text-slate-500 dark:text-white/40">
+                    成功/失败
+                  </div>
+                  <div className="text-sm font-medium text-slate-900 dark:text-white">
+                    {reconcileResult.callbacks_verified}/
+                    {reconcileResult.callbacks_failed}
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-2">
+                <div className="text-slate-700 text-sm font-medium dark:text-white/80">
+                  最近回调
+                </div>
+                <div className="mt-2 space-y-2">
+                  {(reconcileResult.recent_events ?? []).length === 0 ? (
+                    <div className="text-slate-500 text-sm dark:text-white/50">
+                      暂无回调事件
+                    </div>
+                  ) : (
+                    (reconcileResult.recent_events ?? [])
+                      .slice(0, 20)
+                      .map((e, idx) => (
+                        <div
+                          key={`${e.created_at}-${idx}`}
+                          className="p-3 rounded-lg bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10"
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="text-slate-900 text-sm font-medium dark:text-white">
+                              {providerLabel(e.provider)}
+                            </div>
+                            <div className="text-slate-500 text-xs dark:text-white/40">
+                              {formatTime(e.created_at)}
+                            </div>
+                          </div>
+                          <div className="mt-1 grid grid-cols-2 gap-2">
+                            <div className="text-xs text-slate-600 dark:text-white/60 break-all">
+                              order_no: {e.order_no || "-"}
+                            </div>
+                            <div className="text-xs text-slate-600 dark:text-white/60 break-all">
+                              trade_no: {e.trade_no || "-"}
+                            </div>
+                            <div className="text-xs text-slate-600 dark:text-white/60">
+                              amount:{" "}
+                              {typeof e.amount === "number"
+                                ? e.amount.toFixed(2)
+                                : "-"}
+                            </div>
+                            <div className="text-xs text-slate-600 dark:text-white/60">
+                              {e.verified ? (
+                                <Badge variant="success" size="sm">
+                                  已验证
+                                </Badge>
+                              ) : (
+                                <Badge variant="danger" size="sm">
+                                  未验证
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                          <div className="mt-2 text-xs text-slate-600 dark:text-white/60">
+                            error: {e.error_message || "-"}
+                          </div>
+                        </div>
+                      ))
+                  )}
+                </div>
+              </div>
+
+              <div className="text-xs text-slate-500 dark:text-white/40 break-all">
+                details:{" "}
+                {JSON.stringify(reconcileResult.details ?? {}, null, 2)}
+              </div>
+            </div>
+          ) : null}
+        </Card>
+      </div>
+    </div>
+  );
+}

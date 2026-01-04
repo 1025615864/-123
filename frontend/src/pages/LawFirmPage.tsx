@@ -110,7 +110,7 @@ export default function LawFirmPage() {
           right={
             <div className="w-full md:w-auto space-y-3">
               <div className="flex justify-end">
-                <LinkButton to="/lawfirm/consultations" variant="outline" size="sm" icon={Calendar}>
+                <LinkButton to="/orders?tab=consultations" variant="outline" size="sm" icon={Calendar}>
                   我的预约
                 </LinkButton>
               </div>

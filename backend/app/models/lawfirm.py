@@ -120,6 +120,27 @@ class LawyerConsultation(Base):
     lawyer: Mapped[Lawyer] = relationship("Lawyer", backref="consultations")
 
 
+class LawyerConsultationMessage(Base):
+    """律师咨询留言表"""
+    __tablename__: str = "lawyer_consultation_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    consultation_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("lawyer_consultations.id"), nullable=False, index=True
+    )
+    sender_user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    sender_role: Mapped[str] = mapped_column(String(20), nullable=False)  # user/lawyer
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    consultation: Mapped[LawyerConsultation] = relationship(
+        "LawyerConsultation",
+        backref="messages",
+        foreign_keys=[consultation_id],
+    )
+    sender: Mapped[User] = relationship("User", foreign_keys=[sender_user_id])
+
+
 class LawyerReview(Base):
     """律师评价表"""
     __tablename__: str = "lawyer_reviews"

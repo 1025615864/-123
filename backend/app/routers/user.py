@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
 from ..models.user import User
+from ..models.user_consent import ConsentDocType, UserConsent
 from ..schemas.user import (
     UserCreate, UserLogin, UserUpdate, UserResponse,
     Token, LoginResponse, RegisterResponse, PasswordChange, MessageResponse,
@@ -28,7 +29,11 @@ router = APIRouter(prefix="/user", tags=["用户管理"])
 
 
 @router.post("/register", response_model=RegisterResponse, summary="用户注册")
-async def register(user_data: UserCreate, db: Annotated[AsyncSession, Depends(get_db)]):
+async def register(
+    request: Request,
+    user_data: UserCreate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
     """
     用户注册接口
     
@@ -38,6 +43,12 @@ async def register(user_data: UserCreate, db: Annotated[AsyncSession, Depends(ge
     - **nickname**: 昵称（可选）
     """
     try:
+        if (not user_data.agree_terms) or (not user_data.agree_privacy) or (not user_data.agree_ai_disclaimer):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="请阅读并同意用户协议、隐私政策及AI咨询免责声明",
+            )
+
         if await user_service.is_username_taken(db, user_data.username):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -51,7 +62,39 @@ async def register(user_data: UserCreate, db: Annotated[AsyncSession, Depends(ge
             )
         
         user = await user_service.create(db, user_data)
-        
+
+        ip = request.client.host if request.client else None
+        user_agent = request.headers.get("user-agent")
+
+        consent_version = "v1"
+        db.add_all(
+            [
+                UserConsent(
+                    user_id=int(user.id),
+                    doc_type=ConsentDocType.TERMS,
+                    doc_version=consent_version,
+                    ip=ip,
+                    user_agent=user_agent,
+                ),
+                UserConsent(
+                    user_id=int(user.id),
+                    doc_type=ConsentDocType.PRIVACY,
+                    doc_version=consent_version,
+                    ip=ip,
+                    user_agent=user_agent,
+                ),
+                UserConsent(
+                    user_id=int(user.id),
+                    doc_type=ConsentDocType.AI_DISCLAIMER,
+                    doc_version=consent_version,
+                    ip=ip,
+                    user_agent=user_agent,
+                ),
+            ]
+        )
+        await db.commit()
+        await db.refresh(user)
+
         return RegisterResponse(
             user=UserResponse.model_validate(user),
             message="注册成功"

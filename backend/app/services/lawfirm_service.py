@@ -272,6 +272,7 @@ class ReviewService:
         """获取律师评价"""
         query = (
             select(LawyerReview)
+            .options(selectinload(LawyerReview.user))
             .where(LawyerReview.lawyer_id == lawyer_id)
             .order_by(desc(LawyerReview.created_at))
             .offset((page - 1) * page_size)

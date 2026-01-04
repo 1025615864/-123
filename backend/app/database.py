@@ -59,6 +59,7 @@ async def init_db() -> None:
     """初始化数据库表"""
     for module_name in (
         "app.models.user",
+        "app.models.user_consent",
         "app.models.consultation",
         "app.models.forum",
         "app.models.news",
@@ -102,6 +103,42 @@ async def init_db() -> None:
 
                 tables_result = await conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
                 tables = {row[0] for row in tables_result.fetchall()}
+
+                if "payment_callback_events" not in tables:
+                    _ = await conn.execute(
+                        text(
+                            "CREATE TABLE IF NOT EXISTS payment_callback_events (id INTEGER PRIMARY KEY AUTOINCREMENT, provider VARCHAR(20) NOT NULL, order_no VARCHAR(64), trade_no VARCHAR(100), amount FLOAT, amount_cents INTEGER, verified BOOLEAN DEFAULT 0, error_message VARCHAR(200), raw_payload TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+                        )
+                    )
+                try:
+                    _ = await conn.execute(
+                        text(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_cb_provider_trade_no ON payment_callback_events(provider, trade_no)"
+                        )
+                    )
+                    _ = await conn.execute(
+                        text(
+                            "CREATE INDEX IF NOT EXISTS ix_payment_callback_events_provider ON payment_callback_events(provider)"
+                        )
+                    )
+                    _ = await conn.execute(
+                        text(
+                            "CREATE INDEX IF NOT EXISTS ix_payment_callback_events_order_no ON payment_callback_events(order_no)"
+                        )
+                    )
+                    _ = await conn.execute(
+                        text(
+                            "CREATE INDEX IF NOT EXISTS ix_payment_callback_events_trade_no ON payment_callback_events(trade_no)"
+                        )
+                    )
+                except Exception:
+                    logger.exception("创建 payment_callback_events 索引失败")
+
+                if "users" in tables:
+                    users_cols_result = await conn.execute(text("PRAGMA table_info(users)"))
+                    users_cols = {row[1] for row in users_cols_result.fetchall()}
+                    if "vip_expires_at" not in users_cols:
+                        _ = await conn.execute(text("ALTER TABLE users ADD COLUMN vip_expires_at DATETIME"))
 
                 if "news_ai_annotations" in tables:
                     ann_cols_result = await conn.execute(text("PRAGMA table_info(news_ai_annotations)"))

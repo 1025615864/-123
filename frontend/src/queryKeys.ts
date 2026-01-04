@@ -36,6 +36,30 @@ export const queryKeys = {
   lawFirmConsultations: (page: number, pageSize: number) =>
     ["lawfirm-consultations", { page, pageSize }] as const,
 
+  paymentOrdersBase: () => ["payment-orders"] as const,
+  paymentOrders: (page: number, pageSize: number, statusFilter: string | null) =>
+    ["payment-orders", { page, pageSize, statusFilter }] as const,
+  paymentOrderDetail: (orderNo: string | null) =>
+    ["payment-order", { orderNo }] as const,
+
+  adminPaymentCallbackEvents: (
+    page: number,
+    pageSize: number,
+    provider: string,
+    orderNo: string,
+    tradeNo: string,
+    verified: "" | "true" | "false"
+  ) =>
+    [
+      "admin-payment-callback-events",
+      { page, pageSize, provider, orderNo, tradeNo, verified },
+    ] as const,
+  adminPaymentCallbackStats: (minutes: number, provider: string | null) =>
+    ["admin-payment-callback-events-stats", { minutes, provider }] as const,
+  adminWeChatPlatformCerts: () => ["admin-wechat-platform-certs"] as const,
+  adminPaymentReconcile: (orderNo: string) =>
+    ["admin-payment-reconcile", { orderNo }] as const,
+
   newsCategories: () => ["news-categories"] as const,
   newsList: (
     page: number,

@@ -14,6 +14,9 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     """用户注册模式"""
     password: str = Field(..., min_length=6, max_length=100, description="密码")
+    agree_terms: bool = Field(..., description="同意用户协议")
+    agree_privacy: bool = Field(..., description="同意隐私政策")
+    agree_ai_disclaimer: bool = Field(..., description="同意AI咨询免责声明")
 
 
 class UserLogin(BaseModel):
@@ -36,6 +39,7 @@ class UserResponse(UserBase):
     phone: str | None = None
     role: str = "user"
     is_active: bool = True
+    vip_expires_at: datetime | None = None
     created_at: datetime
     
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)

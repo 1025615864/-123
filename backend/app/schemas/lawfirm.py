@@ -171,6 +171,11 @@ class ConsultationResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     lawyer_name: str | None = None
+    payment_order_no: str | None = None
+    payment_status: str | None = None
+    payment_amount: float | None = None
+    review_id: int | None = None
+    can_review: bool = False
     
     model_config: ClassVar[ConfigDict] = {"from_attributes": True}
 

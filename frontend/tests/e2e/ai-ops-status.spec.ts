@@ -19,6 +19,8 @@ test('管理后台：Settings AI咨询运维状态卡片可见；/api/system/ai/
 
   await page.goto('/admin/settings')
 
+  await page.getByRole('button', { name: 'AI 咨询' }).click()
+
   await expect(page.getByText('AI咨询运维状态')).toBeVisible({ timeout: 12_000 })
   await expect(page.getByText('AI路由启用')).toBeVisible({ timeout: 12_000 })
   await expect(page.getByText('OPENAI_API_KEY')).toBeVisible({ timeout: 12_000 })

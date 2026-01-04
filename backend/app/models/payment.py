@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Integer, String, Text, DateTime, Float, ForeignKey
+from sqlalchemy import Boolean, Integer, String, Text, DateTime, Float, ForeignKey, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 from ..database import Base
@@ -118,3 +118,25 @@ class BalanceTransaction(Base):
     # 关系
     user: Mapped[User] = relationship("User", backref="balance_transactions")
     order: Mapped[PaymentOrder | None] = relationship("PaymentOrder", backref="transactions")
+
+
+class PaymentCallbackEvent(Base):
+    __tablename__: str = "payment_callback_events"
+    __table_args__: tuple[UniqueConstraint] = (
+        UniqueConstraint("provider", "trade_no", name="uq_payment_cb_provider_trade_no"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+
+    provider: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    order_no: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    trade_no: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+
+    amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    amount_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    error_message: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    raw_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

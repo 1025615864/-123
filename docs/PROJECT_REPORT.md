@@ -1,6 +1,6 @@
 # 项目报告（百姓法律助手 / 百姓助手）
 
-更新时间：2026-01-03
+更新时间：2026-01-04
 
 > 目的：为下一位接手工程师提供“一份文档就能上手”的项目报告。
 >
@@ -27,6 +27,8 @@
   - 管理端支持审核、敏感词/过滤规则。
 - **支付与订单**
   - 下单/支付/退款/回调验签。
+  - 支付回调事件审计：回调事件落库、管理员回调统计/对账、后台审计页 `/admin/payment-callbacks`。
+  - 微信支付回调（v3）：平台证书验签 + 回调资源解密（APIv3 key），并支持平台证书刷新/定时刷新。
 - **运维交付**
   - Docker Compose 一键启动；生产示例 compose。
   - Helm Chart（K8s + Ingress，默认 `/api` -> backend）。
@@ -249,6 +251,7 @@ AI 咨询模块的实现细节与已知风险点已合并到本文档的「12.5 
 - News AI：
   - 管理员手动重跑：`POST /api/news/admin/{news_id}/ai/rerun`
   - 运维状态：`GET /api/system/news-ai/status`（管理员）
+  - E2E/调试接口（仅 DEBUG 可用）：`POST /api/news/admin/{news_id}/debug/set-view-count`（设置 `view_count` 并清 hot cache，用于热门新闻用例稳定化）
 
 生产注意：
 
@@ -283,6 +286,12 @@ AI 咨询模块的实现细节与已知风险点已合并到本文档的「12.5 
   - 如需复用你已经启动的服务：设置 `E2E_REUSE_EXISTING=1`（仅本地建议）
   - Windows 注意：命令行传 `tests/e2e/chat-*.spec.ts` 这类通配符可能匹配不到文件，建议显式列出文件或仅传目录/单文件。
   - 如需隔离 E2E 数据库：设置 `E2E_DATABASE_URL`（否则默认使用 `sqlite+aiosqlite:///../backend/data/app.db`）
+  - 常见坑：
+    - 前端 `AuthContext` 会校验 `localStorage.token` 必须为可解码且未过期的 JWT；纯前端 mock 场景建议使用 `frontend/tests/e2e/helpers.ts` 的 `makeE2eJwt()`
+    - `/admin/settings` 默认 tab 为 `base`，部分运维卡片只在 `AI 咨询` / `新闻 AI` tab 渲染，E2E 断言前需先切 tab
+    - 移动端底部导航与“更多”弹层入口可能随导航结构调整，MobileNav 用例以 `dialog` + `日历` 等工具入口为准
+
+最新一次全量回归结果（2026-01-04）：后端 pytest 83 passed；Playwright E2E `73 passed, 0 failed`。
 
 ---
 
@@ -304,13 +313,40 @@ AI 咨询模块的实现细节与已知风险点已合并到本文档的「12.5 
 - `../.github/workflows/post-deploy-smoke.yml`
   - 部署后手动触发冒烟（需要 Secrets：`BASE_URL`、`ADMIN_TOKEN`）。
 
+### 9.3 GitHub PR 流程与分支策略（重要）
+
+当前仓库已启用较严格的主干保护与合并策略，目标是：**禁止直推 main**、**所有改动走 PR**、**CI 通过后才能合并**、并保持 **线性提交历史**。
+
+- **仓库合并策略（Settings -> General -> Pull Requests）**
+
+  - **仅允许 Squash 合并**：`Allow squash merging = true`
+  - 禁用其它合并方式：
+    - `Allow merge commits = false`
+    - `Allow rebase merging = false`
+  - **合并后自动删除分支**：`Automatically delete head branches = true`
+
+- **main 分支保护（Settings -> Branches -> Branch protection rules: main）**
+
+  - `Require a pull request before merging = true`
+  - `Require status checks to pass before merging = true`
+    - Required checks：`required-checks`（由 `ci.yml` 的聚合 job 提供）
+  - `Require branches to be up to date before merging = true`
+  - `Do not allow bypassing the above settings = true`（管理员也不能绕过）
+  - `Require linear history = true`（禁止 merge commit，保证线性历史）
+  - `Require approvals = false`（避免因无人审核导致阻塞）
+
+- **建议的日常 PR 流程**
+  - 从 `main` 拉分支（如 `feat/...` / `fix/...` / `chore/...`）
+  - Push 后创建 PR
+  - 等待 CI 全绿（含 `required-checks` 与 `Type Check`）
+  - 使用 **Squash and merge** 合并，合并后分支会自动删除
+
 ---
 
 ## 10. 常见问题（FAQ）
 
 - **Windows 上 python/pip/uvicorn 启动异常**
   - 优先使用 `py -m pip ...` / `py -m uvicorn ...`。
-  - 中文路径下 `.venv\Scripts\uvicorn.exe` launcher 可能失败，使用 `python -m uvicorn ...` 规避。
 - **生产环境 News AI 不跑**
   - `NEWS_AI_ENABLED=true` 才会启用周期任务。
   - `DEBUG=false` 且 Redis 不可用会禁用周期任务（检查 `REDIS_URL`）。
@@ -410,6 +446,7 @@ AI 咨询模块的实现细节与已知风险点已合并到本文档的「12.5 
 
 - **2025-12-27**：落地“Secrets 不入库”、News AI 运维状态接口、`StaleDataError` 并发兜底、生产部署与冒烟 SOP。
 - **2025-12-29**：News 模块发布（tag `news-module-20251229`）、补齐开发/架构/API 速查文档入口与测试结果记录。
+- **2026-01-04**：Playwright E2E 全量回归全绿（73 passed）；新增/完善 E2E 稳定化手段（DEBUG 设置新闻 `view_count` 并清 hot cache、Settings tab 断言约定、ChatHistory 伪 JWT 工具 `makeE2eJwt()`）。
 
 ---
 

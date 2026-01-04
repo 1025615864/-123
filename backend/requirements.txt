@@ -29,6 +29,7 @@ pydantic-settings>=2.2.0
 typing-extensions>=4.8.0
 httpx>=0.27.0
 redis>=5.0.0
+cryptography>=42.0.0
 
 # Document Processing
 pypdf==3.17.1

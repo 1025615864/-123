@@ -5,7 +5,7 @@ from .forum import Post, Comment, PostLike, CommentLike, PostFavorite, PostReact
 from .news import News, NewsFavorite, NewsViewHistory, NewsSubscription
 from .news_ai import NewsAIAnnotation
 from .news_workbench import NewsVersion, NewsAIGeneration, NewsLinkCheck
-from .lawfirm import LawFirm, Lawyer, LawyerConsultation, LawyerReview
+from .lawfirm import LawFirm, Lawyer, LawyerConsultation, LawyerConsultationMessage, LawyerReview
 from .knowledge import LegalKnowledge, ConsultationTemplate
 from .notification import Notification
 from .system import SystemConfig, AdminLog
@@ -31,6 +31,7 @@ __all__ = [
     "LawFirm",
     "Lawyer",
     "LawyerConsultation",
+    "LawyerConsultationMessage",
     "LawyerReview",
     "LegalKnowledge",
     "ConsultationTemplate",

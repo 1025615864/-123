@@ -32,6 +32,52 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("PAYMENT_WEBHOOK_SECRET", "PAYMENT_CALLBACK_SECRET"),
     )
 
+    alipay_app_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("ALIPAY_APP_ID", "PAY_ALIPAY_APP_ID"),
+    )
+    alipay_private_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("ALIPAY_PRIVATE_KEY", "PAY_ALIPAY_PRIVATE_KEY"),
+    )
+    alipay_public_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("ALIPAY_PUBLIC_KEY", "PAY_ALIPAY_PUBLIC_KEY"),
+    )
+    alipay_gateway_url: str = Field(
+        default="https://openapi.alipay.com/gateway.do",
+        validation_alias=AliasChoices("ALIPAY_GATEWAY_URL", "PAY_ALIPAY_GATEWAY_URL"),
+    )
+    alipay_notify_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("ALIPAY_NOTIFY_URL", "PAY_ALIPAY_NOTIFY_URL"),
+    )
+    alipay_return_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("ALIPAY_RETURN_URL", "PAY_ALIPAY_RETURN_URL"),
+    )
+
+    wechatpay_mch_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("WECHATPAY_MCH_ID", "WECHAT_MCH_ID"),
+    )
+    wechatpay_mch_serial_no: str = Field(
+        default="",
+        validation_alias=AliasChoices("WECHATPAY_MCH_SERIAL_NO", "WECHAT_MCH_SERIAL_NO"),
+    )
+    wechatpay_private_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("WECHATPAY_PRIVATE_KEY", "WECHAT_PRIVATE_KEY"),
+    )
+    wechatpay_api_v3_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("WECHATPAY_API_V3_KEY", "WECHAT_API_V3_KEY"),
+    )
+    wechatpay_certificates_url: str = Field(
+        default="https://api.mch.weixin.qq.com/v3/certificates",
+        validation_alias=AliasChoices("WECHATPAY_CERTIFICATES_URL", "WECHAT_CERTIFICATES_URL"),
+    )
+
     cors_allow_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174", "http://127.0.0.1:5174"]
     cors_allow_credentials: bool = False
     

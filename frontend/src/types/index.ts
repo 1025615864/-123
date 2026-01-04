@@ -7,6 +7,7 @@ export interface User {
   avatar?: string;
   phone?: string;
   is_active?: boolean;
+  vip_expires_at?: string | null;
   created_at?: string;
 }
 

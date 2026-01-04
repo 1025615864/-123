@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
 import Layout from "./components/Layout";
 import AdminLayout from "./components/AdminLayout";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -22,8 +22,12 @@ const NewsSubscriptionsPage = lazy(
 const LawFirmPage = lazy(() => import("./pages/LawFirmPage"));
 const SearchPage = lazy(() => import("./pages/SearchPage"));
 const NotificationsFrontPage = lazy(() => import("./pages/NotificationsPage"));
+const OrdersHubPage = lazy(() => import("./pages/OrdersHubPage"));
 const LoginPage = lazy(() => import("./pages/LoginPage"));
 const RegisterPage = lazy(() => import("./pages/RegisterPage"));
+const TermsPage = lazy(() => import("./pages/TermsPage"));
+const PrivacyPolicyPage = lazy(() => import("./pages/PrivacyPolicyPage"));
+const AiDisclaimerPage = lazy(() => import("./pages/AiDisclaimerPage"));
 const ProfilePage = lazy(() => import("./pages/ProfilePage"));
 const PostDetailPage = lazy(() => import("./pages/PostDetailPage"));
 const ChatHistoryPage = lazy(() => import("./pages/ChatHistoryPage"));
@@ -31,9 +35,9 @@ const NewsDetailPage = lazy(() => import("./pages/NewsDetailPage"));
 const NewsTopicsPage = lazy(() => import("./pages/NewsTopicsPage"));
 const NewsTopicDetailPage = lazy(() => import("./pages/NewsTopicDetailPage"));
 const LawFirmDetailPage = lazy(() => import("./pages/LawFirmDetailPage"));
-const LawFirmConsultationsPage = lazy(
-  () => import("./pages/LawFirmConsultationsPage")
-);
+const LawyerDetailPage = lazy(() => import("./pages/LawyerDetailPage"));
+const LawyerVerificationPage = lazy(() => import("./pages/LawyerVerificationPage"));
+const LawyerDashboardPage = lazy(() => import("./pages/LawyerDashboardPage"));
 const FeeCalculatorPage = lazy(() => import("./pages/FeeCalculatorPage"));
 const LimitationsCalculatorPage = lazy(
   () => import("./pages/LimitationsCalculatorPage")
@@ -73,8 +77,10 @@ const TemplatesManagePage = lazy(
   () => import("./pages/admin/TemplatesManagePage")
 );
 const ForumManagePage = lazy(() => import("./pages/admin/ForumManagePage"));
+const LawyerVerificationsPage = lazy(() => import("./pages/admin/LawyerVerificationsPage"));
 const LogsPage = lazy(() => import("./pages/admin/LogsPage"));
 const NotificationsPage = lazy(() => import("./pages/admin/NotificationsPage"));
+const PaymentCallbacksPage = lazy(() => import("./pages/admin/PaymentCallbacksPage"));
 
 // 加载中组件
 function PageLoading() {
@@ -106,11 +112,13 @@ function App() {
                 <Route path="news/comments" element={<NewsCommentsManagePage />} />
                 <Route path="forum" element={<ForumManagePage />} />
                 <Route path="lawfirms" element={<LawFirmsManagePage />} />
+                <Route path="lawyer-verifications" element={<LawyerVerificationsPage />} />
                 <Route path="knowledge" element={<KnowledgeManagePage />} />
                 <Route path="templates" element={<TemplatesManagePage />} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="logs" element={<LogsPage />} />
                 <Route path="notifications" element={<NotificationsPage />} />
+                <Route path="payment-callbacks" element={<PaymentCallbacksPage />} />
                 <Route path="*" element={<NotFoundPage />} />
               </Route>
 
@@ -134,6 +142,7 @@ function App() {
                   path="notifications"
                   element={<NotificationsFrontPage />}
                 />
+                <Route path="orders" element={<OrdersHubPage />} />
                 <Route path="news" element={<NewsPage />} />
                 <Route
                   path="news/subscriptions"
@@ -143,10 +152,13 @@ function App() {
                 <Route path="news/topics/:topicId" element={<NewsTopicDetailPage />} />
                 <Route path="news/:newsId" element={<NewsDetailPage />} />
                 <Route path="lawfirm" element={<LawFirmPage />} />
+                <Route path="lawyer/verification" element={<LawyerVerificationPage />} />
+                <Route path="lawyer" element={<LawyerDashboardPage />} />
                 <Route
                   path="lawfirm/consultations"
-                  element={<LawFirmConsultationsPage />}
+                  element={<Navigate to="/orders?tab=consultations" replace />}
                 />
+                <Route path="lawfirm/lawyers/:lawyerId" element={<LawyerDetailPage />} />
                 <Route path="lawfirm/:firmId" element={<LawFirmDetailPage />} />
                 <Route path="calculator" element={<FeeCalculatorPage />} />
                 <Route path="limitations" element={<LimitationsCalculatorPage />} />
@@ -156,6 +168,9 @@ function App() {
                 <Route path="share/:token" element={<SharePage />} />
                 <Route path="login" element={<LoginPage />} />
                 <Route path="register" element={<RegisterPage />} />
+                <Route path="terms" element={<TermsPage />} />
+                <Route path="privacy" element={<PrivacyPolicyPage />} />
+                <Route path="ai-disclaimer" element={<AiDisclaimerPage />} />
                 <Route path="profile" element={<ProfilePage />} />
                 <Route path="*" element={<NotFoundPage />} />
               </Route>

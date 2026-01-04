@@ -1,9 +1,12 @@
 import { test, expect } from '@playwright/test'
 
+import { makeE2eJwt } from './helpers'
+
 test('前台：历史记录导出报告优先走 /report（PDF）并提示成功', async ({ page }) => {
-  await page.addInitScript(() => {
-    localStorage.setItem('token', 'e2e_fake_token')
-  })
+  const token = makeE2eJwt()
+  await page.addInitScript((t) => {
+    localStorage.setItem('token', String(t))
+  }, token)
 
   await page.route('**/api/user/me', async (route) => {
     await route.fulfill({
@@ -75,8 +78,9 @@ test('前台：历史记录导出报告优先走 /report（PDF）并提示成功
 })
 
 test('前台：/report 失败时导出报告 fallback 到 /export 并打开打印预览', async ({ page }) => {
-  await page.addInitScript(() => {
-    localStorage.setItem('token', 'e2e_fake_token')
+  const token = makeE2eJwt()
+  await page.addInitScript((t) => {
+    localStorage.setItem('token', String(t))
 
     ;(window as any).__e2e_print_called = false
 
@@ -106,7 +110,7 @@ test('前台：/report 失败时导出报告 fallback 到 /export 并打开打�
 
       return w
     }
-  })
+  }, token)
 
   await page.route('**/api/user/me', async (route) => {
     await route.fulfill({
@@ -205,10 +209,11 @@ test('前台：/report 失败时导出报告 fallback 到 /export 并打开打�
 })
 
 test('前台：/report 失败 + 弹窗被拦截时 fallback 下载 HTML 报告', async ({ page }) => {
-  await page.addInitScript(() => {
-    localStorage.setItem('token', 'e2e_fake_token')
+  const token = makeE2eJwt()
+  await page.addInitScript((t) => {
+    localStorage.setItem('token', String(t))
     ;(window as any).open = () => null
-  })
+  }, token)
 
   await page.route('**/api/user/me', async (route) => {
     await route.fulfill({

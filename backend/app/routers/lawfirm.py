@@ -1,14 +1,24 @@
 """法律咨询所API路由"""
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+import uuid
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel
-from sqlalchemy import select, func, or_, desc
+from sqlalchemy import select, func, or_, desc, update, cast as sa_cast, Integer
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..database import get_db
-from ..models.lawfirm import LawyerVerification, Lawyer, LawFirm, LawyerConsultation
+from ..models.lawfirm import (
+    LawyerVerification,
+    Lawyer,
+    LawFirm,
+    LawyerConsultation,
+    LawyerConsultationMessage,
+    LawyerReview,
+)
+from ..models.payment import PaymentOrder, PaymentStatus, UserBalance, BalanceTransaction
 from ..models.user import User
 from ..schemas.lawfirm import (
     LawFirmCreate, LawFirmUpdate, LawFirmResponse, LawFirmListResponse,
@@ -39,6 +49,98 @@ async def _get_owned_consultation(db: AsyncSession, consultation_id: int, user_i
             LawyerConsultation.id == int(consultation_id),
             LawyerConsultation.user_id == int(user_id),
         )
+    )
+    return res.scalar_one_or_none()
+
+
+async def _get_participating_consultation(
+    db: AsyncSession,
+    consultation_id: int,
+    *,
+    current_user: User,
+) -> tuple[LawyerConsultation | None, str | None]:
+    # 管理员允许只读查看（便于运营/排障），但不允许发送消息
+    role = str(getattr(current_user, "role", "") or "").lower()
+    if role in {"admin", "super_admin"}:
+        res = await db.execute(
+            select(LawyerConsultation)
+            .options(selectinload(LawyerConsultation.lawyer))
+            .where(LawyerConsultation.id == int(consultation_id))
+        )
+        return res.scalar_one_or_none(), "admin"
+
+    if role == "lawyer":
+        lawyer = await _get_current_lawyer(db, int(current_user.id))
+        if not lawyer:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="未绑定律师资料")
+        res = await db.execute(
+            select(LawyerConsultation)
+            .options(selectinload(LawyerConsultation.lawyer))
+            .where(
+                LawyerConsultation.id == int(consultation_id),
+                LawyerConsultation.lawyer_id == int(lawyer.id),
+            )
+        )
+        return res.scalar_one_or_none(), "lawyer"
+
+    consultation = await _get_owned_consultation(db, consultation_id, int(current_user.id))
+    return consultation, "user"
+
+
+async def _get_latest_consultation_order_any(
+    db: AsyncSession,
+    consultation_id: int,
+) -> PaymentOrder | None:
+    res = await db.execute(
+        select(PaymentOrder)
+        .where(
+            PaymentOrder.related_type == "lawyer_consultation",
+            PaymentOrder.related_id == int(consultation_id),
+        )
+        .order_by(PaymentOrder.created_at.desc())
+        .limit(1)
+    )
+    return res.scalar_one_or_none()
+
+
+async def _get_current_lawyer(db: AsyncSession, user_id: int) -> Lawyer | None:
+    res = await db.execute(
+        select(Lawyer).where(
+            Lawyer.user_id == int(user_id),
+            Lawyer.is_active == True,
+        )
+    )
+    return res.scalar_one_or_none()
+
+
+def _generate_order_no() -> str:
+    now = datetime.now(timezone.utc)
+    return f"{now.strftime('%Y%m%d%H%M%S')}{uuid.uuid4().hex[:8].upper()}"
+
+
+def _quantize_amount(amount: float) -> Decimal:
+    return Decimal(str(amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _decimal_to_cents(amount: Decimal) -> int:
+    return int(amount * 100)
+
+
+async def _get_latest_consultation_order(
+    db: AsyncSession,
+    consultation_id: int,
+    *,
+    user_id: int,
+) -> PaymentOrder | None:
+    res = await db.execute(
+        select(PaymentOrder)
+        .where(
+            PaymentOrder.user_id == int(user_id),
+            PaymentOrder.related_type == "lawyer_consultation",
+            PaymentOrder.related_id == int(consultation_id),
+        )
+        .order_by(PaymentOrder.created_at.desc())
+        .limit(1)
     )
     return res.scalar_one_or_none()
 
@@ -387,6 +489,31 @@ async def create_consultation(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="律师不存在")
     
     consultation = await consultation_service.create(db, current_user.id, data)
+
+    order: PaymentOrder | None = None
+    fee = float(getattr(lawyer, "consultation_fee", 0.0) or 0.0)
+    if fee > 0:
+        amount = _quantize_amount(fee)
+        amount_cents = _decimal_to_cents(amount)
+        order = PaymentOrder(
+            order_no=_generate_order_no(),
+            user_id=int(current_user.id),
+            order_type="consultation",
+            amount=float(amount),
+            actual_amount=float(amount),
+            amount_cents=amount_cents,
+            actual_amount_cents=amount_cents,
+            status=PaymentStatus.PENDING,
+            title=f"律师咨询：{lawyer.name}",
+            description=data.subject,
+            related_id=int(consultation.id),
+            related_type="lawyer_consultation",
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=2),
+        )
+        db.add(order)
+        await db.commit()
+        await db.refresh(order)
+
     return ConsultationResponse(
         id=consultation.id,
         user_id=consultation.user_id,
@@ -400,7 +527,273 @@ async def create_consultation(
         admin_note=consultation.admin_note,
         created_at=consultation.created_at,
         updated_at=consultation.updated_at,
-        lawyer_name=lawyer.name
+        lawyer_name=lawyer.name,
+        payment_order_no=order.order_no if order else None,
+        payment_status=order.status if order else None,
+        payment_amount=order.actual_amount if order else None,
+    )
+
+
+@router.get("/lawyer/consultations", response_model=ConsultationListResponse, summary="律师-获取我的咨询预约")
+async def lawyer_get_my_consultations(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+):
+    if current_user.role not in {"lawyer", "admin", "super_admin"}:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权限")
+
+    lawyer = await _get_current_lawyer(db, int(current_user.id))
+    if not lawyer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="未绑定律师资料")
+
+    query = (
+        select(LawyerConsultation)
+        .options(selectinload(LawyerConsultation.lawyer))
+        .where(LawyerConsultation.lawyer_id == int(lawyer.id))
+        .order_by(desc(LawyerConsultation.created_at))
+    )
+    count_query = select(func.count(LawyerConsultation.id)).where(
+        LawyerConsultation.lawyer_id == int(lawyer.id)
+    )
+
+    total_result = await db.execute(count_query)
+    total = int(total_result.scalar() or 0)
+
+    query = query.offset((page - 1) * page_size).limit(page_size)
+    result = await db.execute(query)
+    consultations = list(result.scalars().all())
+
+    consultation_ids = [int(c.id) for c in consultations]
+    orders_by_consultation: dict[int, PaymentOrder] = {}
+    if consultation_ids:
+        orders_res = await db.execute(
+            select(PaymentOrder)
+            .where(
+                PaymentOrder.related_type == "lawyer_consultation",
+                PaymentOrder.related_id.in_(consultation_ids),
+            )
+            .order_by(PaymentOrder.created_at.desc())
+        )
+        for o in orders_res.scalars().all():
+            rid = getattr(o, "related_id", None)
+            if isinstance(rid, int) and rid not in orders_by_consultation:
+                orders_by_consultation[rid] = o
+
+    items: list[ConsultationResponse] = []
+    for c in consultations:
+        o = orders_by_consultation.get(int(c.id))
+        items.append(
+            ConsultationResponse(
+                id=c.id,
+                user_id=c.user_id,
+                lawyer_id=c.lawyer_id,
+                subject=c.subject,
+                description=c.description,
+                category=c.category,
+                contact_phone=c.contact_phone,
+                preferred_time=c.preferred_time,
+                status=c.status,
+                admin_note=c.admin_note,
+                created_at=c.created_at,
+                updated_at=c.updated_at,
+                lawyer_name=lawyer.name,
+                payment_order_no=o.order_no if o else None,
+                payment_status=o.status if o else None,
+                payment_amount=o.actual_amount if o else None,
+            )
+        )
+
+    return ConsultationListResponse(items=items, total=total, page=page, page_size=page_size)
+
+
+@router.post("/lawyer/consultations/{consultation_id}/accept", response_model=ConsultationResponse, summary="律师-接单")
+async def lawyer_accept_consultation(
+    consultation_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    if current_user.role not in {"lawyer", "admin", "super_admin"}:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权限")
+
+    lawyer = await _get_current_lawyer(db, int(current_user.id))
+    if not lawyer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="未绑定律师资料")
+
+    res = await db.execute(
+        select(LawyerConsultation)
+        .options(selectinload(LawyerConsultation.lawyer))
+        .where(
+            LawyerConsultation.id == int(consultation_id),
+            LawyerConsultation.lawyer_id == int(lawyer.id),
+        )
+    )
+    consultation = res.scalar_one_or_none()
+    if not consultation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="咨询不存在")
+
+    order = await _get_latest_consultation_order_any(db, int(consultation.id))
+    if order and str(order.status).lower() == "pending":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="用户尚未完成支付")
+
+    if consultation.status == "confirmed":
+        return ConsultationResponse(
+            id=consultation.id,
+            user_id=consultation.user_id,
+            lawyer_id=consultation.lawyer_id,
+            subject=consultation.subject,
+            description=consultation.description,
+            category=consultation.category,
+            contact_phone=consultation.contact_phone,
+            preferred_time=consultation.preferred_time,
+            status=consultation.status,
+            admin_note=consultation.admin_note,
+            created_at=consultation.created_at,
+            updated_at=consultation.updated_at,
+            lawyer_name=lawyer.name,
+            payment_order_no=order.order_no if order else None,
+            payment_status=order.status if order else None,
+            payment_amount=order.actual_amount if order else None,
+        )
+
+    if consultation.status != "pending":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="仅待处理咨询可接单")
+
+    consultation.status = "confirmed"
+    db.add(consultation)
+    await db.commit()
+    await db.refresh(consultation)
+
+    return ConsultationResponse(
+        id=consultation.id,
+        user_id=consultation.user_id,
+        lawyer_id=consultation.lawyer_id,
+        subject=consultation.subject,
+        description=consultation.description,
+        category=consultation.category,
+        contact_phone=consultation.contact_phone,
+        preferred_time=consultation.preferred_time,
+        status=consultation.status,
+        admin_note=consultation.admin_note,
+        created_at=consultation.created_at,
+        updated_at=consultation.updated_at,
+        lawyer_name=lawyer.name,
+        payment_order_no=order.order_no if order else None,
+        payment_status=order.status if order else None,
+        payment_amount=order.actual_amount if order else None,
+    )
+
+
+@router.post("/lawyer/consultations/{consultation_id}/reject", response_model=ConsultationResponse, summary="律师-拒单")
+async def lawyer_reject_consultation(
+    consultation_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    if current_user.role not in {"lawyer", "admin", "super_admin"}:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权限")
+
+    lawyer = await _get_current_lawyer(db, int(current_user.id))
+    if not lawyer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="未绑定律师资料")
+
+    res = await db.execute(
+        select(LawyerConsultation)
+        .options(selectinload(LawyerConsultation.lawyer))
+        .where(
+            LawyerConsultation.id == int(consultation_id),
+            LawyerConsultation.lawyer_id == int(lawyer.id),
+        )
+    )
+    consultation = res.scalar_one_or_none()
+    if not consultation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="咨询不存在")
+
+    if consultation.status != "pending":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="仅待处理咨询可拒单")
+
+    order = await _get_latest_consultation_order_any(db, int(consultation.id))
+    if order and str(order.status).lower() == "paid":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="订单已支付，请走退款流程")
+
+    consultation.status = "cancelled"
+    db.add(consultation)
+    await db.commit()
+    await db.refresh(consultation)
+
+    return ConsultationResponse(
+        id=consultation.id,
+        user_id=consultation.user_id,
+        lawyer_id=consultation.lawyer_id,
+        subject=consultation.subject,
+        description=consultation.description,
+        category=consultation.category,
+        contact_phone=consultation.contact_phone,
+        preferred_time=consultation.preferred_time,
+        status=consultation.status,
+        admin_note=consultation.admin_note,
+        created_at=consultation.created_at,
+        updated_at=consultation.updated_at,
+        lawyer_name=lawyer.name,
+        payment_order_no=order.order_no if order else None,
+        payment_status=order.status if order else None,
+        payment_amount=order.actual_amount if order else None,
+    )
+
+
+@router.post("/lawyer/consultations/{consultation_id}/complete", response_model=ConsultationResponse, summary="律师-标记完成")
+async def lawyer_complete_consultation(
+    consultation_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    if current_user.role not in {"lawyer", "admin", "super_admin"}:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权限")
+
+    lawyer = await _get_current_lawyer(db, int(current_user.id))
+    if not lawyer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="未绑定律师资料")
+
+    res = await db.execute(
+        select(LawyerConsultation)
+        .options(selectinload(LawyerConsultation.lawyer))
+        .where(
+            LawyerConsultation.id == int(consultation_id),
+            LawyerConsultation.lawyer_id == int(lawyer.id),
+        )
+    )
+    consultation = res.scalar_one_or_none()
+    if not consultation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="咨询不存在")
+
+    if consultation.status != "confirmed":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="仅已确认咨询可标记完成")
+
+    consultation.status = "completed"
+    db.add(consultation)
+    await db.commit()
+    await db.refresh(consultation)
+
+    order = await _get_latest_consultation_order_any(db, int(consultation.id))
+
+    return ConsultationResponse(
+        id=consultation.id,
+        user_id=consultation.user_id,
+        lawyer_id=consultation.lawyer_id,
+        subject=consultation.subject,
+        description=consultation.description,
+        category=consultation.category,
+        contact_phone=consultation.contact_phone,
+        preferred_time=consultation.preferred_time,
+        status=consultation.status,
+        admin_note=consultation.admin_note,
+        created_at=consultation.created_at,
+        updated_at=consultation.updated_at,
+        lawyer_name=lawyer.name,
+        payment_order_no=order.order_no if order else None,
+        payment_status=order.status if order else None,
+        payment_amount=order.actual_amount if order else None,
     )
 
 
@@ -416,8 +809,44 @@ async def get_my_consultations(
         db, current_user.id, page, page_size
     )
     
+    consultation_ids = [int(c.id) for c in consultations]
+    orders_by_consultation: dict[int, PaymentOrder] = {}
+    if consultation_ids:
+        orders_res = await db.execute(
+            select(PaymentOrder)
+            .where(
+                PaymentOrder.user_id == int(current_user.id),
+                PaymentOrder.related_type == "lawyer_consultation",
+                PaymentOrder.related_id.in_(consultation_ids),
+            )
+            .order_by(PaymentOrder.created_at.desc())
+        )
+        for o in orders_res.scalars().all():
+            rid = getattr(o, "related_id", None)
+            if isinstance(rid, int) and rid not in orders_by_consultation:
+                orders_by_consultation[rid] = o
+
+    reviews_by_consultation: dict[int, LawyerReview] = {}
+    if consultation_ids:
+        reviews_res = await db.execute(
+            select(LawyerReview)
+            .where(
+                LawyerReview.user_id == int(current_user.id),
+                LawyerReview.consultation_id.in_(consultation_ids),
+            )
+            .order_by(LawyerReview.created_at.desc())
+        )
+        for r in reviews_res.scalars().all():
+            cid = getattr(r, "consultation_id", None)
+            if isinstance(cid, int) and cid not in reviews_by_consultation:
+                reviews_by_consultation[cid] = r
+
     items: list[ConsultationResponse] = []
     for c in consultations:
+        o = orders_by_consultation.get(int(c.id))
+        r = reviews_by_consultation.get(int(c.id))
+        review_id = int(r.id) if r else None
+        can_review = (str(c.status).lower() == "completed") and (review_id is None)
         items.append(ConsultationResponse(
             id=c.id,
             user_id=c.user_id,
@@ -431,7 +860,12 @@ async def get_my_consultations(
             admin_note=c.admin_note,
             created_at=c.created_at,
             updated_at=c.updated_at,
-            lawyer_name=c.lawyer.name if c.lawyer else None
+            lawyer_name=c.lawyer.name if c.lawyer else None,
+            payment_order_no=o.order_no if o else None,
+            payment_status=o.status if o else None,
+            payment_amount=o.actual_amount if o else None,
+            review_id=review_id,
+            can_review=can_review,
         ))
     
     return ConsultationListResponse(items=items, total=total, page=page, page_size=page_size)
@@ -451,11 +885,87 @@ async def cancel_my_consultation(
     if consultation.status == "completed":
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="咨询已完成，无法取消")
 
-    if consultation.status != "cancelled":
-        consultation.status = "cancelled"
-        db.add(consultation)
+    order = await _get_latest_consultation_order(db, int(consultation.id), user_id=int(current_user.id))
+
+    try:
+        if order and order.status == PaymentStatus.PAID:
+            if str(order.payment_method or "").lower() != "balance":
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="订单已支付，暂不支持自动退款，请联系管理员")
+
+            refund_amount = _quantize_amount(float(order.actual_amount))
+            refund_amount_cents = _decimal_to_cents(refund_amount)
+
+            order_update = await db.execute(
+                update(PaymentOrder)
+                .where(PaymentOrder.id == order.id, PaymentOrder.status == PaymentStatus.PAID)
+                .values(status=PaymentStatus.REFUNDED)
+            )
+            if getattr(order_update, "rowcount", 0) == 1:
+                order.status = PaymentStatus.REFUNDED
+
+                bal_res = await db.execute(select(UserBalance).where(UserBalance.user_id == order.user_id))
+                balance_account = bal_res.scalar_one_or_none()
+                if balance_account is None:
+                    balance_account = UserBalance(
+                        user_id=int(order.user_id),
+                        balance=0.0,
+                        frozen=0.0,
+                        total_recharged=0.0,
+                        total_consumed=0.0,
+                    )
+                    db.add(balance_account)
+                    await db.flush()
+
+                balance_before = _quantize_amount(float(balance_account.balance))
+                balance_before_cents = _decimal_to_cents(balance_before)
+
+                effective_balance_cents = func.coalesce(
+                    UserBalance.balance_cents,
+                    sa_cast(func.round(func.coalesce(UserBalance.balance, 0) * 100), Integer),
+                )
+
+                _ = await db.execute(
+                    update(UserBalance)
+                    .where(UserBalance.user_id == order.user_id)
+                    .values(
+                        balance=func.coalesce(UserBalance.balance, 0) + float(refund_amount),
+                        balance_cents=effective_balance_cents + refund_amount_cents,
+                    )
+                )
+
+                balance_after = balance_before + refund_amount
+                balance_after_cents = balance_before_cents + refund_amount_cents
+                transaction = BalanceTransaction(
+                    user_id=order.user_id,
+                    order_id=order.id,
+                    type="refund",
+                    amount=float(refund_amount),
+                    balance_before=float(balance_before),
+                    balance_after=float(balance_after),
+                    amount_cents=refund_amount_cents,
+                    balance_before_cents=balance_before_cents,
+                    balance_after_cents=balance_after_cents,
+                    description=f"退款: {order.title}",
+                )
+                db.add(transaction)
+
+        if consultation.status != "cancelled":
+            consultation.status = "cancelled"
+            db.add(consultation)
+
         await db.commit()
         await db.refresh(consultation)
+        if order is not None:
+            try:
+                await db.refresh(order)
+            except Exception:
+                pass
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception:
+        await db.rollback()
+        raise
 
     return ConsultationResponse(
         id=consultation.id,
@@ -471,6 +981,136 @@ async def cancel_my_consultation(
         created_at=consultation.created_at,
         updated_at=consultation.updated_at,
         lawyer_name=consultation.lawyer.name if consultation.lawyer else None,
+        payment_order_no=order.order_no if order else None,
+        payment_status=order.status if order else None,
+        payment_amount=order.actual_amount if order else None,
+    )
+
+
+# ============ 咨询留言/消息线程 ============
+
+
+class ConsultationMessageCreate(BaseModel):
+    content: str
+
+
+class ConsultationMessageResponse(BaseModel):
+    id: int
+    consultation_id: int
+    sender_user_id: int
+    sender_role: str
+    sender_name: str | None = None
+    content: str
+    created_at: datetime
+
+
+class ConsultationMessageListResponse(BaseModel):
+    items: list[ConsultationMessageResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+@router.get(
+    "/consultations/{consultation_id}/messages",
+    response_model=ConsultationMessageListResponse,
+    summary="获取咨询留言",
+)
+async def get_consultation_messages(
+    consultation_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=200)] = 50,
+):
+    consultation, _ = await _get_participating_consultation(
+        db, int(consultation_id), current_user=current_user
+    )
+    if not consultation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="咨询不存在")
+
+    count_res = await db.execute(
+        select(func.count(LawyerConsultationMessage.id)).where(
+            LawyerConsultationMessage.consultation_id == int(consultation.id)
+        )
+    )
+    total = int(count_res.scalar() or 0)
+
+    res = await db.execute(
+        select(LawyerConsultationMessage)
+        .options(selectinload(LawyerConsultationMessage.sender))
+        .where(LawyerConsultationMessage.consultation_id == int(consultation.id))
+        .order_by(LawyerConsultationMessage.created_at.asc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    )
+    messages = list(res.scalars().all())
+
+    items: list[ConsultationMessageResponse] = []
+    for m in messages:
+        sender_name = m.sender.nickname or m.sender.username
+        items.append(
+            ConsultationMessageResponse(
+                id=int(m.id),
+                consultation_id=int(m.consultation_id),
+                sender_user_id=int(m.sender_user_id),
+                sender_role=str(m.sender_role),
+                sender_name=sender_name,
+                content=str(m.content),
+                created_at=m.created_at,
+            )
+        )
+
+    return ConsultationMessageListResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.post(
+    "/consultations/{consultation_id}/messages",
+    response_model=ConsultationMessageResponse,
+    summary="发送咨询留言",
+)
+async def create_consultation_message(
+    consultation_id: int,
+    data: ConsultationMessageCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    consultation, sender_role = await _get_participating_consultation(
+        db, int(consultation_id), current_user=current_user
+    )
+    if not consultation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="咨询不存在")
+
+    if sender_role not in {"user", "lawyer"}:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅咨询双方可发送消息")
+
+    content = str(getattr(data, "content", "") or "").strip()
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="消息内容不能为空")
+
+    msg = LawyerConsultationMessage(
+        consultation_id=int(consultation.id),
+        sender_user_id=int(current_user.id),
+        sender_role=str(sender_role),
+        content=content,
+    )
+    db.add(msg)
+    await db.commit()
+    await db.refresh(msg)
+
+    return ConsultationMessageResponse(
+        id=int(msg.id),
+        consultation_id=int(msg.consultation_id),
+        sender_user_id=int(msg.sender_user_id),
+        sender_role=str(msg.sender_role),
+        sender_name=current_user.nickname or current_user.username,
+        content=str(msg.content),
+        created_at=msg.created_at,
     )
 
 
@@ -487,6 +1127,28 @@ async def create_review(
     lawyer = await lawyer_service.get_by_id(db, data.lawyer_id)
     if not lawyer:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="律师不存在")
+
+    if data.consultation_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="必须指定咨询ID")
+
+    consultation = await _get_owned_consultation(db, int(data.consultation_id), int(current_user.id))
+    if not consultation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="咨询不存在")
+
+    if int(consultation.lawyer_id) != int(data.lawyer_id):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="咨询与律师不匹配")
+
+    if str(consultation.status).lower() != "completed":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="仅已完成咨询可评价")
+
+    existing = await db.execute(
+        select(LawyerReview).where(
+            LawyerReview.user_id == int(current_user.id),
+            LawyerReview.consultation_id == int(data.consultation_id),
+        )
+    )
+    if existing.scalar_one_or_none() is not None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该咨询已评价")
     
     review = await review_service.create(db, current_user.id, data)
     return ReviewResponse(
@@ -662,7 +1324,7 @@ async def get_verification_list(
     # 总数
     count_query = select(func.count()).select_from(query.subquery())
     total_result = await db.execute(count_query)
-    total = total_result.scalar() or 0
+    total: int = int(total_result.scalar() or 0)
     
     # 分页
     query = query.order_by(LawyerVerification.created_at.desc())
@@ -670,7 +1332,7 @@ async def get_verification_list(
     result = await db.execute(query)
     verifications = result.scalars().all()
     
-    items = []
+    items: list[dict[str, object]] = []
     for v in verifications:
         # 获取用户信息
         user_result = await db.execute(select(User).where(User.id == v.user_id))
@@ -719,6 +1381,12 @@ async def review_verification(
         verification.status = "approved"
         verification.reviewed_by = current_user.id
         verification.reviewed_at = dt.now()
+
+        user_result = await db.execute(select(User).where(User.id == verification.user_id))
+        user = user_result.scalar_one_or_none()
+        if user and str(getattr(user, "role", "")) not in {"admin", "super_admin"}:
+            user.role = "lawyer"
+            db.add(user)
         
         # 创建或更新律师档案
         existing_lawyer = await db.execute(

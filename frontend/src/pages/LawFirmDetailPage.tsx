@@ -262,6 +262,11 @@ interface LawyerItem {
                             ? `¥${lawyer.consultation_fee}/次`
                             : '免费'}
                         </span>
+                        <Link to={`/lawfirm/lawyers/${lawyer.id}`} className="block">
+                          <Button variant="outline" size="sm" className="px-4">
+                            详情
+                          </Button>
+                        </Link>
                         <Button
                           size="sm"
                           onClick={() => setBookingLawyer(lawyer)}

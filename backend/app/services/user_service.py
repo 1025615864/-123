@@ -53,8 +53,7 @@ class UserService:
         
         db.add(user)
         try:
-            await db.commit()
-            await db.refresh(user)
+            await db.flush()
             return user
         except IntegrityError:
             await db.rollback()

@@ -197,13 +197,17 @@ test.describe('移动端回归', () => {
     await expect(bottomNav).toBeVisible({ timeout: 12_000 })
     await expect(bottomNav.getByRole('button', { name: '更多' })).toBeVisible({ timeout: 12_000 })
 
+    // forum is now part of the bottom nav items
+    await expect(bottomNav.getByRole('link', { name: /法律论坛/ })).toBeVisible({ timeout: 12_000 })
+
     await bottomNav.getByRole('button', { name: '更多' }).click({ force: true })
 
     // modal content
     const dialog = page.getByRole('dialog')
     await expect(dialog).toBeVisible({ timeout: 12_000 })
     await expect(dialog.getByRole('heading', { name: '更多' })).toBeVisible({ timeout: 12_000 })
-    await expect(dialog.getByRole('link', { name: /论坛/ })).toBeVisible({ timeout: 12_000 })
+
+    // calendar (tool) lives in the "更多" modal
     await expect(dialog.getByRole('link', { name: /日历/ })).toBeVisible({ timeout: 12_000 })
   })
 

@@ -12,6 +12,9 @@ export default function RegisterPage() {
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
+  const [agreeTerms, setAgreeTerms] = useState(false)
+  const [agreePrivacy, setAgreePrivacy] = useState(false)
+  const [agreeAiDisclaimer, setAgreeAiDisclaimer] = useState(false)
   const [loading, setLoading] = useState(false)
   const { register } = useAuth()
   const navigate = useNavigate()
@@ -30,10 +33,15 @@ export default function RegisterPage() {
       return
     }
 
+    if (!agreeTerms || !agreePrivacy || !agreeAiDisclaimer) {
+      toast.error('请阅读并同意用户协议、隐私政策及AI咨询免责声明')
+      return
+    }
+
     setLoading(true)
 
     try {
-      await register(username, email, password)
+      await register(username, email, password, agreeTerms, agreePrivacy, agreeAiDisclaimer)
       toast.success('注册成功！请登录')
       navigate('/login')
     } catch (err: any) {
@@ -169,11 +177,60 @@ export default function RegisterPage() {
                 className="py-3.5"
               />
 
+              <div className="space-y-3 rounded-2xl border border-slate-200/70 bg-slate-50 px-4 py-4 text-sm text-slate-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-white/70">
+                <label className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    className="mt-1 h-4 w-4"
+                    checked={agreeTerms}
+                    onChange={(e) => setAgreeTerms(e.target.checked)}
+                    disabled={loading}
+                  />
+                  <span>
+                    我已阅读并同意
+                    <Link to="/terms" className="mx-1 text-blue-600 hover:underline dark:text-blue-400">
+                      《用户协议》
+                    </Link>
+                  </span>
+                </label>
+                <label className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    className="mt-1 h-4 w-4"
+                    checked={agreePrivacy}
+                    onChange={(e) => setAgreePrivacy(e.target.checked)}
+                    disabled={loading}
+                  />
+                  <span>
+                    我已阅读并同意
+                    <Link to="/privacy" className="mx-1 text-blue-600 hover:underline dark:text-blue-400">
+                      《隐私政策》
+                    </Link>
+                  </span>
+                </label>
+                <label className="flex items-start gap-3">
+                  <input
+                    type="checkbox"
+                    className="mt-1 h-4 w-4"
+                    checked={agreeAiDisclaimer}
+                    onChange={(e) => setAgreeAiDisclaimer(e.target.checked)}
+                    disabled={loading}
+                  />
+                  <span>
+                    我已阅读并同意
+                    <Link to="/ai-disclaimer" className="mx-1 text-blue-600 hover:underline dark:text-blue-400">
+                      《AI 咨询免责声明》
+                    </Link>
+                  </span>
+                </label>
+              </div>
+
               <Button
                 type="submit"
                 fullWidth
                 isLoading={loading}
                 loadingText="注册中..."
+                disabled={!agreeTerms || !agreePrivacy || !agreeAiDisclaimer}
                 className="py-3.5"
               >
                 注册
