@@ -188,6 +188,13 @@ curl -X POST http://localhost:8000/api/ai/chat \
 - `POST /api/news/admin/{news_id}/ai/rerun`
   - 手动触发单条新闻 AI 重跑。
 
+### DEBUG-only 管理接口（仅用于 E2E/本地调试）
+
+- `POST /api/news/admin/{news_id}/debug/set-view-count`
+  - 用途：设置指定新闻 `view_count` 并清理 hot news 缓存，用于 E2E 稳定化（避免历史数据导致热门榜单不可预期）。
+  - 权限：管理员
+  - 仅在 `debug=true` 时可用（非 DEBUG 环境返回 404）。
+
 ## 项目结构
 
 ```

@@ -1,25 +1,48 @@
 """支付API路由"""
+import base64
 import hashlib
 import hmac
+import json
+import os
 from typing import Annotated, cast
 from datetime import datetime, timedelta, timezone
 import uuid
 from decimal import Decimal, ROUND_HALF_UP
+from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update, cast as sa_cast, Integer
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.sql.elements import ColumnElement
 from pydantic import BaseModel
+
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, RSAPublicKey
+from cryptography.hazmat.primitives.serialization import load_pem_private_key, load_pem_public_key
 
 from ..config import get_settings
 from ..database import get_db
-from ..models.payment import PaymentOrder, UserBalance, BalanceTransaction, PaymentStatus
+from ..models.payment import PaymentOrder, UserBalance, BalanceTransaction, PaymentStatus, PaymentCallbackEvent
+from ..models.system import SystemConfig
 from ..models.user import User
 from ..utils.deps import get_current_user, require_admin
+from ..utils.wechatpay_v3 import (
+    WeChatPayPlatformCert,
+    fetch_platform_certificates,
+    load_platform_certs_json,
+    dump_platform_certs_json,
+    wechatpay_verify_signature,
+    wechatpay_decrypt_resource,
+)
 
 router = APIRouter(prefix="/payment", tags=["支付管理"])
 
 settings = get_settings()
+
+VIP_DEFAULT_DAYS = 30
+VIP_DEFAULT_PRICE = 9.9
 
 
 # ============ 请求/响应模型 ============
@@ -62,11 +85,66 @@ class OrderResponse(BaseModel):
     paid_at: datetime | None
 
 
+class ReconcileEventItem(BaseModel):
+    provider: str
+    order_no: str | None
+    trade_no: str | None
+    amount: float | None
+    verified: bool
+    error_message: str | None
+    created_at: datetime
+
+
+class ReconcileResponse(BaseModel):
+    order_no: str
+    order_status: str
+    payment_method: str | None
+    actual_amount: float
+    trade_no: str | None
+    callbacks_total: int
+    callbacks_verified: int
+    callbacks_failed: int
+    diagnosis: str
+    details: dict[str, object]
+    paid_at: datetime | None
+    recent_events: list[ReconcileEventItem]
+
+
 class BalanceResponse(BaseModel):
     balance: float
     frozen: float
     total_recharged: float
     total_consumed: float
+
+
+class CallbackEventResponse(BaseModel):
+    id: int
+    provider: str
+    order_no: str | None
+    trade_no: str | None
+    amount: float | None
+    verified: bool
+    error_message: str | None
+    created_at: datetime
+
+
+class PaymentChannelStatusResponse(BaseModel):
+    alipay_configured: bool
+    wechatpay_configured: bool
+    payment_webhook_secret_configured: bool
+    wechatpay_platform_certs_cached: bool
+    wechatpay_platform_certs_total: int
+    wechatpay_platform_certs_updated_at: int | None
+    wechatpay_cert_refresh_enabled: bool
+    details: dict[str, object]
+
+
+class WechatPlatformCertImportRequest(BaseModel):
+    platform_certs_json: str | None = None
+    cert_pem: str | None = None
+    serial_no: str | None = None
+    expire_time: str | None = None
+    merge: bool = True
 
 
 # ============ 工具函数 ============
@@ -83,6 +161,312 @@ def _quantize_amount(amount: float) -> Decimal:
 
 def _decimal_to_cents(amount: Decimal) -> int:
     return int(amount * 100)
+
+
+async def _record_callback_event(
+    db: AsyncSession,
+    *,
+    provider: str,
+    order_no: str | None,
+    trade_no: str | None,
+    amount: Decimal | None,
+    verified: bool,
+    error_message: str | None,
+    raw_payload: str | None,
+) -> None:
+    trade_no_for_key = trade_no if (verified and not error_message) else None
+    amount_cents: int | None = None
+    amount_float: float | None = None
+    if amount is not None:
+        q = _quantize_amount(float(amount))
+        amount_float = float(q)
+        amount_cents = _decimal_to_cents(q)
+
+    evt = PaymentCallbackEvent(
+        provider=str(provider),
+        order_no=str(order_no) if order_no else None,
+        trade_no=str(trade_no_for_key) if trade_no_for_key else None,
+        amount=amount_float,
+        amount_cents=amount_cents,
+        verified=bool(verified),
+        error_message=str(error_message) if error_message else None,
+        raw_payload=raw_payload,
+    )
+
+    try:
+        db.add(evt)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+    except Exception:
+        await db.rollback()
+
+
+async def _get_system_config_value(db: AsyncSession, key: str) -> str | None:
+    res = await db.execute(select(SystemConfig).where(SystemConfig.key == key))
+    row = res.scalar_one_or_none()
+    if not row:
+        return None
+    return row.value
+
+
+async def _set_system_config_value(
+    db: AsyncSession,
+    *,
+    key: str,
+    value: str | None,
+    category: str = "payment",
+    description: str | None = None,
+    updated_by: int | None = None,
+) -> None:
+    res = await db.execute(select(SystemConfig).where(SystemConfig.key == key))
+    row = res.scalar_one_or_none()
+    if row is None:
+        row = SystemConfig(
+            key=str(key),
+            value=value,
+            category=str(category),
+            description=description,
+            updated_by=updated_by,
+        )
+        db.add(row)
+        await db.flush()
+        return
+    row.value = value
+    if description is not None:
+        row.description = description
+    row.category = str(category)
+    row.updated_by = updated_by
+    db.add(row)
+    await db.flush()
+
+
+def _normalize_pem(value: str) -> str:
+    if not value:
+        return ""
+    return value.strip().replace("\\n", "\n")
+
+
+def _alipay_build_sign_string(params: dict[str, str]) -> str:
+    items: list[tuple[str, str]] = []
+    for k, v in params.items():
+        if k in {"sign", "sign_type"}:
+            continue
+        s = str(v)
+        if s == "":
+            continue
+        items.append((k, s))
+    items.sort(key=lambda x: x[0])
+    return "&".join([f"{k}={v}" for k, v in items])
+
+
+def _alipay_sign_rsa2(params: dict[str, str], private_key_pem: str) -> str:
+    sign_content = _alipay_build_sign_string(params)
+    key = cast(
+        RSAPrivateKey,
+        load_pem_private_key(_normalize_pem(private_key_pem).encode("utf-8"), password=None),
+    )
+    signature = key.sign(
+        sign_content.encode("utf-8"),
+        padding.PKCS1v15(),
+        hashes.SHA256(),
+    )
+    return base64.b64encode(signature).decode("utf-8")
+
+
+def _alipay_verify_rsa2(params: dict[str, str], public_key_pem: str) -> bool:
+    sign = params.get("sign")
+    if not sign:
+        return False
+    try:
+        signature = base64.b64decode(sign)
+    except Exception:
+        return False
+
+    sign_content = _alipay_build_sign_string(params)
+    key = cast(RSAPublicKey, load_pem_public_key(_normalize_pem(public_key_pem).encode("utf-8")))
+    try:
+        key.verify(
+            signature,
+            sign_content.encode("utf-8"),
+            padding.PKCS1v15(),
+            hashes.SHA256(),
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _alipay_build_page_pay_url(
+    *,
+    gateway_url: str,
+    app_id: str,
+    private_key: str,
+    notify_url: str,
+    return_url: str | None,
+    out_trade_no: str,
+    total_amount: Decimal,
+    subject: str,
+) -> str:
+    params: dict[str, str] = {
+        "app_id": app_id,
+        "method": "alipay.trade.page.pay",
+        "format": "JSON",
+        "charset": "utf-8",
+        "sign_type": "RSA2",
+        "timestamp": datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+        "version": "1.0",
+        "notify_url": notify_url,
+        "biz_content": json.dumps(
+            {
+                "out_trade_no": out_trade_no,
+                "product_code": "FAST_INSTANT_TRADE_PAY",
+                "total_amount": str(total_amount),
+                "subject": subject,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ),
+    }
+    if return_url:
+        params["return_url"] = return_url
+    params["sign"] = _alipay_sign_rsa2(params, private_key)
+    return f"{gateway_url}?{urlencode(params)}"
+
+
+async def _maybe_confirm_lawyer_consultation_in_tx(db: AsyncSession, order: PaymentOrder) -> None:
+    if getattr(order, "related_type", None) != "lawyer_consultation":
+        return
+
+    related_id_raw: object | None = cast(object | None, getattr(order, "related_id", None))
+    if related_id_raw is None:
+        return
+
+    related_id: int
+    if isinstance(related_id_raw, bool):
+        return
+    if isinstance(related_id_raw, int):
+        related_id = related_id_raw
+    elif isinstance(related_id_raw, float):
+        related_id = int(related_id_raw)
+    elif isinstance(related_id_raw, str) and related_id_raw.strip():
+        try:
+            related_id = int(related_id_raw.strip())
+        except Exception:
+            return
+    else:
+        return
+
+    from ..models.lawfirm import LawyerConsultation
+
+    _ = await db.execute(
+        update(LawyerConsultation)
+        .where(
+            LawyerConsultation.id == related_id,
+            LawyerConsultation.user_id == int(order.user_id),
+            LawyerConsultation.status == "pending",
+        )
+        .values(
+            status="confirmed",
+            updated_at=func.now(),
+        )
+    )
+
+
+async def _maybe_apply_vip_membership_in_tx(db: AsyncSession, order: PaymentOrder) -> None:
+    if str(getattr(order, "order_type", "")).lower() != "vip":
+        return
+
+    now = datetime.now(timezone.utc)
+    res = await db.execute(select(User.vip_expires_at).where(User.id == int(order.user_id)))
+    current = res.scalar_one_or_none()
+
+    if isinstance(current, datetime) and current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+
+    base = current if isinstance(current, datetime) and current > now else now
+    new_expires_at = base + timedelta(days=VIP_DEFAULT_DAYS)
+
+    _ = await db.execute(
+        update(User)
+        .where(User.id == int(order.user_id))
+        .values(vip_expires_at=new_expires_at)
+    )
+
+
+async def _mark_order_paid_in_tx(
+    db: AsyncSession,
+    *,
+    order: PaymentOrder,
+    payment_method: str,
+    trade_no: str,
+    amount: Decimal,
+) -> None:
+    amount = _quantize_amount(float(amount))
+    amount_cents = _decimal_to_cents(amount)
+    paid_at = datetime.now(timezone.utc)
+
+    order_update = await db.execute(
+        update(PaymentOrder)
+        .where(PaymentOrder.id == order.id, PaymentOrder.status == PaymentStatus.PENDING)
+        .values(
+            status=PaymentStatus.PAID,
+            payment_method=payment_method,
+            paid_at=paid_at,
+            trade_no=trade_no,
+            amount_cents=func.coalesce(
+                PaymentOrder.amount_cents,
+                sa_cast(func.round(PaymentOrder.amount * 100), Integer),
+            ),
+            actual_amount_cents=amount_cents,
+        )
+    )
+    if getattr(order_update, "rowcount", 0) != 1:
+        return
+
+    if order.order_type == "recharge":
+        balance_account = await _get_or_create_balance_in_tx(db, order.user_id)
+        balance_before = _quantize_amount(float(balance_account.balance))
+        balance_before_cents = _decimal_to_cents(balance_before)
+
+        effective_balance_cents = func.coalesce(
+            UserBalance.balance_cents,
+            sa_cast(func.round(func.coalesce(UserBalance.balance, 0) * 100), Integer),
+        )
+        effective_total_recharged_cents = func.coalesce(
+            UserBalance.total_recharged_cents,
+            sa_cast(func.round(func.coalesce(UserBalance.total_recharged, 0) * 100), Integer),
+        )
+
+        _ = await db.execute(
+            update(UserBalance)
+            .where(UserBalance.user_id == order.user_id)
+            .values(
+                balance=func.coalesce(UserBalance.balance, 0) + float(amount),
+                total_recharged=func.coalesce(UserBalance.total_recharged, 0) + float(amount),
+                balance_cents=effective_balance_cents + amount_cents,
+                total_recharged_cents=effective_total_recharged_cents + amount_cents,
+            )
+        )
+
+        balance_after = balance_before + amount
+        balance_after_cents = balance_before_cents + amount_cents
+        transaction = BalanceTransaction(
+            user_id=order.user_id,
+            order_id=order.id,
+            type="recharge",
+            amount=float(amount),
+            balance_before=float(balance_before),
+            balance_after=float(balance_after),
+            amount_cents=amount_cents,
+            balance_before_cents=balance_before_cents,
+            balance_after_cents=balance_after_cents,
+            description=f"充值: {order.title}",
+        )
+        db.add(transaction)
+
+    await _maybe_apply_vip_membership_in_tx(db, order)
+    await _maybe_confirm_lawyer_consultation_in_tx(db, order)
 
 
 async def _get_or_create_balance_in_tx(db: AsyncSession, user_id: int) -> UserBalance:
@@ -147,7 +531,14 @@ async def create_order(
     if data.order_type not in {"consultation", "service", "vip", "recharge"}:
         raise HTTPException(status_code=400, detail="无效的订单类型")
 
-    amount = _quantize_amount(data.amount)
+    if data.order_type == "vip":
+        amount = _quantize_amount(VIP_DEFAULT_PRICE)
+        title = f"VIP会员（{VIP_DEFAULT_DAYS}天）"
+        description = data.description
+    else:
+        amount = _quantize_amount(data.amount)
+        title = data.title
+        description = data.description
     amount_cents = _decimal_to_cents(amount)
     if amount <= 0:
         raise HTTPException(status_code=400, detail="金额必须大于0")
@@ -161,8 +552,8 @@ async def create_order(
         amount_cents=amount_cents,
         actual_amount_cents=amount_cents,
         status=PaymentStatus.PENDING,
-        title=data.title,
-        description=data.description,
+        title=title,
+        description=description,
         related_id=data.related_id,
         related_type=data.related_type,
         expires_at=datetime.now(timezone.utc) + timedelta(hours=2),  # 2小时过期
@@ -293,6 +684,9 @@ async def pay_order(
             )
             db.add(transaction)
 
+            await _maybe_apply_vip_membership_in_tx(db, order)
+            await _maybe_confirm_lawyer_consultation_in_tx(db, order)
+
             await db.commit()
         except HTTPException:
             await db.rollback()
@@ -305,14 +699,235 @@ async def pay_order(
         return {"message": "支付成功", "trade_no": order.trade_no}
     
     # 其他支付方式（返回支付链接/二维码）
-    # 实际项目中需要对接支付宝/微信支付SDK
+    if data.payment_method == "alipay":
+        if not settings.alipay_app_id or not settings.alipay_private_key:
+            raise HTTPException(status_code=400, detail="支付宝配置未设置")
+        if not settings.alipay_notify_url:
+            raise HTTPException(status_code=400, detail="ALIPAY_NOTIFY_URL 未设置")
+
+        if order.payment_method != "alipay":
+            order.payment_method = "alipay"
+            db.add(order)
+            await db.commit()
+            await db.refresh(order)
+
+        pay_url = _alipay_build_page_pay_url(
+            gateway_url=settings.alipay_gateway_url,
+            app_id=settings.alipay_app_id,
+            private_key=settings.alipay_private_key,
+            notify_url=settings.alipay_notify_url,
+            return_url=settings.alipay_return_url or None,
+            out_trade_no=order.order_no,
+            total_amount=_quantize_amount(float(order.actual_amount)),
+            subject=order.title,
+        )
+        return {
+            "message": "OK",
+            "payment_method": "alipay",
+            "amount": order.actual_amount,
+            "order_no": order.order_no,
+            "pay_url": pay_url,
+        }
+
     return {
         "message": "请使用第三方支付",
         "payment_method": data.payment_method,
         "amount": order.actual_amount,
         "order_no": order.order_no,
-        # "pay_url": "https://...",  # 实际支付链接
     }
+
+
+@router.post("/alipay/notify", summary="支付宝异步通知")
+async def alipay_notify(request: Request, db: Annotated[AsyncSession, Depends(get_db)]):
+    form = await request.form()
+    params = {str(k): str(v) for k, v in form.items()}
+
+    payload_raw = json.dumps(params, ensure_ascii=False, separators=(",", ":"))
+    order_no_raw = str(params.get("out_trade_no") or "").strip() or None
+    trade_no_raw = str(params.get("trade_no") or "").strip() or None
+    amount_raw: Decimal | None = None
+    try:
+        total_amount_str = str(params.get("total_amount") or "").strip()
+        if total_amount_str:
+            amount_raw = _quantize_amount(float(total_amount_str))
+    except Exception:
+        amount_raw = None
+
+    if not settings.alipay_public_key:
+        await _record_callback_event(
+            db,
+            provider="alipay",
+            order_no=order_no_raw,
+            trade_no=trade_no_raw,
+            amount=amount_raw,
+            verified=False,
+            error_message="ALIPAY_PUBLIC_KEY 未设置",
+            raw_payload=payload_raw,
+        )
+        return Response(content="failure", status_code=500, media_type="text/plain")
+
+    if not _alipay_verify_rsa2(params, settings.alipay_public_key):
+        await _record_callback_event(
+            db,
+            provider="alipay",
+            order_no=order_no_raw,
+            trade_no=trade_no_raw,
+            amount=amount_raw,
+            verified=False,
+            error_message="验签失败",
+            raw_payload=payload_raw,
+        )
+        return Response(content="failure", status_code=400, media_type="text/plain")
+
+    trade_status = str(params.get("trade_status") or "").strip()
+    if trade_status not in {"TRADE_SUCCESS", "TRADE_FINISHED"}:
+        await _record_callback_event(
+            db,
+            provider="alipay",
+            order_no=order_no_raw,
+            trade_no=trade_no_raw,
+            amount=amount_raw,
+            verified=True,
+            error_message=f"ignored_trade_status:{trade_status}" if trade_status else "ignored_trade_status",
+            raw_payload=payload_raw,
+        )
+        return Response(content="success", media_type="text/plain")
+
+    app_id = str(params.get("app_id") or "").strip()
+    if settings.alipay_app_id and app_id and app_id != settings.alipay_app_id:
+        await _record_callback_event(
+            db,
+            provider="alipay",
+            order_no=order_no_raw,
+            trade_no=trade_no_raw,
+            amount=amount_raw,
+            verified=True,
+            error_message="app_id 不匹配",
+            raw_payload=payload_raw,
+        )
+        return Response(content="failure", status_code=400, media_type="text/plain")
+
+    order_no = str(params.get("out_trade_no") or "").strip()
+    trade_no = str(params.get("trade_no") or "").strip()
+    total_amount_str = str(params.get("total_amount") or "").strip()
+
+    if not order_no or not trade_no or not total_amount_str:
+        await _record_callback_event(
+            db,
+            provider="alipay",
+            order_no=order_no_raw,
+            trade_no=trade_no_raw,
+            amount=amount_raw,
+            verified=True,
+            error_message="缺少字段",
+            raw_payload=payload_raw,
+        )
+        return Response(content="failure", status_code=400, media_type="text/plain")
+
+    try:
+        amount = _quantize_amount(float(total_amount_str))
+    except Exception:
+        await _record_callback_event(
+            db,
+            provider="alipay",
+            order_no=order_no,
+            trade_no=trade_no,
+            amount=amount_raw,
+            verified=True,
+            error_message="金额格式错误",
+            raw_payload=payload_raw,
+        )
+        return Response(content="failure", status_code=400, media_type="text/plain")
+
+    result = await db.execute(select(PaymentOrder).where(PaymentOrder.order_no == order_no))
+    order = result.scalar_one_or_none()
+    if not order:
+        await _record_callback_event(
+            db,
+            provider="alipay",
+            order_no=order_no,
+            trade_no=trade_no,
+            amount=amount,
+            verified=True,
+            error_message="订单不存在",
+            raw_payload=payload_raw,
+        )
+        return Response(content="failure", status_code=404, media_type="text/plain")
+
+    if order.status == PaymentStatus.PAID:
+        await _record_callback_event(
+            db,
+            provider="alipay",
+            order_no=order_no,
+            trade_no=trade_no,
+            amount=amount,
+            verified=True,
+            error_message=None,
+            raw_payload=payload_raw,
+        )
+        return Response(content="success", media_type="text/plain")
+
+    if order.status != PaymentStatus.PENDING:
+        await _record_callback_event(
+            db,
+            provider="alipay",
+            order_no=order_no,
+            trade_no=trade_no,
+            amount=amount,
+            verified=True,
+            error_message="订单状态异常",
+            raw_payload=payload_raw,
+        )
+        return Response(content="failure", status_code=400, media_type="text/plain")
+
+    if _quantize_amount(float(order.actual_amount)) != amount:
+        await _record_callback_event(
+            db,
+            provider="alipay",
+            order_no=order_no,
+            trade_no=trade_no,
+            amount=amount,
+            verified=True,
+            error_message="金额不一致",
+            raw_payload=payload_raw,
+        )
+        return Response(content="failure", status_code=400, media_type="text/plain")
+
+    try:
+        await _mark_order_paid_in_tx(
+            db,
+            order=order,
+            payment_method="alipay",
+            trade_no=trade_no,
+            amount=amount,
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        await _record_callback_event(
+            db,
+            provider="alipay",
+            order_no=order_no,
+            trade_no=trade_no,
+            amount=amount,
+            verified=True,
+            error_message="订单落库失败",
+            raw_payload=payload_raw,
+        )
+        return Response(content="failure", status_code=500, media_type="text/plain")
+
+    await _record_callback_event(
+        db,
+        provider="alipay",
+        order_no=order_no,
+        trade_no=trade_no,
+        amount=amount,
+        verified=True,
+        error_message=None,
+        raw_payload=payload_raw,
+    )
+
+    return Response(content="success", media_type="text/plain")
 
 
 @router.post("/webhook", summary="支付回调（验签）")
@@ -321,10 +936,19 @@ async def payment_webhook(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     if data.payment_method not in {"alipay", "wechat"}:
+        await _record_callback_event(
+            db,
+            provider=str(data.payment_method),
+            order_no=str(data.order_no),
+            trade_no=None,
+            amount=None,
+            verified=False,
+            error_message="无效的支付方式",
+            raw_payload=json.dumps(data.model_dump(), ensure_ascii=False, separators=(",", ":")),
+        )
         raise HTTPException(status_code=400, detail="无效的支付方式")
 
     amount = _quantize_amount(data.amount)
-    amount_cents = _decimal_to_cents(amount)
     sign_payload = f"{data.order_no}|{data.trade_no}|{data.payment_method}|{amount}"
     expected_signature = hmac.new(
         settings.payment_webhook_secret.encode("utf-8"),
@@ -332,84 +956,80 @@ async def payment_webhook(
         hashlib.sha256,
     ).hexdigest()
     if not hmac.compare_digest(expected_signature, data.signature):
+        await _record_callback_event(
+            db,
+            provider=str(data.payment_method),
+            order_no=str(data.order_no),
+            trade_no=str(data.trade_no),
+            amount=amount,
+            verified=False,
+            error_message="签名校验失败",
+            raw_payload=json.dumps(data.model_dump(), ensure_ascii=False, separators=(",", ":")),
+        )
         raise HTTPException(status_code=400, detail="签名校验失败")
 
     result = await db.execute(select(PaymentOrder).where(PaymentOrder.order_no == data.order_no))
     order = result.scalar_one_or_none()
     if not order:
+        await _record_callback_event(
+            db,
+            provider=str(data.payment_method),
+            order_no=str(data.order_no),
+            trade_no=str(data.trade_no),
+            amount=amount,
+            verified=True,
+            error_message="订单不存在",
+            raw_payload=json.dumps(data.model_dump(), ensure_ascii=False, separators=(",", ":")),
+        )
         raise HTTPException(status_code=404, detail="订单不存在")
 
     if order.status == PaymentStatus.PAID:
+        await _record_callback_event(
+            db,
+            provider=str(data.payment_method),
+            order_no=str(data.order_no),
+            trade_no=str(data.trade_no),
+            amount=amount,
+            verified=True,
+            error_message=None,
+            raw_payload=json.dumps(data.model_dump(), ensure_ascii=False, separators=(",", ":")),
+        )
         return {"message": "OK"}
 
     if order.status != PaymentStatus.PENDING:
+        await _record_callback_event(
+            db,
+            provider=str(data.payment_method),
+            order_no=str(data.order_no),
+            trade_no=str(data.trade_no),
+            amount=amount,
+            verified=True,
+            error_message="订单状态异常",
+            raw_payload=json.dumps(data.model_dump(), ensure_ascii=False, separators=(",", ":")),
+        )
         raise HTTPException(status_code=400, detail="订单状态异常")
 
     if _quantize_amount(float(order.actual_amount)) != amount:
+        await _record_callback_event(
+            db,
+            provider=str(data.payment_method),
+            order_no=str(data.order_no),
+            trade_no=str(data.trade_no),
+            amount=amount,
+            verified=True,
+            error_message="金额不一致",
+            raw_payload=json.dumps(data.model_dump(), ensure_ascii=False, separators=(",", ":")),
+        )
         raise HTTPException(status_code=400, detail="金额不一致")
 
-    paid_at = datetime.now(timezone.utc)
-
     try:
-        order_update = await db.execute(
-            update(PaymentOrder)
-            .where(PaymentOrder.id == order.id, PaymentOrder.status == PaymentStatus.PENDING)
-            .values(
-                status=PaymentStatus.PAID,
-                payment_method=data.payment_method,
-                paid_at=paid_at,
-                trade_no=data.trade_no,
-                amount_cents=func.coalesce(
-                    PaymentOrder.amount_cents,
-                    sa_cast(func.round(PaymentOrder.amount * 100), Integer),
-                ),
-                actual_amount_cents=amount_cents,
-            )
+        await _mark_order_paid_in_tx(
+            db,
+            order=order,
+            payment_method=data.payment_method,
+            trade_no=data.trade_no,
+            amount=amount,
         )
-        if getattr(order_update, "rowcount", 0) != 1:
-            raise HTTPException(status_code=400, detail="订单状态异常")
-
-        if order.order_type == "recharge":
-            balance_account = await _get_or_create_balance_in_tx(db, order.user_id)
-            balance_before = _quantize_amount(float(balance_account.balance))
-            balance_before_cents = _decimal_to_cents(balance_before)
-
-            effective_balance_cents = func.coalesce(
-                UserBalance.balance_cents,
-                sa_cast(func.round(func.coalesce(UserBalance.balance, 0) * 100), Integer),
-            )
-            effective_total_recharged_cents = func.coalesce(
-                UserBalance.total_recharged_cents,
-                sa_cast(func.round(func.coalesce(UserBalance.total_recharged, 0) * 100), Integer),
-            )
-
-            _ = await db.execute(
-                update(UserBalance)
-                .where(UserBalance.user_id == order.user_id)
-                .values(
-                    balance=func.coalesce(UserBalance.balance, 0) + float(amount),
-                    total_recharged=func.coalesce(UserBalance.total_recharged, 0) + float(amount),
-                    balance_cents=effective_balance_cents + amount_cents,
-                    total_recharged_cents=effective_total_recharged_cents + amount_cents,
-                )
-            )
-
-            balance_after = balance_before + amount
-            balance_after_cents = balance_before_cents + amount_cents
-            transaction = BalanceTransaction(
-                user_id=order.user_id,
-                order_id=order.id,
-                type="recharge",
-                amount=float(amount),
-                balance_before=float(balance_before),
-                balance_after=float(balance_after),
-                amount_cents=amount_cents,
-                balance_before_cents=balance_before_cents,
-                balance_after_cents=balance_after_cents,
-                description=f"充值: {order.title}",
-            )
-            db.add(transaction)
-
         await db.commit()
     except HTTPException:
         await db.rollback()
@@ -418,7 +1038,300 @@ async def payment_webhook(
         await db.rollback()
         raise
 
+    await _record_callback_event(
+        db,
+        provider=str(data.payment_method),
+        order_no=str(data.order_no),
+        trade_no=str(data.trade_no),
+        amount=amount,
+        verified=True,
+        error_message=None,
+        raw_payload=json.dumps(data.model_dump(), ensure_ascii=False, separators=(",", ":")),
+    )
+
     return {"message": "OK"}
+
+
+@router.post("/wechat/notify", summary="微信支付回调（验签）")
+async def wechat_notify(
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    body = await request.body()
+    payload_raw = body.decode("utf-8", errors="replace")
+
+    serial = str(request.headers.get("Wechatpay-Serial") or "").strip()
+    timestamp = str(request.headers.get("Wechatpay-Timestamp") or "").strip()
+    nonce = str(request.headers.get("Wechatpay-Nonce") or "").strip()
+    signature = str(request.headers.get("Wechatpay-Signature") or "").strip()
+    signature_type = str(request.headers.get("Wechatpay-Signature-Type") or "").strip()
+
+    cfg_raw = await _get_system_config_value(db, "WECHATPAY_PLATFORM_CERTS_JSON")
+    certs = load_platform_certs_json(cfg_raw or "")
+    cert = certs.get(serial)
+    if not cert:
+        await _record_callback_event(
+            db,
+            provider="wechat",
+            order_no=None,
+            trade_no=None,
+            amount=None,
+            verified=False,
+            error_message="平台证书未配置",
+            raw_payload=payload_raw,
+        )
+        raise HTTPException(status_code=400, detail="平台证书未配置")
+
+    if not (timestamp and nonce and signature):
+        await _record_callback_event(
+            db,
+            provider="wechat",
+            order_no=None,
+            trade_no=None,
+            amount=None,
+            verified=False,
+            error_message="缺少签名头",
+            raw_payload=payload_raw,
+        )
+        raise HTTPException(status_code=400, detail="缺少签名头")
+
+    if not signature_type:
+        await _record_callback_event(
+            db,
+            provider="wechat",
+            order_no=None,
+            trade_no=None,
+            amount=None,
+            verified=False,
+            error_message="缺少签名类型",
+            raw_payload=payload_raw,
+        )
+        raise HTTPException(status_code=400, detail="缺少签名类型")
+
+    if signature_type != "WECHATPAY2-SHA256-RSA2048":
+        await _record_callback_event(
+            db,
+            provider="wechat",
+            order_no=None,
+            trade_no=None,
+            amount=None,
+            verified=False,
+            error_message=f"不支持的签名类型:{signature_type}",
+            raw_payload=payload_raw,
+        )
+        raise HTTPException(status_code=400, detail="不支持的签名类型")
+
+    if not wechatpay_verify_signature(
+        cert_pem=cert.pem,
+        timestamp=timestamp,
+        nonce=nonce,
+        body=body,
+        signature_b64=signature,
+    ):
+        await _record_callback_event(
+            db,
+            provider="wechat",
+            order_no=None,
+            trade_no=None,
+            amount=None,
+            verified=False,
+            error_message="验签失败",
+            raw_payload=payload_raw,
+        )
+        raise HTTPException(status_code=400, detail="验签失败")
+
+    if not settings.wechatpay_api_v3_key:
+        await _record_callback_event(
+            db,
+            provider="wechat",
+            order_no=None,
+            trade_no=None,
+            amount=None,
+            verified=False,
+            error_message="WECHATPAY_API_V3_KEY 未设置",
+            raw_payload=payload_raw,
+        )
+        raise HTTPException(status_code=500, detail="WECHATPAY_API_V3_KEY 未设置")
+
+    try:
+        data_raw: object = cast(object, json.loads(payload_raw))
+        if not isinstance(data_raw, dict):
+            raise ValueError("invalid body")
+        data = cast(dict[str, object], data_raw)
+        resource_obj = data.get("resource")
+        if not isinstance(resource_obj, dict):
+            raise ValueError("missing resource")
+        resource = cast(dict[str, object], resource_obj)
+        nonce_r = str(resource.get("nonce") or "")
+        ad_r = str(resource.get("associated_data") or "")
+        ciphertext_r = str(resource.get("ciphertext") or "")
+        if not nonce_r or not ciphertext_r:
+            raise ValueError("missing resource fields")
+
+        plain = wechatpay_decrypt_resource(
+            api_v3_key=settings.wechatpay_api_v3_key,
+            nonce=nonce_r,
+            associated_data=ad_r,
+            ciphertext=ciphertext_r,
+        )
+        plain_obj_raw: object = cast(object, json.loads(plain.decode("utf-8")))
+        if not isinstance(plain_obj_raw, dict):
+            raise ValueError("invalid resource")
+        plain_obj = cast(dict[str, object], plain_obj_raw)
+    except Exception:
+        await _record_callback_event(
+            db,
+            provider="wechat",
+            order_no=None,
+            trade_no=None,
+            amount=None,
+            verified=True,
+            error_message="解密失败",
+            raw_payload=payload_raw,
+        )
+        raise HTTPException(status_code=400, detail="解密失败")
+
+    order_no = str(plain_obj.get("out_trade_no") or "").strip() or None
+    trade_no = str(plain_obj.get("transaction_id") or "").strip() or None
+    trade_state = str(plain_obj.get("trade_state") or "").strip()
+    amount_yuan: Decimal | None = None
+    try:
+        amount_obj = plain_obj.get("amount")
+        if isinstance(amount_obj, dict):
+            raw_total = cast(dict[str, object], amount_obj).get("total")
+            total_cents: int = 0
+            if isinstance(raw_total, bool):
+                total_cents = 0
+            elif isinstance(raw_total, (int, float)):
+                total_cents = int(raw_total)
+            elif isinstance(raw_total, str) and raw_total.strip():
+                total_cents = int(raw_total.strip())
+
+            amount_yuan = _quantize_amount(float(Decimal(total_cents) / 100))
+    except Exception:
+        amount_yuan = None
+
+    if not order_no or not trade_no:
+        await _record_callback_event(
+            db,
+            provider="wechat",
+            order_no=order_no,
+            trade_no=trade_no,
+            amount=amount_yuan,
+            verified=True,
+            error_message="缺少字段",
+            raw_payload=payload_raw,
+        )
+        return {"code": "SUCCESS", "message": "OK"}
+
+    if trade_state and trade_state != "SUCCESS":
+        await _record_callback_event(
+            db,
+            provider="wechat",
+            order_no=order_no,
+            trade_no=trade_no,
+            amount=amount_yuan,
+            verified=True,
+            error_message=f"ignored_trade_state:{trade_state}",
+            raw_payload=payload_raw,
+        )
+        return {"code": "SUCCESS", "message": "OK"}
+
+    if amount_yuan is None:
+        await _record_callback_event(
+            db,
+            provider="wechat",
+            order_no=order_no,
+            trade_no=trade_no,
+            amount=None,
+            verified=True,
+            error_message="金额缺失",
+            raw_payload=payload_raw,
+        )
+        return {"code": "SUCCESS", "message": "OK"}
+
+    result = await db.execute(select(PaymentOrder).where(PaymentOrder.order_no == order_no))
+    order = result.scalar_one_or_none()
+    if not order:
+        await _record_callback_event(
+            db,
+            provider="wechat",
+            order_no=order_no,
+            trade_no=trade_no,
+            amount=amount_yuan,
+            verified=True,
+            error_message="订单不存在",
+            raw_payload=payload_raw,
+        )
+        return {"code": "SUCCESS", "message": "OK"}
+
+    if order.status == PaymentStatus.PAID:
+        await _record_callback_event(
+            db,
+            provider="wechat",
+            order_no=order_no,
+            trade_no=trade_no,
+            amount=amount_yuan,
+            verified=True,
+            error_message=None,
+            raw_payload=payload_raw,
+        )
+        return {"code": "SUCCESS", "message": "OK"}
+
+    if order.status != PaymentStatus.PENDING:
+        await _record_callback_event(
+            db,
+            provider="wechat",
+            order_no=order_no,
+            trade_no=trade_no,
+            amount=amount_yuan,
+            verified=True,
+            error_message="订单状态异常",
+            raw_payload=payload_raw,
+        )
+        return {"code": "SUCCESS", "message": "OK"}
+
+    if _quantize_amount(float(order.actual_amount)) != amount_yuan:
+        await _record_callback_event(
+            db,
+            provider="wechat",
+            order_no=order_no,
+            trade_no=trade_no,
+            amount=amount_yuan,
+            verified=True,
+            error_message="金额不一致",
+            raw_payload=payload_raw,
+        )
+        return {"code": "SUCCESS", "message": "OK"}
+
+    try:
+        await _mark_order_paid_in_tx(
+            db,
+            order=order,
+            payment_method="wechat",
+            trade_no=trade_no,
+            amount=amount_yuan,
+        )
+        await db.commit()
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception:
+        await db.rollback()
+        raise
+
+    await _record_callback_event(
+        db,
+        provider="wechat",
+        order_no=order_no,
+        trade_no=trade_no,
+        amount=amount_yuan,
+        verified=True,
+        error_message=None,
+        raw_payload=payload_raw,
+    )
+
+    return {"code": "SUCCESS", "message": "OK"}
 
 
 @router.get("/orders", summary="获取订单列表")
@@ -867,3 +1780,389 @@ async def admin_payment_stats(
         "today_revenue": today_revenue,
         "conversion_rate": round(paid_orders / max(total_orders, 1) * 100, 1),
     }
+
+
+@router.get("/admin/callback-events", summary="管理员-支付回调事件")
+async def admin_callback_events(
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=200)] = 50,
+    provider: str | None = None,
+    order_no: str | None = None,
+    trade_no: str | None = None,
+    verified: bool | None = None,
+):
+    _ = current_user
+    query = select(PaymentCallbackEvent)
+
+    if provider:
+        query = query.where(PaymentCallbackEvent.provider == provider)
+    if order_no:
+        query = query.where(PaymentCallbackEvent.order_no == order_no)
+    if trade_no:
+        query = query.where(PaymentCallbackEvent.trade_no == trade_no)
+    if verified is not None:
+        query = query.where(PaymentCallbackEvent.verified == bool(verified))
+
+    count_query = select(func.count()).select_from(query.subquery())
+    total: int = int(await db.scalar(count_query) or 0)
+
+    query = query.order_by(PaymentCallbackEvent.created_at.desc())
+    query = query.offset((page - 1) * page_size).limit(page_size)
+    res = await db.execute(query)
+    events = res.scalars().all()
+
+    items = [
+        CallbackEventResponse(
+            id=e.id,
+            provider=e.provider,
+            order_no=e.order_no,
+            trade_no=e.trade_no,
+            amount=e.amount,
+            verified=bool(e.verified),
+            error_message=e.error_message,
+            created_at=e.created_at,
+        )
+        for e in events
+    ]
+    return {"items": items, "total": total}
+
+
+@router.get("/admin/callback-events/stats", summary="管理员-支付回调统计")
+async def admin_callback_event_stats(
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    minutes: Annotated[int, Query(ge=1, le=60 * 24 * 30)] = 60,
+    provider: str | None = None,
+):
+    _ = current_user
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(minutes=int(minutes))
+    since_naive = since.replace(tzinfo=None)
+
+    base_where: list[ColumnElement[bool]] = []
+    if provider:
+        base_where.append(PaymentCallbackEvent.provider == provider)
+
+    all_total = await db.scalar(
+        select(func.count()).select_from(PaymentCallbackEvent).where(*base_where)
+    ) or 0
+    all_verified = await db.scalar(
+        select(func.count())
+        .select_from(PaymentCallbackEvent)
+        .where(*base_where, PaymentCallbackEvent.verified == True)
+    ) or 0
+    all_failed = int(all_total) - int(all_verified)
+
+    window_where: list[ColumnElement[bool]] = [
+        *base_where,
+        PaymentCallbackEvent.created_at >= since_naive,
+    ]
+    window_total = await db.scalar(
+        select(func.count()).select_from(PaymentCallbackEvent).where(*window_where)
+    ) or 0
+    window_verified = await db.scalar(
+        select(func.count())
+        .select_from(PaymentCallbackEvent)
+        .where(*window_where, PaymentCallbackEvent.verified == True)
+    ) or 0
+    window_failed = int(window_total) - int(window_verified)
+
+    return {
+        "minutes": int(minutes),
+        "provider": provider,
+        "all_total": int(all_total),
+        "all_verified": int(all_verified),
+        "all_failed": int(all_failed),
+        "window_total": int(window_total),
+        "window_verified": int(window_verified),
+        "window_failed": int(window_failed),
+    }
+
+
+@router.get("/admin/wechat/platform-certs", summary="管理员-微信平台证书")
+async def admin_wechat_platform_certs(
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    _ = current_user
+    cfg_raw = await _get_system_config_value(db, "WECHATPAY_PLATFORM_CERTS_JSON")
+    certs = load_platform_certs_json(cfg_raw or "")
+    items: list[dict[str, object]] = []
+    for serial, cert in certs.items():
+        items.append({"serial_no": serial, "expire_time": cert.expire_time})
+    items.sort(key=lambda x: str(x.get("serial_no") or ""))
+    return {"items": items, "total": len(items)}
+
+
+@router.get("/admin/channel-status", response_model=PaymentChannelStatusResponse, summary="管理员-支付渠道配置状态")
+async def admin_payment_channel_status(
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    _ = current_user
+
+    alipay_app_id_set = bool((settings.alipay_app_id or "").strip())
+    alipay_public_key_set = bool((settings.alipay_public_key or "").strip())
+    alipay_private_key_set = bool((settings.alipay_private_key or "").strip())
+    alipay_notify_url_set = bool((settings.alipay_notify_url or "").strip())
+
+    wechatpay_mch_id_set = bool((settings.wechatpay_mch_id or "").strip())
+    wechatpay_serial_no_set = bool((settings.wechatpay_mch_serial_no or "").strip())
+    wechatpay_private_key_set = bool((settings.wechatpay_private_key or "").strip())
+    wechatpay_api_v3_key_set = bool((settings.wechatpay_api_v3_key or "").strip())
+
+    payment_webhook_secret_set = bool((settings.payment_webhook_secret or "").strip())
+
+    cfg_raw = await _get_system_config_value(db, "WECHATPAY_PLATFORM_CERTS_JSON")
+    certs_map = load_platform_certs_json(cfg_raw or "")
+
+    updated_at: int | None = None
+    try:
+        obj_raw: object = json.loads(cfg_raw or "")
+        if isinstance(obj_raw, dict):
+            v = obj_raw.get("updated_at")
+            if isinstance(v, bool):
+                updated_at = None
+            elif isinstance(v, (int, float)):
+                updated_at = int(v)
+            elif isinstance(v, str) and v.strip():
+                updated_at = int(v.strip())
+    except Exception:
+        updated_at = None
+
+    refresh_enabled_raw = os.getenv("WECHATPAY_CERT_REFRESH_ENABLED", "").strip().lower()
+    refresh_enabled = refresh_enabled_raw in {"1", "true", "yes", "on"}
+
+    alipay_configured = bool(alipay_app_id_set and alipay_public_key_set)
+    wechatpay_configured = bool(
+        wechatpay_mch_id_set and wechatpay_serial_no_set and wechatpay_private_key_set and wechatpay_api_v3_key_set
+    )
+
+    return PaymentChannelStatusResponse(
+        alipay_configured=alipay_configured,
+        wechatpay_configured=wechatpay_configured,
+        payment_webhook_secret_configured=payment_webhook_secret_set,
+        wechatpay_platform_certs_cached=len(certs_map) > 0,
+        wechatpay_platform_certs_total=len(certs_map),
+        wechatpay_platform_certs_updated_at=updated_at,
+        wechatpay_cert_refresh_enabled=refresh_enabled,
+        details={
+            "alipay": {
+                "app_id_set": alipay_app_id_set,
+                "public_key_set": alipay_public_key_set,
+                "private_key_set": alipay_private_key_set,
+                "notify_url_set": alipay_notify_url_set,
+            },
+            "wechatpay": {
+                "mch_id_set": wechatpay_mch_id_set,
+                "serial_no_set": wechatpay_serial_no_set,
+                "private_key_set": wechatpay_private_key_set,
+                "api_v3_key_set": wechatpay_api_v3_key_set,
+            },
+        },
+    )
+
+
+@router.post("/admin/wechat/platform-certs/import", summary="管理员-导入微信平台证书")
+async def admin_import_wechat_platform_certs(
+    req: WechatPlatformCertImportRequest,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    existing_raw = await _get_system_config_value(db, "WECHATPAY_PLATFORM_CERTS_JSON")
+    existing_map = load_platform_certs_json(existing_raw or "")
+    merged: dict[str, WeChatPayPlatformCert] = dict(existing_map)
+
+    if req.platform_certs_json and str(req.platform_certs_json).strip():
+        incoming_raw = str(req.platform_certs_json)
+        incoming_map = load_platform_certs_json(incoming_raw)
+        if not incoming_map:
+            raise HTTPException(status_code=400, detail="platform_certs_json 无法解析或为空（需为 dump_platform_certs_json 输出格式）")
+        if req.merge:
+            merged.update(incoming_map)
+        else:
+            merged = dict(incoming_map)
+
+        raw = dump_platform_certs_json(list(merged.values()))
+        await _set_system_config_value(
+            db,
+            key="WECHATPAY_PLATFORM_CERTS_JSON",
+            value=raw,
+            category="payment",
+            description="WeChatPay platform certificates cache",
+            updated_by=getattr(current_user, "id", None),
+        )
+        await db.commit()
+        return {"message": "OK", "count": len(merged)}
+
+    if req.cert_pem and str(req.cert_pem).strip():
+        cert_pem = str(req.cert_pem).strip()
+        serial_no = str(req.serial_no or "").strip()
+        expire_time = str(req.expire_time or "").strip() or None
+
+        if not serial_no or not expire_time:
+            try:
+                from cryptography import x509
+
+                cert = x509.load_pem_x509_certificate(cert_pem.encode("utf-8"))
+                if not serial_no:
+                    serial_no = format(int(cert.serial_number), "X").upper()
+                if not expire_time:
+                    dt = getattr(cert, "not_valid_after_utc", None) or cert.not_valid_after
+                    expire_time = dt.replace(tzinfo=timezone.utc).isoformat()
+            except Exception:
+                pass
+
+        if not serial_no:
+            raise HTTPException(status_code=400, detail="无法从证书解析 serial_no，请手动填写")
+
+        merged[serial_no] = WeChatPayPlatformCert(serial_no=serial_no, pem=cert_pem, expire_time=expire_time)
+        raw = dump_platform_certs_json(list(merged.values()))
+        await _set_system_config_value(
+            db,
+            key="WECHATPAY_PLATFORM_CERTS_JSON",
+            value=raw,
+            category="payment",
+            description="WeChatPay platform certificates cache",
+            updated_by=getattr(current_user, "id", None),
+        )
+        await db.commit()
+        return {"message": "OK", "count": len(merged)}
+
+    raise HTTPException(status_code=400, detail="请提供 platform_certs_json 或 cert_pem")
+
+
+@router.post("/admin/wechat/platform-certs/refresh", summary="管理员-刷新微信平台证书")
+async def admin_refresh_wechat_platform_certs(
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    if not settings.wechatpay_mch_id or not settings.wechatpay_mch_serial_no:
+        raise HTTPException(status_code=400, detail="WECHATPAY_MCH_ID/WECHATPAY_MCH_SERIAL_NO 未设置")
+    if not settings.wechatpay_private_key:
+        raise HTTPException(status_code=400, detail="WECHATPAY_PRIVATE_KEY 未设置")
+    if not settings.wechatpay_api_v3_key:
+        raise HTTPException(status_code=400, detail="WECHATPAY_API_V3_KEY 未设置")
+
+    certs = await fetch_platform_certificates(
+        certificates_url=settings.wechatpay_certificates_url,
+        mch_id=settings.wechatpay_mch_id,
+        mch_serial_no=settings.wechatpay_mch_serial_no,
+        mch_private_key_pem=settings.wechatpay_private_key,
+        api_v3_key=settings.wechatpay_api_v3_key,
+    )
+    raw = dump_platform_certs_json(certs)
+    await _set_system_config_value(
+        db,
+        key="WECHATPAY_PLATFORM_CERTS_JSON",
+        value=raw,
+        category="payment",
+        description="WeChatPay platform certificates cache",
+        updated_by=getattr(current_user, "id", None),
+    )
+    await db.commit()
+
+    return {"message": "OK", "count": len(certs)}
+
+
+@router.get("/admin/reconcile/{order_no}", summary="管理员-订单与回调对账")
+async def admin_reconcile_order(
+    order_no: str,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 20,
+):
+    _ = current_user
+    res = await db.execute(select(PaymentOrder).where(PaymentOrder.order_no == order_no))
+    order = res.scalar_one_or_none()
+    if not order:
+        raise HTTPException(status_code=404, detail="订单不存在")
+
+    ev_res = await db.execute(
+        select(PaymentCallbackEvent)
+        .where(PaymentCallbackEvent.order_no == order_no)
+        .order_by(PaymentCallbackEvent.created_at.desc())
+        .limit(limit)
+    )
+    events = ev_res.scalars().all()
+
+    recent_events = [
+        ReconcileEventItem(
+            provider=e.provider,
+            order_no=e.order_no,
+            trade_no=e.trade_no,
+            amount=e.amount,
+            verified=bool(e.verified),
+            error_message=e.error_message,
+            created_at=e.created_at,
+        )
+        for e in events
+    ]
+
+    callbacks_total = len(events)
+    callbacks_verified = sum(1 for e in events if bool(e.verified))
+    callbacks_failed = callbacks_total - callbacks_verified
+
+    last_event = events[0] if events else None
+    expected_amount = _quantize_amount(float(order.actual_amount))
+    expected_amount_float = float(expected_amount)
+
+    diagnosis = "ok"
+    details: dict[str, object] = {
+        "expected_amount": expected_amount_float,
+        "last_event": {
+            "provider": getattr(last_event, "provider", None),
+            "verified": getattr(last_event, "verified", None),
+            "error_message": getattr(last_event, "error_message", None),
+            "created_at": getattr(last_event, "created_at", None),
+        }
+        if last_event
+        else None,
+    }
+
+    if callbacks_total == 0:
+        diagnosis = "no_callback"
+    else:
+        has_unverified = any(not bool(e.verified) for e in events)
+        has_amount_mismatch = any(str(getattr(e, "error_message", "") or "") == "金额不一致" for e in events)
+        has_decrypt_failed = any(str(getattr(e, "error_message", "") or "") == "解密失败" for e in events)
+        has_sig_failed = any(str(getattr(e, "error_message", "") or "") == "验签失败" for e in events)
+        has_verified_success = any(bool(e.verified) and not (getattr(e, "error_message", None)) for e in events)
+
+        if has_amount_mismatch:
+            diagnosis = "amount_mismatch"
+        elif has_decrypt_failed:
+            diagnosis = "decrypt_failed"
+        elif has_sig_failed or has_unverified:
+            diagnosis = "signature_failed"
+        elif str(order.status) == PaymentStatus.PAID and not has_verified_success:
+            diagnosis = "paid_without_success_callback"
+        elif str(order.status) != PaymentStatus.PAID and has_verified_success:
+            diagnosis = "success_callback_but_order_not_paid"
+
+        details.update(
+            {
+                "has_verified_success": has_verified_success,
+                "has_unverified": has_unverified,
+                "has_amount_mismatch": has_amount_mismatch,
+                "has_decrypt_failed": has_decrypt_failed,
+                "has_sig_failed": has_sig_failed,
+            }
+        )
+
+    return ReconcileResponse(
+        order_no=order.order_no,
+        order_status=str(order.status),
+        payment_method=order.payment_method,
+        actual_amount=float(order.actual_amount),
+        trade_no=order.trade_no,
+        callbacks_total=int(callbacks_total),
+        callbacks_verified=int(callbacks_verified),
+        callbacks_failed=int(callbacks_failed),
+        diagnosis=str(diagnosis),
+        details=details,
+        paid_at=order.paid_at,
+        recent_events=recent_events,
+    )

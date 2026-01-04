@@ -14,9 +14,6 @@ from app.database import Base, get_db
 # 使用内存数据库进行测试
 TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
-# pytest-asyncio 配置
-pytest_plugins = ('pytest_asyncio',)
-
 
 @pytest_asyncio.fixture(scope="session")
 async def test_engine():

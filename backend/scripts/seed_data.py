@@ -11,7 +11,8 @@ from app.database import AsyncSessionLocal, init_db
 from app.models.user import User
 from app.models.forum import Post
 from app.models.news import News
-from app.models.lawfirm import LawFirm
+from app.models.lawfirm import LawFirm, Lawyer
+from app.models.payment import UserBalance
 from app.utils.security import hash_password
 
 
@@ -68,6 +69,51 @@ async def create_users(db: AsyncSession):
 
     print(f"✓ 创建/更新了 {len(result_users)} 个用户（新增 {created}）")
     return result_users
+
+
+async def create_balances(db: AsyncSession, users: list[User]):
+    """为测试用户创建/更新余额账户（便于本地联调余额支付）"""
+    # 仅为普通用户预置余额，避免影响管理员/律师账号的演示
+    default_balance_by_username: dict[str, float] = {
+        "user1": 200.0,
+    }
+
+    touched = 0
+    for u in users:
+        amount = float(default_balance_by_username.get(u.username, 0.0))
+        res = await db.execute(select(UserBalance).where(UserBalance.user_id == int(u.id)))
+        bal = res.scalar_one_or_none()
+
+        amount_cents = int(round(amount * 100))
+        if bal is None:
+            bal = UserBalance(
+                user_id=int(u.id),
+                balance=amount,
+                frozen=0.0,
+                total_recharged=amount,
+                total_consumed=0.0,
+                balance_cents=amount_cents,
+                frozen_cents=0,
+                total_recharged_cents=amount_cents,
+                total_consumed_cents=0,
+            )
+            db.add(bal)
+            touched += 1
+        else:
+            # 以脚本配置为准（可重复执行）
+            bal.balance = amount
+            bal.frozen = 0.0
+            bal.total_recharged = max(float(getattr(bal, "total_recharged", 0.0) or 0.0), amount)
+            bal.total_consumed = float(getattr(bal, "total_consumed", 0.0) or 0.0)
+
+            bal.balance_cents = amount_cents
+            bal.frozen_cents = 0
+            bal.total_recharged_cents = max(int(getattr(bal, "total_recharged_cents", 0) or 0), amount_cents)
+            bal.total_consumed_cents = int(getattr(bal, "total_consumed_cents", 0) or 0)
+            db.add(bal)
+
+    await db.commit()
+    print(f"✓ 创建/更新了余额账户（新增 {touched}）")
 
 
 async def create_news(db: AsyncSession):
@@ -163,6 +209,43 @@ async def create_law_firms(db: AsyncSession):
     print(f"✓ 创建/更新了 {len(firms)} 个律所（新增 {created}）")
 
 
+async def create_lawyers(db: AsyncSession, users: list[User]):
+    lawyer_user = next((u for u in users if u.username == "lawyer1"), None)
+    if lawyer_user is None:
+        return
+
+    firm = (
+        await db.execute(select(LawFirm).order_by(LawFirm.id.asc()).limit(1))
+    ).scalar_one_or_none()
+    firm_id = int(firm.id) if firm else None
+
+    existing = (
+        await db.execute(select(Lawyer).where(Lawyer.user_id == int(lawyer_user.id)))
+    ).scalar_one_or_none()
+
+    if existing is None:
+        db.add(
+            Lawyer(
+                user_id=int(lawyer_user.id),
+                firm_id=firm_id,
+                name=str(lawyer_user.nickname or lawyer_user.username or "律师"),
+                consultation_fee=10.0,
+                is_verified=True,
+                is_active=True,
+            )
+        )
+    else:
+        existing.firm_id = firm_id
+        existing.name = str(lawyer_user.nickname or lawyer_user.username or existing.name)
+        existing.consultation_fee = float(getattr(existing, "consultation_fee", 10.0) or 10.0)
+        existing.is_verified = True
+        existing.is_active = True
+        db.add(existing)
+
+    await db.commit()
+    print("✓ 创建/更新了 1 个律师资料（绑定 lawyer1）")
+
+
 async def create_posts(db: AsyncSession, users: list):
     """创建测试帖子"""
     posts = [
@@ -191,8 +274,10 @@ async def main():
     
     async with AsyncSessionLocal() as db:
         users = await create_users(db)
+        await create_balances(db, users)
         await create_news(db)
         await create_law_firms(db)
+        await create_lawyers(db, users)
         await create_posts(db, users)
     
     print("\n✓ 种子数据初始化完成!")

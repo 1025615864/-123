@@ -9,6 +9,7 @@ import {
   createNews,
   updateNews,
   deleteNews,
+  setNewsViewCount,
 } from './helpers'
 
 async function sleep(ms: number): Promise<void> {
@@ -241,12 +242,8 @@ test('首页：热门新闻卡片可见（包含高阅读新闻）', async ({ pa
   })
 
   try {
-    for (let i = 0; i < 30; i++) {
-      const res = await request.get(`${apiBase}/news/${hotId}`)
-      expect(res.ok()).toBeTruthy()
-    }
-    const res2 = await request.get(`${apiBase}/news/${normalId}`)
-    expect(res2.ok()).toBeTruthy()
+    await setNewsViewCount(request, adminToken, hotId, 1_000_000_000)
+    await setNewsViewCount(request, adminToken, normalId, 1)
 
     await page.goto('/')
 
@@ -290,12 +287,8 @@ test('新闻列表：热门新闻区块可见（按阅读量排序）', async ({
   })
 
   try {
-    for (let i = 0; i < 30; i++) {
-      const res = await request.get(`${apiBase}/news/${hotId}`)
-      expect(res.ok()).toBeTruthy()
-    }
-    const res2 = await request.get(`${apiBase}/news/${normalId}`)
-    expect(res2.ok()).toBeTruthy()
+    await setNewsViewCount(request, adminToken, hotId, 1_000_000_000)
+    await setNewsViewCount(request, adminToken, normalId, 1)
 
     await page.goto('/news')
     const hot = page.getByTestId('news-hot')

@@ -397,12 +397,12 @@ export default function Layout() {
               © 2024 百姓法律助手. All rights reserved.
             </p>
             <div className="flex space-x-6 mt-4 sm:mt-0">
-              <a href="#" className="text-slate-400 hover:text-slate-600 text-sm outline-none rounded-md transition-colors active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-slate-900">
+              <Link to="/privacy" className="text-slate-400 hover:text-slate-600 text-sm outline-none rounded-md transition-colors active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-slate-900">
                 隐私政策
-              </a>
-              <a href="#" className="text-slate-400 hover:text-slate-600 text-sm outline-none rounded-md transition-colors active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-slate-900">
+              </Link>
+              <Link to="/terms" className="text-slate-400 hover:text-slate-600 text-sm outline-none rounded-md transition-colors active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-slate-900">
                 服务条款
-              </a>
+              </Link>
             </div>
           </div>
         </div>

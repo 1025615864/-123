@@ -7,6 +7,7 @@ import {
   Camera,
   Save,
   Shield,
+  FileText,
   MessageSquare,
   Heart,
   Star,
@@ -15,10 +16,10 @@ import {
   Eye,
   EyeOff,
   Calendar,
+  Bell,
   CheckCircle,
   AlertCircle,
   ExternalLink,
-  FileText,
   Edit,
   Trash2,
 } from "lucide-react";
@@ -38,6 +39,68 @@ export default function ProfilePage() {
   const toast = useToast();
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const vipExpiresAt = useMemo(() => {
+    const raw = user?.vip_expires_at;
+    if (!raw) return null;
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return null;
+    return d;
+  }, [user?.vip_expires_at]);
+
+  const isVipActive = useMemo(() => {
+    if (!vipExpiresAt) return false;
+    return vipExpiresAt.getTime() > Date.now();
+  }, [vipExpiresAt]);
+
+  const buyVipMutation = useAppMutation<any, { payment_method: "balance" | "alipay" }>({
+    mutationFn: async ({ payment_method }) => {
+      const createRes = await api.post("/payment/orders", {
+        order_type: "vip",
+        amount: 9.9,
+        title: "VIP会员",
+        description: "VIP会员",
+      });
+      const orderNo = String(createRes.data?.order_no || "").trim();
+      if (!orderNo) throw new Error("未获取到订单号");
+
+      const payRes = await api.post(`/payment/orders/${encodeURIComponent(orderNo)}/pay`, {
+        payment_method,
+      });
+
+      return { order_no: orderNo, ...(payRes.data || {}) };
+    },
+    errorMessageFallback: "开通失败，请稍后重试",
+  });
+
+  const handleBuyVip = () => {
+    if (!user) return;
+    if (buyVipMutation.isPending) return;
+
+    const useBalance = window.confirm("开通/续费 VIP：确定使用余额支付吗？取消将使用支付宝支付");
+    const payment_method: "balance" | "alipay" = useBalance ? "balance" : "alipay";
+
+    buyVipMutation.mutate(
+      { payment_method },
+      {
+        onSuccess: async (data) => {
+          if (payment_method === "alipay") {
+            const url = String((data as any)?.pay_url || "").trim();
+            if (url) {
+              window.open(url, "_blank", "noopener,noreferrer");
+              toast.success("已打开支付宝支付页面");
+            } else {
+              toast.error("未获取到支付链接");
+            }
+            return;
+          }
+
+          toast.success("开通成功");
+          queryClient.invalidateQueries({ queryKey: ["user-me"] as any });
+        },
+      }
+    );
+  };
 
   const [urlParams, setUrlParams] = useSearchParams();
   const didInitFromUrlRef = useRef(false);
@@ -641,7 +704,92 @@ export default function ProfilePage() {
                   <span className="text-sm text-slate-700 dark:text-white/70">律师预约</span>
                 </div>
                 <Link
-                  to="/lawfirm/consultations"
+                  to="/orders?tab=consultations"
+                  className="text-amber-600 text-xs hover:text-amber-700 flex items-center gap-1 dark:text-amber-400 dark:hover:text-amber-300"
+                >
+                  查看
+                  <ExternalLink className="h-3 w-3" />
+                </Link>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Shield className="h-4 w-4 text-slate-400 dark:text-white/40" />
+                  <span className="text-sm text-slate-700 dark:text-white/70">律师认证</span>
+                </div>
+                <Link
+                  to="/lawyer/verification"
+                  className="text-amber-600 text-xs hover:text-amber-700 flex items-center gap-1 dark:text-amber-400 dark:hover:text-amber-300"
+                >
+                  查看
+                  <ExternalLink className="h-3 w-3" />
+                </Link>
+              </div>
+
+              {String(user.role || "").toLowerCase() === "lawyer" ? (
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <MessageSquare className="h-4 w-4 text-slate-400 dark:text-white/40" />
+                    <span className="text-sm text-slate-700 dark:text-white/70">律师工作台</span>
+                  </div>
+                  <Link
+                    to="/lawyer"
+                    className="text-amber-600 text-xs hover:text-amber-700 flex items-center gap-1 dark:text-amber-400 dark:hover:text-amber-300"
+                  >
+                    进入
+                    <ExternalLink className="h-3 w-3" />
+                  </Link>
+                </div>
+              ) : null}
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Star className="h-4 w-4 text-slate-400 dark:text-white/40" />
+                  <span className="text-sm text-slate-700 dark:text-white/70">VIP会员</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`text-xs ${
+                      isVipActive ? "text-green-500" : "text-slate-500 dark:text-white/50"
+                    }`}
+                  >
+                    {isVipActive
+                      ? `有效期至 ${vipExpiresAt ? vipExpiresAt.toLocaleDateString() : ""}`
+                      : "未开通"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleBuyVip}
+                    disabled={buyVipMutation.isPending}
+                    className="text-amber-600 text-xs hover:text-amber-700 flex items-center gap-1 dark:text-amber-400 dark:hover:text-amber-300 disabled:opacity-50"
+                  >
+                    {isVipActive ? "续费" : "开通"}
+                    <ExternalLink className="h-3 w-3" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <FileText className="h-4 w-4 text-slate-400 dark:text-white/40" />
+                  <span className="text-sm text-slate-700 dark:text-white/70">我的订单</span>
+                </div>
+                <Link
+                  to="/orders?tab=payment"
+                  className="text-amber-600 text-xs hover:text-amber-700 flex items-center gap-1 dark:text-amber-400 dark:hover:text-amber-300"
+                >
+                  查看
+                  <ExternalLink className="h-3 w-3" />
+                </Link>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Bell className="h-4 w-4 text-slate-400 dark:text-white/40" />
+                  <span className="text-sm text-slate-700 dark:text-white/70">通知中心</span>
+                </div>
+                <Link
+                  to="/notifications"
                   className="text-amber-600 text-xs hover:text-amber-700 flex items-center gap-1 dark:text-amber-400 dark:hover:text-amber-300"
                 >
                   查看

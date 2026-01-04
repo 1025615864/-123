@@ -1,9 +1,12 @@
 import { test, expect } from '@playwright/test'
 
+import { makeE2eJwt } from './helpers'
+
 test('前台：咨询历史支持关键词搜索（标题/内容）并可清空', async ({ page }) => {
-  await page.addInitScript(() => {
-    localStorage.setItem('token', 'e2e_fake_token')
-  })
+  const token = makeE2eJwt()
+  await page.addInitScript((t) => {
+    localStorage.setItem('token', String(t))
+  }, token)
 
   await page.route('**/api/user/me', async (route) => {
     await route.fulfill({

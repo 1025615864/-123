@@ -76,10 +76,13 @@ class TestUserAPI:
         user_data = {
             "username": "testuser",
             "email": "test@example.com",
-            "password": "Test123456"
+            "password": "Test123456",
+            "agree_terms": True,
+            "agree_privacy": True,
+            "agree_ai_disclaimer": True,
         }
         response = await client.post("/api/user/register", json=user_data)
-        assert response.status_code in [200, 201, 400, 422]  # 422 validation error
+        assert response.status_code in [200, 201, 400]
     
     @pytest.mark.asyncio
     async def test_login_invalid_credentials(self, client: AsyncClient):
@@ -830,12 +833,515 @@ class TestLawFirmConsultationsAPI:
         )
         assert cancel_completed_res.status_code == 400
 
+    @pytest.mark.asyncio
+    async def test_consultation_cancel_paid_balance_auto_refund_idempotent(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        from sqlalchemy import select, func
+
+        from app.models.lawfirm import Lawyer
+        from app.models.payment import PaymentOrder, UserBalance, BalanceTransaction
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        user = User(
+            username="u_consult_cancel_refund",
+            email="u_consult_cancel_refund@example.com",
+            nickname="u_consult_cancel_refund",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        bal = UserBalance(
+            user_id=user.id,
+            balance=50.0,
+            frozen=0.0,
+            total_recharged=50.0,
+            total_consumed=0.0,
+        )
+        test_session.add(bal)
+        await test_session.commit()
+
+        lawyer = Lawyer(name="律师退款", consultation_fee=10.0)
+        test_session.add(lawyer)
+        await test_session.commit()
+        await test_session.refresh(lawyer)
+
+        token = create_access_token({"sub": str(user.id)})
+
+        create_res = await client.post(
+            "/api/lawfirm/consultations",
+            json={
+                "lawyer_id": int(lawyer.id),
+                "subject": "取消退款咨询",
+                "contact_phone": "13800000000",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create_res.status_code == 200
+        create_data = _json_dict(create_res)
+        consultation_id = _as_int(create_data.get("id"), 0)
+        assert consultation_id > 0
+        order_no = str(create_data.get("payment_order_no") or "").strip()
+        assert order_no
+
+        pay_res = await client.post(
+            f"/api/payment/orders/{order_no}/pay",
+            json={"payment_method": "balance"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert pay_res.status_code == 200
+
+        bal_before_res = await test_session.execute(
+            select(UserBalance).where(UserBalance.user_id == int(user.id))
+        )
+        bal_before = bal_before_res.scalar_one()
+        before_amount = float(bal_before.balance)
+
+        cancel_res = await client.post(
+            f"/api/lawfirm/consultations/{consultation_id}/cancel",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert cancel_res.status_code == 200
+        cancel_data = _json_dict(cancel_res)
+        assert str(cancel_data.get("status")) == "cancelled"
+        assert str(cancel_data.get("payment_status") or "").lower() in {"refunded", "paid"}
+
+        order_res = await test_session.execute(
+            select(PaymentOrder).where(PaymentOrder.order_no == str(order_no))
+        )
+        order = order_res.scalar_one()
+        assert str(order.status) == "refunded"
+
+        bal_after_res = await test_session.execute(
+            select(UserBalance).where(UserBalance.user_id == int(user.id))
+        )
+        bal_after = bal_after_res.scalar_one()
+        assert float(bal_after.balance) >= before_amount
+
+        refund_count_res = await test_session.execute(
+            select(func.count(BalanceTransaction.id)).where(
+                BalanceTransaction.user_id == int(user.id),
+                BalanceTransaction.order_id == int(order.id),
+                BalanceTransaction.type == "refund",
+            )
+        )
+        refund_count_1 = int(refund_count_res.scalar() or 0)
+        assert refund_count_1 == 1
+
+        cancel_res2 = await client.post(
+            f"/api/lawfirm/consultations/{consultation_id}/cancel",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert cancel_res2.status_code == 200
+
+        refund_count_res2 = await test_session.execute(
+            select(func.count(BalanceTransaction.id)).where(
+                BalanceTransaction.user_id == int(user.id),
+                BalanceTransaction.order_id == int(order.id),
+                BalanceTransaction.type == "refund",
+            )
+        )
+        refund_count_2 = int(refund_count_res2.scalar() or 0)
+        assert refund_count_2 == 1
+
+    @pytest.mark.asyncio
+    async def test_consultation_paid_confirms(self, client: AsyncClient, test_session: AsyncSession):
+        from sqlalchemy import select
+
+        from app.models.lawfirm import Lawyer, LawyerConsultation
+        from app.models.payment import UserBalance, PaymentOrder
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        user = User(
+            username="u_lawfirm_pay",
+            email="u_lawfirm_pay@example.com",
+            nickname="u_lawfirm_pay",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        balance = UserBalance(
+            user_id=user.id,
+            balance=100.0,
+            frozen=0.0,
+            total_recharged=100.0,
+            total_consumed=0.0,
+        )
+        test_session.add(balance)
+        await test_session.commit()
+
+        lawyer = Lawyer(name="律师付费", consultation_fee=10.0)
+        test_session.add(lawyer)
+        await test_session.commit()
+        await test_session.refresh(lawyer)
+
+        lawyer_user = User(
+            username="u_lawyer_pay",
+            email="u_lawyer_pay@example.com",
+            nickname="u_lawyer_pay",
+            hashed_password=hash_password("Test123456"),
+            role="lawyer",
+            is_active=True,
+        )
+        test_session.add(lawyer_user)
+        await test_session.commit()
+        await test_session.refresh(lawyer_user)
+
+        lawyer.user_id = int(lawyer_user.id)
+        test_session.add(lawyer)
+        await test_session.commit()
+        await test_session.refresh(lawyer)
+
+        token = create_access_token({"sub": str(user.id)})
+
+        create_res = await client.post(
+            "/api/lawfirm/consultations",
+            json={
+                "lawyer_id": int(lawyer.id),
+                "subject": "付费咨询",
+                "contact_phone": "13800000000",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create_res.status_code == 200
+        create_data = _json_dict(create_res)
+        consultation_id = _as_int(create_data.get("id"), 0)
+        assert consultation_id > 0
+        assert str(create_data.get("status")) == "pending"
+
+        order_no = str(create_data.get("payment_order_no") or "").strip()
+        assert order_no
+        assert str(create_data.get("payment_status") or "").strip().lower() == "pending"
+
+        pay_res = await client.post(
+            f"/api/payment/orders/{order_no}/pay",
+            json={"payment_method": "balance"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert pay_res.status_code == 200
+
+        list_res = await client.get(
+            "/api/lawfirm/consultations?page=1&page_size=20",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert list_res.status_code == 200
+        list_data = _json_dict(list_res)
+        items = _as_list(list_data.get("items"))
+        found = None
+        for it in items:
+            if isinstance(it, dict) and _as_int(it.get("id"), 0) == consultation_id:
+                found = it
+                break
+        assert found is not None
+
+        assert str(found.get("status") or "").lower() == "confirmed"
+        assert str(found.get("payment_status") or "").lower() == "paid"
+
+        lawyer_token = create_access_token({"sub": str(lawyer_user.id)})
+        accept_res = await client.post(
+            f"/api/lawfirm/lawyer/consultations/{consultation_id}/accept",
+            headers={"Authorization": f"Bearer {lawyer_token}"},
+        )
+        assert accept_res.status_code == 200
+        accept_data = _json_dict(accept_res)
+        assert str(accept_data.get("status") or "").lower() == "confirmed"
+
+        c_res = await test_session.execute(
+            select(LawyerConsultation).where(LawyerConsultation.id == int(consultation_id))
+        )
+        c = c_res.scalar_one()
+        assert c.status == "confirmed"
+
+        o_res = await test_session.execute(
+            select(PaymentOrder).where(PaymentOrder.order_no == order_no)
+        )
+        o = o_res.scalar_one()
+        assert o.status == "paid"
+
+
+class TestLawFirmConsultationMessagesAPI:
+    """律所咨询留言 API 测试"""
+
+    @pytest.mark.asyncio
+    async def test_consultation_messages_permissions_and_flow(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        from sqlalchemy import select
+
+        from app.models.lawfirm import Lawyer, LawyerConsultationMessage
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        user1 = User(
+            username="u_lawfirm_msg_1",
+            email="u_lawfirm_msg_1@example.com",
+            nickname="u_lawfirm_msg_1",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        user2 = User(
+            username="u_lawfirm_msg_2",
+            email="u_lawfirm_msg_2@example.com",
+            nickname="u_lawfirm_msg_2",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        lawyer_user = User(
+            username="u_lawfirm_msg_lawyer",
+            email="u_lawfirm_msg_lawyer@example.com",
+            nickname="u_lawfirm_msg_lawyer",
+            hashed_password=hash_password("Test123456"),
+            role="lawyer",
+            is_active=True,
+        )
+        test_session.add_all([user1, user2, lawyer_user])
+        await test_session.commit()
+        await test_session.refresh(user1)
+        await test_session.refresh(user2)
+        await test_session.refresh(lawyer_user)
+
+        lawyer = Lawyer(name="律师留言", consultation_fee=0.0, user_id=int(lawyer_user.id))
+        test_session.add(lawyer)
+        await test_session.commit()
+        await test_session.refresh(lawyer)
+
+        token1 = create_access_token({"sub": str(user1.id)})
+        token2 = create_access_token({"sub": str(user2.id)})
+        token_lawyer = create_access_token({"sub": str(lawyer_user.id)})
+
+        create_res = await client.post(
+            "/api/lawfirm/consultations",
+            json={
+                "lawyer_id": int(lawyer.id),
+                "subject": "留言测试咨询",
+                "contact_phone": "13800000000",
+            },
+            headers={"Authorization": f"Bearer {token1}"},
+        )
+        assert create_res.status_code == 200
+        consultation_id = _as_int(_json_dict(create_res).get("id"), 0)
+        assert consultation_id > 0
+
+        send_res = await client.post(
+            f"/api/lawfirm/consultations/{consultation_id}/messages",
+            json={"content": "hello"},
+            headers={"Authorization": f"Bearer {token1}"},
+        )
+        assert send_res.status_code == 200
+        send_data = _json_dict(send_res)
+        assert str(send_data.get("content")) == "hello"
+        assert str(send_data.get("sender_role")) == "user"
+
+        list_res_user = await client.get(
+            f"/api/lawfirm/consultations/{consultation_id}/messages?page=1&page_size=50",
+            headers={"Authorization": f"Bearer {token1}"},
+        )
+        assert list_res_user.status_code == 200
+        list_data_user = _json_dict(list_res_user)
+        assert _as_int(list_data_user.get("total"), 0) >= 1
+
+        list_res_other = await client.get(
+            f"/api/lawfirm/consultations/{consultation_id}/messages?page=1&page_size=50",
+            headers={"Authorization": f"Bearer {token2}"},
+        )
+        assert list_res_other.status_code == 404
+
+        list_res_lawyer = await client.get(
+            f"/api/lawfirm/consultations/{consultation_id}/messages?page=1&page_size=50",
+            headers={"Authorization": f"Bearer {token_lawyer}"},
+        )
+        assert list_res_lawyer.status_code == 200
+
+        reply_res = await client.post(
+            f"/api/lawfirm/consultations/{consultation_id}/messages",
+            json={"content": "reply"},
+            headers={"Authorization": f"Bearer {token_lawyer}"},
+        )
+        assert reply_res.status_code == 200
+        reply_data = _json_dict(reply_res)
+        assert str(reply_data.get("content")) == "reply"
+        assert str(reply_data.get("sender_role")) == "lawyer"
+
+        db_res = await test_session.execute(
+            select(LawyerConsultationMessage).where(
+                LawyerConsultationMessage.consultation_id == int(consultation_id)
+            )
+        )
+        assert len(list(db_res.scalars().all())) >= 2
+
+
+class TestLawFirmReviewsAPI:
+    """律所评价 API 测试"""
+
+    @pytest.mark.asyncio
+    async def test_review_requires_completed_and_unique_per_consultation(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        from sqlalchemy import select
+
+        from app.models.lawfirm import Lawyer, LawyerConsultation, LawyerReview
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        user1 = User(
+            username="u_lawfirm_review_1",
+            email="u_lawfirm_review_1@example.com",
+            nickname="u_lawfirm_review_1",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        user2 = User(
+            username="u_lawfirm_review_2",
+            email="u_lawfirm_review_2@example.com",
+            nickname="u_lawfirm_review_2",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add_all([user1, user2])
+        await test_session.commit()
+        await test_session.refresh(user1)
+        await test_session.refresh(user2)
+
+        lawyer = Lawyer(name="律师评价", consultation_fee=0.0)
+        test_session.add(lawyer)
+        await test_session.commit()
+        await test_session.refresh(lawyer)
+
+        token1 = create_access_token({"sub": str(user1.id)})
+        token2 = create_access_token({"sub": str(user2.id)})
+
+        create_res = await client.post(
+            "/api/lawfirm/consultations",
+            json={
+                "lawyer_id": int(lawyer.id),
+                "subject": "评价测试咨询",
+                "contact_phone": "13800000000",
+            },
+            headers={"Authorization": f"Bearer {token1}"},
+        )
+        assert create_res.status_code == 200
+        consultation_id = _as_int(_json_dict(create_res).get("id"), 0)
+        assert consultation_id > 0
+
+        # pending 状态不能评价
+        bad_res = await client.post(
+            "/api/lawfirm/reviews",
+            json={
+                "lawyer_id": int(lawyer.id),
+                "consultation_id": int(consultation_id),
+                "rating": 5,
+                "content": "不错",
+            },
+            headers={"Authorization": f"Bearer {token1}"},
+        )
+        assert bad_res.status_code == 400
+
+        c_res = await test_session.execute(
+            select(LawyerConsultation).where(LawyerConsultation.id == int(consultation_id))
+        )
+        c = c_res.scalar_one()
+        c.status = "completed"
+        test_session.add(c)
+        await test_session.commit()
+
+        list_before = await client.get(
+            "/api/lawfirm/consultations?page=1&page_size=50",
+            headers={"Authorization": f"Bearer {token1}"},
+        )
+        assert list_before.status_code == 200
+        before_items = _as_list(_json_dict(list_before).get("items"))
+        found_before = None
+        for it in before_items:
+            if isinstance(it, dict) and _as_int(it.get("id"), 0) == consultation_id:
+                found_before = it
+                break
+        assert found_before is not None
+        assert bool(found_before.get("can_review")) is True
+
+        ok_res = await client.post(
+            "/api/lawfirm/reviews",
+            json={
+                "lawyer_id": int(lawyer.id),
+                "consultation_id": int(consultation_id),
+                "rating": 5,
+                "content": "不错",
+            },
+            headers={"Authorization": f"Bearer {token1}"},
+        )
+        assert ok_res.status_code == 200
+        review_id = _as_int(_json_dict(ok_res).get("id"), 0)
+        assert review_id > 0
+
+        dup_res = await client.post(
+            "/api/lawfirm/reviews",
+            json={
+                "lawyer_id": int(lawyer.id),
+                "consultation_id": int(consultation_id),
+                "rating": 5,
+                "content": "重复",
+            },
+            headers={"Authorization": f"Bearer {token1}"},
+        )
+        assert dup_res.status_code == 400
+
+        other_res = await client.post(
+            "/api/lawfirm/reviews",
+            json={
+                "lawyer_id": int(lawyer.id),
+                "consultation_id": int(consultation_id),
+                "rating": 4,
+                "content": "越权",
+            },
+            headers={"Authorization": f"Bearer {token2}"},
+        )
+        assert other_res.status_code == 404
+
+        list_after = await client.get(
+            "/api/lawfirm/consultations?page=1&page_size=50",
+            headers={"Authorization": f"Bearer {token1}"},
+        )
+        assert list_after.status_code == 200
+        after_items = _as_list(_json_dict(list_after).get("items"))
+        found_after = None
+        for it in after_items:
+            if isinstance(it, dict) and _as_int(it.get("id"), 0) == consultation_id:
+                found_after = it
+                break
+        assert found_after is not None
+        assert bool(found_after.get("can_review")) is False
+        assert _as_int(found_after.get("review_id"), 0) == review_id
+
+        r_res = await test_session.execute(
+            select(LawyerReview).where(LawyerReview.id == int(review_id))
+        )
+        assert r_res.scalar_one_or_none() is not None
+
 
 class TestPaymentAPI:
     """支付API测试"""
 
     @pytest.mark.asyncio
-    async def test_balance_pay_order(self, client: AsyncClient, test_session: AsyncSession):
+    async def test_alipay_rsa2_notify_callback(self, client: AsyncClient, test_session: AsyncSession, monkeypatch: MonkeyPatch):
         from app.models.user import User
         from app.models.payment import UserBalance
         from app.utils.security import hash_password, create_access_token
@@ -887,14 +1393,727 @@ class TestPaymentAPI:
         assert detail_res.status_code == 200
         assert _json_dict(detail_res).get("status") == "paid"
 
-        bal_res = await client.get(
-            "/api/payment/balance",
+    @pytest.mark.asyncio
+    async def test_wechat_notify_marks_order_paid_and_records_event_idempotent(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        import base64
+        import json
+        import time
+        from sqlalchemy import select, func
+
+        from app.models.user import User
+        from app.models.system import SystemConfig
+        from app.models.payment import PaymentCallbackEvent
+        from app.routers import payment as payment_router
+        from app.utils.security import hash_password, create_access_token
+
+        from cryptography.hazmat.primitives.asymmetric import rsa, padding
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from datetime import datetime, timedelta
+
+        from app.utils.wechatpay_v3 import WeChatPayPlatformCert, dump_platform_certs_json
+
+        user = User(
+            username="u_wechat_notify_test",
+            email="u_wechat_notify_test@example.com",
+            nickname="u_wechat_notify_test",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        token = create_access_token({"sub": str(user.id)})
+
+        create_res = await client.post(
+            "/api/payment/orders",
+            json={"order_type": "service", "amount": 10.0, "title": "svc"},
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert bal_res.status_code == 200
-        bal_data = _json_dict(bal_res)
-        assert abs(_as_float(bal_data.get("balance"), 0.0) - 90.0) < 1e-6
-        assert _as_float(bal_data.get("total_consumed"), 0.0) >= 10.0
+        assert create_res.status_code == 200
+        order_no = str(create_res.json()["order_no"])
+
+        api_v3_key = "0123456789abcdef0123456789abcdef"
+        payment_router.settings.wechatpay_api_v3_key = api_v3_key
+
+        platform_private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        subject = issuer = x509.Name(
+            [x509.NameAttribute(NameOID.COMMON_NAME, "wx-platform")]
+        )
+        cert_obj = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .public_key(platform_private_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.utcnow() - timedelta(days=1))
+            .not_valid_after(datetime.utcnow() + timedelta(days=365))
+            .sign(platform_private_key, hashes.SHA256())
+        )
+        cert_pem = cert_obj.public_bytes(serialization.Encoding.PEM).decode("utf-8")
+        serial_no = "TEST_SERIAL_1"
+        cfg_json = dump_platform_certs_json([WeChatPayPlatformCert(serial_no=serial_no, pem=cert_pem)])
+        test_session.add(SystemConfig(key="WECHATPAY_PLATFORM_CERTS_JSON", value=cfg_json, category="payment"))
+        await test_session.commit()
+
+        trade_no = "WX_T_1"
+        resource_plain = {
+            "out_trade_no": order_no,
+            "transaction_id": trade_no,
+            "trade_state": "SUCCESS",
+            "amount": {"total": 1000},
+        }
+        resource_plain_bytes = json.dumps(resource_plain, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+        resource_nonce = "0123456789ab"
+        resource_ad = "transaction"
+        aesgcm = AESGCM(api_v3_key.encode("utf-8"))
+        cipher = aesgcm.encrypt(resource_nonce.encode("utf-8"), resource_plain_bytes, resource_ad.encode("utf-8"))
+        resource_ciphertext = base64.b64encode(cipher).decode("utf-8")
+
+        body_obj = {
+            "id": "EVT_1",
+            "create_time": "2020-01-01T00:00:00+08:00",
+            "resource_type": "encrypt-resource",
+            "event_type": "TRANSACTION.SUCCESS",
+            "summary": "ok",
+            "resource": {
+                "algorithm": "AEAD_AES_256_GCM",
+                "nonce": resource_nonce,
+                "associated_data": resource_ad,
+                "ciphertext": resource_ciphertext,
+            },
+        }
+        body_bytes = json.dumps(body_obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+        ts = str(int(time.time()))
+        header_nonce = "HDRNONCE_123"
+        msg = ts.encode("utf-8") + b"\n" + header_nonce.encode("utf-8") + b"\n" + body_bytes + b"\n"
+        sig = platform_private_key.sign(msg, padding.PKCS1v15(), hashes.SHA256())
+        sig_b64 = base64.b64encode(sig).decode("utf-8")
+
+        headers = {
+            "Content-Type": "application/json",
+            "Wechatpay-Serial": serial_no,
+            "Wechatpay-Timestamp": ts,
+            "Wechatpay-Nonce": header_nonce,
+            "Wechatpay-Signature": sig_b64,
+            "Wechatpay-Signature-Type": "WECHATPAY2-SHA256-RSA2048",
+        }
+
+        res1 = await client.post("/api/payment/wechat/notify", content=body_bytes, headers=headers)
+        assert res1.status_code == 200
+
+        res2 = await client.post("/api/payment/wechat/notify", content=body_bytes, headers=headers)
+        assert res2.status_code == 200
+
+        evt_count_res = await test_session.execute(
+            select(func.count(PaymentCallbackEvent.id)).where(
+                PaymentCallbackEvent.provider == "wechat",
+                PaymentCallbackEvent.trade_no == trade_no,
+            )
+        )
+        assert int(evt_count_res.scalar() or 0) == 1
+
+        detail_res = await client.get(
+            f"/api/payment/orders/{order_no}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert detail_res.status_code == 200
+        assert _json_dict(detail_res).get("status") == "paid"
+
+
+class TestPaymentCallbackAdminAPI:
+    """支付回调审计 API 测试"""
+
+    @pytest.mark.asyncio
+    async def test_admin_callback_events_list_and_stats(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        from app.models.user import User
+        from app.utils.security import hash_password, create_access_token
+
+        admin = User(
+            username="a_cb_evt",
+            email="a_cb_evt@example.com",
+            nickname="a_cb_evt",
+            hashed_password=hash_password("Test123456"),
+            role="admin",
+            is_active=True,
+        )
+        test_session.add(admin)
+        await test_session.commit()
+        await test_session.refresh(admin)
+
+        admin_token = create_access_token({"sub": str(admin.id)})
+
+        list_res = await client.get(
+            "/api/payment/admin/callback-events?page=1&page_size=50",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert list_res.status_code == 200
+        data = _json_dict(list_res)
+        assert "items" in data
+        assert "total" in data
+
+        stats_res = await client.get(
+            "/api/payment/admin/callback-events/stats?minutes=60",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert stats_res.status_code == 200
+        stats = _json_dict(stats_res)
+        assert "all_total" in stats
+        assert "window_total" in stats
+
+    @pytest.mark.asyncio
+    async def test_admin_reconcile_order_amount_mismatch(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+        monkeypatch: MonkeyPatch,
+    ):
+        import base64
+        import json
+        import time
+        from datetime import datetime, timedelta
+
+        from cryptography.hazmat.primitives.asymmetric import rsa, padding
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+
+        from app.models.user import User
+        from app.models.system import SystemConfig
+        from app.routers import payment as payment_router
+        from app.utils.security import hash_password, create_access_token
+        from app.utils.wechatpay_v3 import WeChatPayPlatformCert, dump_platform_certs_json
+
+        admin = User(
+            username="a_reconcile",
+            email="a_reconcile@example.com",
+            nickname="a_reconcile",
+            hashed_password=hash_password("Test123456"),
+            role="admin",
+            is_active=True,
+        )
+        user = User(
+            username="u_reconcile",
+            email="u_reconcile@example.com",
+            nickname="u_reconcile",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add_all([admin, user])
+        await test_session.commit()
+        await test_session.refresh(admin)
+        await test_session.refresh(user)
+
+        admin_token = create_access_token({"sub": str(admin.id)})
+        user_token = create_access_token({"sub": str(user.id)})
+
+        create_res = await client.post(
+            "/api/payment/orders",
+            json={"order_type": "service", "amount": 10.0, "title": "svc"},
+            headers={"Authorization": f"Bearer {user_token}"},
+        )
+        assert create_res.status_code == 200
+        order_no = str(create_res.json()["order_no"])
+
+        api_v3_key = "0123456789abcdef0123456789abcdef"
+        payment_router.settings.wechatpay_api_v3_key = api_v3_key
+
+        platform_private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        subject = issuer = x509.Name(
+            [x509.NameAttribute(NameOID.COMMON_NAME, "wx-platform")]
+        )
+        cert_obj = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .public_key(platform_private_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.utcnow() - timedelta(days=1))
+            .not_valid_after(datetime.utcnow() + timedelta(days=365))
+            .sign(platform_private_key, hashes.SHA256())
+        )
+        cert_pem = cert_obj.public_bytes(serialization.Encoding.PEM).decode("utf-8")
+        serial_no = "TEST_SERIAL_2"
+        cfg_json = dump_platform_certs_json([WeChatPayPlatformCert(serial_no=serial_no, pem=cert_pem)])
+        test_session.add(SystemConfig(key="WECHATPAY_PLATFORM_CERTS_JSON", value=cfg_json, category="payment"))
+        await test_session.commit()
+
+        trade_no = "WX_M_1"
+        resource_plain = {
+            "out_trade_no": order_no,
+            "transaction_id": trade_no,
+            "trade_state": "SUCCESS",
+            "amount": {"total": 1100},
+        }
+        resource_plain_bytes = json.dumps(resource_plain, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        resource_nonce = "0123456789ab"
+        resource_ad = "transaction"
+        aesgcm = AESGCM(api_v3_key.encode("utf-8"))
+        cipher = aesgcm.encrypt(resource_nonce.encode("utf-8"), resource_plain_bytes, resource_ad.encode("utf-8"))
+        resource_ciphertext = base64.b64encode(cipher).decode("utf-8")
+
+        body_obj = {
+            "id": "EVT_2",
+            "create_time": "2020-01-01T00:00:00+08:00",
+            "resource_type": "encrypt-resource",
+            "event_type": "TRANSACTION.SUCCESS",
+            "summary": "ok",
+            "resource": {
+                "algorithm": "AEAD_AES_256_GCM",
+                "nonce": resource_nonce,
+                "associated_data": resource_ad,
+                "ciphertext": resource_ciphertext,
+            },
+        }
+        body_bytes = json.dumps(body_obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        ts = str(int(time.time()))
+        header_nonce = "HDRNONCE_456"
+        msg = ts.encode("utf-8") + b"\n" + header_nonce.encode("utf-8") + b"\n" + body_bytes + b"\n"
+        sig = platform_private_key.sign(msg, padding.PKCS1v15(), hashes.SHA256())
+        sig_b64 = base64.b64encode(sig).decode("utf-8")
+
+        headers = {
+            "Content-Type": "application/json",
+            "Wechatpay-Serial": serial_no,
+            "Wechatpay-Timestamp": ts,
+            "Wechatpay-Nonce": header_nonce,
+            "Wechatpay-Signature": sig_b64,
+            "Wechatpay-Signature-Type": "WECHATPAY2-SHA256-RSA2048",
+        }
+
+        notify_res = await client.post("/api/payment/wechat/notify", content=body_bytes, headers=headers)
+        assert notify_res.status_code == 200
+
+        recon_res = await client.get(
+            f"/api/payment/admin/reconcile/{order_no}",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert recon_res.status_code == 200
+        recon = _json_dict(recon_res)
+        assert recon.get("diagnosis") == "amount_mismatch"
+        assert "recent_events" in recon
+
+    @pytest.mark.asyncio
+    async def test_admin_refresh_wechat_platform_certs_monkeypatch(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+        monkeypatch: MonkeyPatch,
+    ):
+        from app.models.user import User
+        from app.routers import payment as payment_router
+        from app.utils.security import hash_password, create_access_token
+
+        from app.utils.wechatpay_v3 import WeChatPayPlatformCert
+
+        admin = User(
+            username="a_wx_cert",
+            email="a_wx_cert@example.com",
+            nickname="a_wx_cert",
+            hashed_password=hash_password("Test123456"),
+            role="admin",
+            is_active=True,
+        )
+        test_session.add(admin)
+        await test_session.commit()
+        await test_session.refresh(admin)
+
+        admin_token = create_access_token({"sub": str(admin.id)})
+
+        payment_router.settings.wechatpay_mch_id = "mch"
+        payment_router.settings.wechatpay_mch_serial_no = "serial"
+        payment_router.settings.wechatpay_private_key = "key"
+        payment_router.settings.wechatpay_api_v3_key = "0123456789abcdef0123456789abcdef"
+
+        async def _fake_fetch(**_kwargs):
+            return [WeChatPayPlatformCert(serial_no="SER1", pem="-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n")]
+
+        monkeypatch.setattr(payment_router, "fetch_platform_certificates", _fake_fetch)
+
+        refresh_res = await client.post(
+            "/api/payment/admin/wechat/platform-certs/refresh",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert refresh_res.status_code == 200
+
+        list_res = await client.get(
+            "/api/payment/admin/wechat/platform-certs",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert list_res.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_admin_payment_channel_status(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+        monkeypatch: MonkeyPatch,
+    ):
+        from app.models.user import User
+        from app.routers import payment as payment_router
+        from app.utils.security import hash_password, create_access_token
+
+        admin = User(
+            username="a_pay_status",
+            email="a_pay_status@example.com",
+            nickname="a_pay_status",
+            hashed_password=hash_password("Test123456"),
+            role="admin",
+            is_active=True,
+        )
+        test_session.add(admin)
+        await test_session.commit()
+        await test_session.refresh(admin)
+
+        admin_token = create_access_token({"sub": str(admin.id)})
+
+        monkeypatch.setattr(payment_router.settings, "alipay_app_id", "", raising=False)
+        monkeypatch.setattr(payment_router.settings, "alipay_public_key", "", raising=False)
+        monkeypatch.setattr(payment_router.settings, "wechatpay_mch_id", "", raising=False)
+        monkeypatch.setattr(payment_router.settings, "wechatpay_mch_serial_no", "", raising=False)
+        monkeypatch.setattr(payment_router.settings, "wechatpay_private_key", "", raising=False)
+        monkeypatch.setattr(payment_router.settings, "wechatpay_api_v3_key", "", raising=False)
+
+        res = await client.get(
+            "/api/payment/admin/channel-status",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert res.status_code == 200
+        data = _json_dict(res)
+        assert "alipay_configured" in data
+        assert "wechatpay_configured" in data
+        assert "wechatpay_platform_certs_total" in data
+
+    @pytest.mark.asyncio
+    async def test_admin_import_wechat_platform_certs_json(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        from app.models.user import User
+        from app.utils.security import hash_password, create_access_token
+        from app.utils.wechatpay_v3 import WeChatPayPlatformCert, dump_platform_certs_json
+
+        admin = User(
+            username="a_wx_import",
+            email="a_wx_import@example.com",
+            nickname="a_wx_import",
+            hashed_password=hash_password("Test123456"),
+            role="admin",
+            is_active=True,
+        )
+        test_session.add(admin)
+        await test_session.commit()
+        await test_session.refresh(admin)
+
+        admin_token = create_access_token({"sub": str(admin.id)})
+
+        raw = dump_platform_certs_json(
+            [
+                WeChatPayPlatformCert(
+                    serial_no="SER_IMPORT_1",
+                    pem="-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
+                    expire_time="2099-01-01T00:00:00+00:00",
+                )
+            ]
+        )
+
+        import_res = await client.post(
+            "/api/payment/admin/wechat/platform-certs/import",
+            json={"platform_certs_json": raw, "merge": True},
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert import_res.status_code == 200
+
+        list_res = await client.get(
+            "/api/payment/admin/wechat/platform-certs",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+        assert list_res.status_code == 200
+        payload = _json_dict(list_res)
+        assert _as_int(payload.get("total"), 0) >= 1
+
+    @pytest.mark.asyncio
+    async def test_alipay_notify_marks_order_paid_and_records_event_idempotent(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+        monkeypatch: MonkeyPatch,
+    ):
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from sqlalchemy import select, func
+
+        from app.models.user import User
+        from app.models.payment import PaymentOrder, PaymentCallbackEvent
+        from app.routers import payment as payment_router
+        from app.utils.security import hash_password, create_access_token
+
+        user = User(
+            username="u_alipay_notify_test",
+            email="u_alipay_notify_test@example.com",
+            nickname="u_alipay_notify_test",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        token = create_access_token({"sub": str(user.id)})
+
+        create_res = await client.post(
+            "/api/payment/orders",
+            json={"order_type": "service", "amount": 10.0, "title": "svc"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create_res.status_code == 200
+        order_no = str(create_res.json()["order_no"])
+
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        private_pem = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        ).decode("utf-8")
+        public_pem = private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("utf-8")
+
+        monkeypatch.setattr(payment_router.settings, "alipay_public_key", public_pem, raising=False)
+        monkeypatch.setattr(payment_router.settings, "alipay_app_id", "test_app", raising=False)
+
+        trade_no = "ALI_T_1"
+        params = {
+            "app_id": "test_app",
+            "out_trade_no": order_no,
+            "trade_no": trade_no,
+            "total_amount": "10.00",
+            "trade_status": "TRADE_SUCCESS",
+            "sign_type": "RSA2",
+            "charset": "utf-8",
+        }
+        params["sign"] = payment_router._alipay_sign_rsa2(params, private_pem)
+
+        notify_res = await client.post("/api/payment/alipay/notify", data=params)
+        assert notify_res.status_code == 200
+        assert notify_res.text.strip() == "success"
+
+        detail_res = await client.get(
+            f"/api/payment/orders/{order_no}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert detail_res.status_code == 200
+        assert _json_dict(detail_res).get("status") == "paid"
+        assert _json_dict(detail_res).get("payment_method") == "alipay"
+
+        order_db_res = await test_session.execute(
+            select(PaymentOrder).where(PaymentOrder.order_no == order_no)
+        )
+        order_db = order_db_res.scalar_one_or_none()
+        assert order_db is not None
+        assert str(order_db.trade_no or "") == trade_no
+
+        evt_count_res = await test_session.execute(
+            select(func.count(PaymentCallbackEvent.id)).where(
+                PaymentCallbackEvent.provider == "alipay",
+                PaymentCallbackEvent.trade_no == trade_no,
+            )
+        )
+        assert int(evt_count_res.scalar() or 0) == 1
+
+        notify_res2 = await client.post("/api/payment/alipay/notify", data=params)
+        assert notify_res2.status_code == 200
+        assert notify_res2.text.strip() == "success"
+
+        evt_count_res2 = await test_session.execute(
+            select(func.count(PaymentCallbackEvent.id)).where(
+                PaymentCallbackEvent.provider == "alipay",
+                PaymentCallbackEvent.trade_no == trade_no,
+            )
+        )
+        assert int(evt_count_res2.scalar() or 0) == 1
+
+    @pytest.mark.asyncio
+    async def test_alipay_notify_invalid_signature_records_event_and_keeps_pending(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+        monkeypatch: MonkeyPatch,
+    ):
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from sqlalchemy import select, func
+
+        from app.models.user import User
+        from app.models.payment import PaymentOrder, PaymentCallbackEvent
+        from app.routers import payment as payment_router
+        from app.utils.security import hash_password, create_access_token
+
+        user = User(
+            username="u_alipay_bad_sig",
+            email="u_alipay_bad_sig@example.com",
+            nickname="u_alipay_bad_sig",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        token = create_access_token({"sub": str(user.id)})
+
+        create_res = await client.post(
+            "/api/payment/orders",
+            json={"order_type": "service", "amount": 10.0, "title": "svc"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create_res.status_code == 200
+        order_no = str(create_res.json()["order_no"])
+
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        private_pem = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.NoEncryption(),
+        ).decode("utf-8")
+        public_pem = private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("utf-8")
+
+        monkeypatch.setattr(payment_router.settings, "alipay_public_key", public_pem, raising=False)
+        monkeypatch.setattr(payment_router.settings, "alipay_app_id", "test_app", raising=False)
+
+        params = {
+            "app_id": "test_app",
+            "out_trade_no": order_no,
+            "trade_no": "ALI_BAD_1",
+            "total_amount": "10.00",
+            "trade_status": "TRADE_SUCCESS",
+            "sign_type": "RSA2",
+            "charset": "utf-8",
+        }
+        params["sign"] = payment_router._alipay_sign_rsa2(params, private_pem)
+        params["sign"] = params["sign"][:-3] + "abc"
+
+        notify_res = await client.post("/api/payment/alipay/notify", data=params)
+        assert notify_res.status_code == 400
+        assert notify_res.text.strip() == "failure"
+
+        order_res = await test_session.execute(
+            select(PaymentOrder).where(PaymentOrder.order_no == order_no)
+        )
+        order = order_res.scalar_one_or_none()
+        assert order is not None
+        assert str(order.status) == "pending"
+
+        evt_count_res = await test_session.execute(
+            select(func.count(PaymentCallbackEvent.id)).where(
+                PaymentCallbackEvent.provider == "alipay",
+                PaymentCallbackEvent.order_no == order_no,
+                PaymentCallbackEvent.verified == 0,
+            )
+        )
+        assert int(evt_count_res.scalar() or 0) >= 1
+
+    @pytest.mark.asyncio
+    async def test_consultation_order_paid_confirms_consultation(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        from sqlalchemy import select
+
+        from app.models.user import User
+        from app.models.payment import UserBalance, PaymentOrder
+        from app.models.lawfirm import Lawyer, LawyerConsultation
+        from app.utils.security import hash_password, create_access_token
+
+        user = User(
+            username="u_consult_pay",
+            email="u_consult_pay@example.com",
+            nickname="u_consult_pay",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        bal = UserBalance(
+            user_id=user.id,
+            balance=50.0,
+            frozen=0.0,
+            total_recharged=50.0,
+            total_consumed=0.0,
+        )
+        test_session.add(bal)
+
+        lawyer = Lawyer(name="L1", consultation_fee=10.0)
+        test_session.add(lawyer)
+        await test_session.commit()
+        await test_session.refresh(lawyer)
+
+        token = create_access_token({"sub": str(user.id)})
+
+        c_res = await client.post(
+            "/api/lawfirm/consultations",
+            json={
+                "lawyer_id": int(lawyer.id),
+                "subject": "咨询",
+                "contact_phone": "13800000000",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert c_res.status_code == 200
+        c_data = _json_dict(c_res)
+        consultation_id = _as_int(c_data.get("id"))
+        assert consultation_id > 0
+        order_no_obj = c_data.get("payment_order_no")
+        assert isinstance(order_no_obj, str)
+        order_no = order_no_obj
+
+        pay_res = await client.post(
+            f"/api/payment/orders/{order_no}/pay",
+            json={"payment_method": "balance"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert pay_res.status_code == 200
+
+        c_db_res = await test_session.execute(
+            select(LawyerConsultation).where(LawyerConsultation.id == int(consultation_id))
+        )
+        c_db = c_db_res.scalar_one_or_none()
+        assert c_db is not None
+        assert str(c_db.status) == "confirmed"
+
+        o_db_res = await test_session.execute(
+            select(PaymentOrder).where(PaymentOrder.order_no == str(order_no))
+        )
+        o_db = o_db_res.scalar_one_or_none()
+        assert o_db is not None
+        assert str(o_db.status) == "paid"
 
     @pytest.mark.asyncio
     async def test_admin_refund_balance_order_idempotent(self, client: AsyncClient, test_session: AsyncSession):
@@ -1054,6 +2273,71 @@ class TestPaymentAPI:
         bal_data = _json_dict(bal_res)
         assert abs(_as_float(bal_data.get("balance"), 0.0) - 10.0) < 1e-6
         assert _as_float(bal_data.get("total_recharged"), 0.0) >= 10.0
+
+    @pytest.mark.asyncio
+    async def test_payment_webhook_duplicate_callback_idempotent(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        import hashlib
+        import hmac
+        from sqlalchemy import select, func
+
+        from app.models.user import User
+        from app.models.payment import PaymentCallbackEvent
+        from app.utils.security import hash_password, create_access_token
+
+        user = User(
+            username="u_webhook_dup_test",
+            email="u_webhook_dup_test@example.com",
+            nickname="u_webhook_dup_test",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        token = create_access_token({"sub": str(user.id)})
+
+        create_res = await client.post(
+            "/api/payment/orders",
+            json={"order_type": "service", "amount": 10.0, "title": "svc"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create_res.status_code == 200
+        order_no = str(create_res.json()["order_no"])
+
+        trade_no = "T_WEBHOOK_DUP_1"
+        payment_method = "alipay"
+        amount_str = "10.00"
+
+        payload = f"{order_no}|{trade_no}|{payment_method}|{amount_str}".encode("utf-8")
+        signature = hmac.new(b"", payload, hashlib.sha256).hexdigest()
+
+        webhook_payload = {
+            "order_no": order_no,
+            "trade_no": trade_no,
+            "payment_method": payment_method,
+            "amount": 10.0,
+            "signature": signature,
+        }
+
+        res1 = await client.post("/api/payment/webhook", json=webhook_payload)
+        assert res1.status_code == 200
+
+        res2 = await client.post("/api/payment/webhook", json=webhook_payload)
+        assert res2.status_code == 200
+
+        evt_count_res = await test_session.execute(
+            select(func.count(PaymentCallbackEvent.id)).where(
+                PaymentCallbackEvent.provider == payment_method,
+                PaymentCallbackEvent.trade_no == trade_no,
+            )
+        )
+        assert int(evt_count_res.scalar() or 0) == 1
 
     @pytest.mark.asyncio
     async def test_payment_webhook_marks_order_paid(self, client: AsyncClient, test_session: AsyncSession):
@@ -1798,8 +3082,9 @@ class TestAIConsultationAPI:
 
         sq_obj = data.get("search_quality")
         assert isinstance(sq_obj, dict)
-        assert sq_obj.get("qualified_count") == 0
-        assert sq_obj.get("confidence") == "low"
+        sq = cast(dict[str, object], sq_obj)
+        assert sq.get("qualified_count") == 0
+        assert sq.get("confidence") == "low"
 
     @pytest.mark.asyncio
     async def test_ai_chat_passes_user_profile_when_supported(

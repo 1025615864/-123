@@ -40,6 +40,7 @@ test('管理后台：Settings 新闻AI运维卡片可见；NewsManage 可手动�
       .catch(() => null)
 
     await page.goto('/admin/settings')
+    await page.getByRole('button', { name: '新闻 AI' }).click()
     await expect(page.getByText('待处理积压')).toBeVisible({ timeout: 12_000 })
     await expect(page.getByText('近 24h 错误')).toBeVisible({ timeout: 12_000 })
     await expect(page.getByText('近 7d 错误')).toBeVisible({ timeout: 12_000 })

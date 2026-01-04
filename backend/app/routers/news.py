@@ -8,12 +8,13 @@ from pydantic import BaseModel
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_, desc, func, delete
+from sqlalchemy import select, and_, or_, desc, func, delete, update
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.orm.exc import StaleDataError
 from sqlalchemy.exc import IntegrityError
 
 from ..database import get_db
+from ..config import get_settings
 from ..models.news import News, NewsComment, NewsTopicItem, NewsSource, NewsIngestRun
 from ..models.news_ai import NewsAIAnnotation
 from ..models.notification import Notification, NotificationType
@@ -51,6 +52,7 @@ from ..utils.deps import require_admin, get_current_user, get_current_user_optio
 from ..utils.content_filter import check_comment_content, needs_review
 
 router = APIRouter(prefix="/news", tags=["新闻资讯"])
+
 
 def _coerce_int(value: object) -> int | None:
     if isinstance(value, int):
@@ -1263,7 +1265,6 @@ async def delete_news_comment(
 
 # ============ 管理接口（需要认证） ============
 
-
 @router.get("/admin/comments", response_model=NewsCommentAdminListResponse, summary="管理员获取新闻评论列表")
 async def admin_list_news_comments(
     _current_user: Annotated[User, Depends(require_admin)],
@@ -1316,6 +1317,34 @@ async def admin_review_news_comment(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="评论不存在")
 
     return NewsCommentAdminItem.model_validate(comment)
+
+class AdminDebugSetViewCountRequest(BaseModel):
+    view_count: int
+
+@router.post("/admin/{news_id}/debug/set-view-count", summary="DEBUG: 设置新闻浏览量")
+async def admin_debug_set_view_count(
+    news_id: int,
+    data: AdminDebugSetViewCountRequest,
+    _current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    settings = get_settings()
+    if not bool(getattr(settings, "debug", False)):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
+
+    vc = int(getattr(data, "view_count", 0) or 0)
+    if vc < 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="view_count must be >= 0")
+
+    result = await db.execute(
+        update(News).where(News.id == int(news_id)).values(view_count=int(vc))
+    )
+    await db.commit()
+    if not int(getattr(result, "rowcount", 0) or 0):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="新闻不存在")
+
+    news_service.invalidate_hot_cache()
+    return {"message": "ok", "news_id": int(news_id), "view_count": int(vc)}
 
 @router.post("", response_model=NewsResponse, summary="创建新闻")
 async def create_news(
@@ -1511,7 +1540,11 @@ async def admin_check_news_links(
         description=f"run_id={str(run_id)} urls={len(items)}",
         request=request,
     )
-    return NewsLinkCheckResponse(run_id=str(run_id), items=[NewsLinkCheckItem.model_validate(x) for x in items])
+
+    return NewsLinkCheckResponse(
+        run_id=str(run_id),
+        items=[NewsLinkCheckItem.model_validate(x) for x in items],
+    )
 
 
 @router.get("/admin/link_check/{run_id}", response_model=NewsLinkCheckResponse, summary="按run_id获取链接检查结果")
@@ -1527,7 +1560,7 @@ async def admin_get_link_check_result(
     if not rid:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="run_id 不能为空")
 
-    items = await news_workbench_service.get_link_checks_by_run_id(db, run_id=rid)
+    items = await news_workbench_service.get_link_checks_by_run_id(db, run_id=rid, user_id=int(current_user.id))
 
     await log_admin_action(
         db,
@@ -1551,7 +1584,7 @@ async def admin_batch_action_news(
 ):
     from ..routers.system import log_admin_action
 
-    raw_ids = [int(x) for x in (getattr(data, "ids", None) or []) if int(x) > 0]
+    raw_ids = [int(x) for x in (data.ids or []) if int(x) > 0]
     seen: set[int] = set()
     ids: list[int] = []
     for i in raw_ids:
@@ -1585,6 +1618,7 @@ async def admin_batch_action_news(
                 processed.append(int(n.id))
             except Exception:
                 skipped.append(int(n.id))
+
         msg = f"已处理 {len(processed)} 条，跳过 {len(skipped)} 条，缺失 {len(missing_ids)} 条"
         await log_admin_action(
             db,

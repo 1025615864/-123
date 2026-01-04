@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 import logging
 import asyncio
 import os
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -118,6 +119,67 @@ async def lifespan(app: FastAPI):
             )
         )
 
+    wechatpay_refresh_enabled_raw = os.getenv("WECHATPAY_CERT_REFRESH_ENABLED", "").strip().lower()
+    wechatpay_refresh_enabled = wechatpay_refresh_enabled_raw in {"1", "true", "yes", "on"}
+    if (not settings.debug) and (not redis_connected):
+        wechatpay_refresh_enabled = False
+
+    async def _wechatpay_platform_certs_refresh_job_wrapper() -> object:
+        async with AsyncSessionLocal() as session:
+            if not (
+                settings.wechatpay_mch_id
+                and settings.wechatpay_mch_serial_no
+                and settings.wechatpay_private_key
+                and settings.wechatpay_api_v3_key
+            ):
+                return {"skipped": True, "reason": "wechatpay config missing"}
+
+            from .models.system import SystemConfig
+            from .utils.wechatpay_v3 import fetch_platform_certificates, dump_platform_certs_json
+
+            certs = await fetch_platform_certificates(
+                certificates_url=settings.wechatpay_certificates_url,
+                mch_id=settings.wechatpay_mch_id,
+                mch_serial_no=settings.wechatpay_mch_serial_no,
+                mch_private_key_pem=settings.wechatpay_private_key,
+                api_v3_key=settings.wechatpay_api_v3_key,
+            )
+            raw = dump_platform_certs_json(certs)
+
+            res = await session.execute(
+                select(SystemConfig).where(SystemConfig.key == "WECHATPAY_PLATFORM_CERTS_JSON")
+            )
+            row = res.scalar_one_or_none()
+            if row is None:
+                row = SystemConfig(
+                    key="WECHATPAY_PLATFORM_CERTS_JSON",
+                    value=raw,
+                    category="payment",
+                    description="WeChatPay platform certificates cache",
+                )
+                session.add(row)
+            else:
+                row.value = raw
+                row.category = "payment"
+                if not (row.description or "").strip():
+                    row.description = "WeChatPay platform certificates cache"
+                session.add(row)
+
+            await session.commit()
+            return {"ok": True, "count": len(certs)}
+
+    wechatpay_task: asyncio.Task[None] | None = None
+    if wechatpay_refresh_enabled:
+        interval_seconds = float(os.getenv("WECHATPAY_CERT_REFRESH_INTERVAL_SECONDS", "86400").strip() or "86400")
+        wechatpay_task = asyncio.create_task(
+            runner.run(
+                lock_key="locks:wechatpay_platform_certs",
+                lock_ttl_seconds=120,
+                interval_seconds=interval_seconds,
+                job=_wechatpay_platform_certs_refresh_job_wrapper,
+            )
+        )
+
     logger.info("数据库初始化完成")
     if ai is not None:
         logger.info("AI助手模块已启用")
@@ -127,7 +189,7 @@ async def lifespan(app: FastAPI):
     yield
 
     stop_event.set()
-    for t in (scheduled_task, rss_task, news_ai_task):
+    for t in (scheduled_task, rss_task, news_ai_task, wechatpay_task):
         if t is None:
             continue
         _ = t.cancel()
