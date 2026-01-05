@@ -1,12 +1,18 @@
 """Pytest配置文件"""
 import importlib
 import inspect
+import sys
+from pathlib import Path
 from typing import Any
 import pytest
 import pytest_asyncio
 from collections.abc import AsyncGenerator
 from httpx import AsyncClient, ASGITransport
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 from app.main import app
 from app.database import Base, get_db
