@@ -35,7 +35,8 @@ export default function Layout() {
 
   const mobileMenuId = "layout-mobile-menu";
 
-  const isChatRoute = location.pathname === "/chat" || location.pathname.startsWith("/chat/");
+  const isChatRoute =
+    location.pathname === "/chat" || location.pathname.startsWith("/chat/");
 
   const hideFooter =
     location.pathname === "/login" ||
@@ -65,13 +66,18 @@ export default function Layout() {
   }, [location.pathname]);
 
   return (
-    <div className="min-h-[100dvh] flex flex-col font-sans">
-      <header
-        className="sticky top-0 z-50 backdrop-blur-xl border-b flex justify-center bg-white/80 border-slate-200/60 dark:bg-slate-900/80 dark:border-white/5"
-      >
+    <div
+      className={`flex flex-col font-sans ${
+        isChatRoute ? "h-[100dvh] overflow-hidden" : "min-h-[100dvh]"
+      }`}
+    >
+      <header className="sticky top-0 z-50 backdrop-blur-xl border-b flex justify-center bg-white/80 border-slate-200/60 dark:bg-slate-900/80 dark:border-white/5">
         <div className="w-full max-w-7xl px-6 sm:px-8 lg:px-12">
           <div className="flex justify-between items-center h-[72px]">
-            <Link to="/" className="flex items-center space-x-3 group flex-shrink-0 outline-none rounded-xl transition-all active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900">
+            <Link
+              to="/"
+              className="flex items-center space-x-3 group flex-shrink-0 outline-none rounded-xl transition-all active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
+            >
               <div className="relative">
                 <div className="absolute inset-0 bg-blue-500 rounded-xl blur opacity-20 group-hover:opacity-40 transition-opacity" />
                 <div className="relative bg-gradient-to-br from-blue-600 to-indigo-600 p-2 rounded-xl shadow-lg shadow-blue-500/20">
@@ -179,11 +185,11 @@ export default function Layout() {
                 <ThemeSwitcher className="text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white" />
                 <LanguageSwitcher className="text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white" />
               </div>
-              
+
               {isAuthenticated ? (
                 <div className="hidden sm:flex items-center space-x-4">
                   <NotificationBell tone={actualTheme} />
-                  {user?.role === 'admin' && (
+                  {user?.role === "admin" && (
                     <Link
                       to="/admin"
                       className="px-3 py-1.5 rounded-full text-xs font-medium outline-none transition-all bg-slate-100 text-slate-700 hover:bg-slate-200 active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 dark:focus-visible:ring-offset-slate-900"
@@ -255,20 +261,20 @@ export default function Layout() {
               {mobileMenuItems.map(({ path, label, icon: Icon }) => {
                 const active = isRouteActive(location.pathname, path);
                 return (
-                <Link
-                  key={path}
-                  to={path}
-                  onClick={() => setMobileMenuOpen(false)}
-                  aria-current={active ? "page" : undefined}
-                  className={`flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-medium transition-all outline-none active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 ${
-                    active
-                      ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400'
-                      : 'text-slate-700 hover:bg-slate-50 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800'
-                  }`}
-                >
-                  <Icon className="h-5 w-5" />
-                  <span>{label}</span>
-                </Link>
+                  <Link
+                    key={path}
+                    to={path}
+                    onClick={() => setMobileMenuOpen(false)}
+                    aria-current={active ? "page" : undefined}
+                    className={`flex items-center space-x-3 px-4 py-3 rounded-xl text-sm font-medium transition-all outline-none active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 ${
+                      active
+                        ? "bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-400"
+                        : "text-slate-700 hover:bg-slate-50 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
+                    }`}
+                  >
+                    <Icon className="h-5 w-5" />
+                    <span>{label}</span>
+                  </Link>
                 );
               })}
               <div className="pt-4 border-t border-slate-200 dark:border-slate-800 mt-4">
@@ -313,7 +319,11 @@ export default function Layout() {
       </header>
 
       <main
-        className={`flex-1 flex justify-center min-h-0 ${showMobileBottomNav ? 'pb-[calc(56px+env(safe-area-inset-bottom))]' : ''}`}
+        className={`flex-1 flex justify-center min-h-0 ${
+          showMobileBottomNav
+            ? "pb-[calc(56px+env(safe-area-inset-bottom))]"
+            : ""
+        } ${isChatRoute ? "overflow-hidden" : ""}`}
       >
         <div
           className={`w-full max-w-7xl px-4 sm:px-6 lg:px-8 ${
@@ -323,90 +333,102 @@ export default function Layout() {
           <Outlet />
         </div>
       </main>
-      
+
       {/* 移动端底部导航 */}
       {showMobileBottomNav && <MobileNav />}
 
       {!hideFooter && (
-      <footer className="mt-auto border-t border-slate-200 bg-slate-50 flex justify-center dark:border-slate-800 dark:bg-slate-900/50">
-        <div className="w-full max-w-7xl px-6 sm:px-10 lg:px-12 py-12">
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-12">
-            <div className="md:col-span-2">
-              <div className="flex items-center space-x-3 mb-6">
-                <div className="bg-blue-600 p-1.5 rounded-lg shadow-sm">
-                  <Scale className="h-5 w-5 text-white" />
+        <footer className="mt-auto border-t border-slate-200 bg-slate-50 flex justify-center dark:border-slate-800 dark:bg-slate-900/50">
+          <div className="w-full max-w-7xl px-6 sm:px-10 lg:px-12 py-12">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-12">
+              <div className="md:col-span-2">
+                <div className="flex items-center space-x-3 mb-6">
+                  <div className="bg-blue-600 p-1.5 rounded-lg shadow-sm">
+                    <Scale className="h-5 w-5 text-white" />
+                  </div>
+                  <span className="text-lg font-bold text-slate-900 dark:text-white">
+                    百姓法律助手
+                  </span>
                 </div>
-                <span className="text-lg font-bold text-slate-900 dark:text-white">百姓法律助手</span>
+                <p className="text-slate-500 text-sm leading-relaxed mb-6 max-w-sm dark:text-slate-400">
+                  致力于让每一位公民都能享受到专业、便捷的法律服务。专业律师团队与先进AI技术相结合，为您保驾护航。
+                </p>
+                <div className="flex space-x-3">
+                  <a
+                    href="#"
+                    className="w-10 h-10 rounded-full bg-white border border-slate-200 flex items-center justify-center outline-none transition-all hover:border-blue-500 hover:text-blue-600 active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:bg-slate-800 dark:border-slate-700 dark:hover:border-blue-400 dark:focus-visible:ring-offset-slate-900"
+                  >
+                    <Phone className="h-4 w-4" />
+                  </a>
+                  <a
+                    href="#"
+                    className="w-10 h-10 rounded-full bg-white border border-slate-200 flex items-center justify-center outline-none transition-all hover:border-blue-500 hover:text-blue-600 active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:bg-slate-800 dark:border-slate-700 dark:hover:border-blue-400 dark:focus-visible:ring-offset-slate-900"
+                  >
+                    <Mail className="h-4 w-4" />
+                  </a>
+                </div>
               </div>
-              <p className="text-slate-500 text-sm leading-relaxed mb-6 max-w-sm dark:text-slate-400">
-                致力于让每一位公民都能享受到专业、便捷的法律服务。专业律师团队与先进AI技术相结合，为您保驾护航。
-              </p>
-              <div className="flex space-x-3">
-                <a
-                  href="#"
-                  className="w-10 h-10 rounded-full bg-white border border-slate-200 flex items-center justify-center outline-none transition-all hover:border-blue-500 hover:text-blue-600 active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:bg-slate-800 dark:border-slate-700 dark:hover:border-blue-400 dark:focus-visible:ring-offset-slate-900"
-                >
-                  <Phone className="h-4 w-4" />
-                </a>
-                <a
-                  href="#"
-                  className="w-10 h-10 rounded-full bg-white border border-slate-200 flex items-center justify-center outline-none transition-all hover:border-blue-500 hover:text-blue-600 active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:bg-slate-800 dark:border-slate-700 dark:hover:border-blue-400 dark:focus-visible:ring-offset-slate-900"
-                >
-                  <Mail className="h-4 w-4" />
-                </a>
-              </div>
-            </div>
 
-            <div>
-              <h3 className="text-sm font-bold text-slate-900 mb-6 dark:text-white">快速链接</h3>
-              <ul className="space-y-3">
-                {primaryNavItems.slice(0, 5).map(({ path, label }) => (
-                  <li key={path}>
-                    <Link
-                      to={path}
-                      className="text-slate-500 hover:text-blue-600 transition-colors text-sm outline-none rounded-md active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:text-slate-400 dark:hover:text-blue-400 dark:focus-visible:ring-offset-slate-900"
-                    >
-                      {label}
-                    </Link>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 mb-6 dark:text-white">
+                  快速链接
+                </h3>
+                <ul className="space-y-3">
+                  {primaryNavItems.slice(0, 5).map(({ path, label }) => (
+                    <li key={path}>
+                      <Link
+                        to={path}
+                        className="text-slate-500 hover:text-blue-600 transition-colors text-sm outline-none rounded-md active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:text-slate-400 dark:hover:text-blue-400 dark:focus-visible:ring-offset-slate-900"
+                      >
+                        {label}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 mb-6 dark:text-white">
+                  联系我们
+                </h3>
+                <ul className="space-y-4 text-sm text-slate-500 dark:text-slate-400">
+                  <li className="flex items-center space-x-3">
+                    <Phone className="h-4 w-4 text-blue-500" />
+                    <span>400-800-1234</span>
                   </li>
-                ))}
-              </ul>
+                  <li className="flex items-center space-x-3">
+                    <Mail className="h-4 w-4 text-blue-500" />
+                    <span>support@baixinghelper.cn</span>
+                  </li>
+                  <li className="flex items-center space-x-3">
+                    <Building2 className="h-4 w-4 text-blue-500" />
+                    <span>北京市朝阳区法律大厦A座</span>
+                  </li>
+                </ul>
+              </div>
             </div>
 
-            <div>
-              <h3 className="text-sm font-bold text-slate-900 mb-6 dark:text-white">联系我们</h3>
-              <ul className="space-y-4 text-sm text-slate-500 dark:text-slate-400">
-                <li className="flex items-center space-x-3">
-                  <Phone className="h-4 w-4 text-blue-500" />
-                  <span>400-800-1234</span>
-                </li>
-                <li className="flex items-center space-x-3">
-                  <Mail className="h-4 w-4 text-blue-500" />
-                  <span>support@baixinghelper.cn</span>
-                </li>
-                <li className="flex items-center space-x-3">
-                  <Building2 className="h-4 w-4 text-blue-500" />
-                  <span>北京市朝阳区法律大厦A座</span>
-                </li>
-              </ul>
+            <div className="border-t border-slate-200 mt-12 pt-8 flex flex-col sm:flex-row justify-between items-center dark:border-slate-800">
+              <p className="text-slate-400 text-sm">
+                © 2024 百姓法律助手. All rights reserved.
+              </p>
+              <div className="flex space-x-6 mt-4 sm:mt-0">
+                <Link
+                  to="/privacy"
+                  className="text-slate-400 hover:text-slate-600 text-sm outline-none rounded-md transition-colors active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-slate-900"
+                >
+                  隐私政策
+                </Link>
+                <Link
+                  to="/terms"
+                  className="text-slate-400 hover:text-slate-600 text-sm outline-none rounded-md transition-colors active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-slate-900"
+                >
+                  服务条款
+                </Link>
+              </div>
             </div>
           </div>
-
-          <div className="border-t border-slate-200 mt-12 pt-8 flex flex-col sm:flex-row justify-between items-center dark:border-slate-800">
-            <p className="text-slate-400 text-sm">
-              © 2024 百姓法律助手. All rights reserved.
-            </p>
-            <div className="flex space-x-6 mt-4 sm:mt-0">
-              <Link to="/privacy" className="text-slate-400 hover:text-slate-600 text-sm outline-none rounded-md transition-colors active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-slate-900">
-                隐私政策
-              </Link>
-              <Link to="/terms" className="text-slate-400 hover:text-slate-600 text-sm outline-none rounded-md transition-colors active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-slate-900">
-                服务条款
-              </Link>
-            </div>
-          </div>
-        </div>
-      </footer>
+        </footer>
       )}
     </div>
   );

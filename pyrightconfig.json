@@ -2,6 +2,10 @@
   "include": ["backend/app", "backend/tests"],
   "pythonVersion": "3.13",
   "typeCheckingMode": "basic",
+  "reportUnknownArgumentType": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnknownParameterType": "none",
+  "reportUnknownVariableType": "none",
   "executionEnvironments": [
     {
       "root": "./backend/tests",

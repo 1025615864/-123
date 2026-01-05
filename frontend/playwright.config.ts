@@ -14,7 +14,7 @@ process.env.E2E_API_BASE =
 const backendDbUrl =
   process.env.E2E_DATABASE_URL ??
   process.env.DATABASE_URL ??
-  "sqlite+aiosqlite:///../backend/data/app.db";
+  "sqlite+aiosqlite:///../backend/data/e2e_playwright.db";
 
 const mockStructured = JSON.stringify({
   summary: "Mock摘要",
@@ -27,8 +27,8 @@ const mockStructuredB64 = Buffer.from(mockStructured, "utf8").toString(
 
 const backendEnvPrefix =
   process.platform === "win32"
-    ? `set DEBUG=1&& set DATABASE_URL=${backendDbUrl}&& set NEWS_AI_ENABLED=1&& set NEWS_AI_INTERVAL_SECONDS=1&& set NEWS_AI_BATCH_SIZE=200&& set NEWS_AI_SUMMARY_LLM_ENABLED=1&& set NEWS_AI_SUMMARY_LLM_MOCK_RESPONSE_B64=${mockStructuredB64}&& `
-    : `DEBUG=1 DATABASE_URL=${backendDbUrl} NEWS_AI_ENABLED=1 NEWS_AI_INTERVAL_SECONDS=1 NEWS_AI_BATCH_SIZE=200 NEWS_AI_SUMMARY_LLM_ENABLED=1 NEWS_AI_SUMMARY_LLM_MOCK_RESPONSE_B64=${mockStructuredB64} `;
+    ? `set PYTHONIOENCODING=utf-8&& set E2E_SEED=1&& set DEBUG=1&& set DATABASE_URL=${backendDbUrl}&& set NEWS_AI_ENABLED=1&& set NEWS_AI_INTERVAL_SECONDS=1&& set NEWS_AI_BATCH_SIZE=200&& set NEWS_AI_SUMMARY_LLM_ENABLED=1&& set NEWS_AI_SUMMARY_LLM_MOCK_RESPONSE_B64=${mockStructuredB64}&& `
+    : `PYTHONIOENCODING=utf-8 E2E_SEED=1 DEBUG=1 DATABASE_URL=${backendDbUrl} NEWS_AI_ENABLED=1 NEWS_AI_INTERVAL_SECONDS=1 NEWS_AI_BATCH_SIZE=200 NEWS_AI_SUMMARY_LLM_ENABLED=1 NEWS_AI_SUMMARY_LLM_MOCK_RESPONSE_B64=${mockStructuredB64} `;
 
 const viteEnvPrefix =
   process.platform === "win32"
@@ -54,7 +54,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: `${backendEnvPrefix}${pythonCmd} -m uvicorn app.main:app --app-dir ../backend --host 0.0.0.0 --port ${backendPort}`,
+      command: `${backendEnvPrefix}${pythonCmd} ../backend/scripts/seed_data.py && ${pythonCmd} -m uvicorn app.main:app --app-dir ../backend --host 0.0.0.0 --port ${backendPort}`,
       url: `http://localhost:${backendPort}/health`,
       reuseExistingServer: reuseExistingBackend,
       timeout: 120_000,

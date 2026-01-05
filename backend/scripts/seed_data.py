@@ -1,4 +1,5 @@
 """数据库种子数据脚本"""
+import os
 import asyncio
 import sys
 from pathlib import Path
@@ -13,7 +14,63 @@ from app.models.forum import Post
 from app.models.news import News
 from app.models.lawfirm import LawFirm, Lawyer
 from app.models.payment import UserBalance
+from app.models.system import SystemConfig
 from app.utils.security import hash_password
+
+
+async def upsert_system_config(
+    db: AsyncSession,
+    *,
+    key: str,
+    value: str,
+    description: str,
+    category: str,
+) -> None:
+    existing = (
+        await db.execute(select(SystemConfig).where(SystemConfig.key == str(key)))
+    ).scalar_one_or_none()
+    if existing is None:
+        db.add(
+            SystemConfig(
+                key=str(key),
+                value=str(value),
+                description=str(description),
+                category=str(category),
+            )
+        )
+    else:
+        existing.value = str(value)
+        if not existing.description:
+            existing.description = str(description)
+        if not existing.category:
+            existing.category = str(category)
+        db.add(existing)
+
+
+async def apply_e2e_defaults(db: AsyncSession) -> None:
+    if str(os.getenv("E2E_SEED", "")).strip() != "1":
+        return
+    await upsert_system_config(
+        db,
+        key="forum.review.enabled",
+        value="true",
+        description="论坛评论审核开关",
+        category="forum",
+    )
+    await upsert_system_config(
+        db,
+        key="forum.post_review.enabled",
+        value="true",
+        description="论坛帖子审核开关",
+        category="forum",
+    )
+    await upsert_system_config(
+        db,
+        key="forum.post_review.mode",
+        value="rule",
+        description="论坛帖子审核模式（all/rule）",
+        category="forum",
+    )
 
 
 async def create_users(db: AsyncSession):
@@ -273,6 +330,8 @@ async def main():
     await init_db()
     
     async with AsyncSessionLocal() as db:
+        await apply_e2e_defaults(db)
+        await db.commit()
         users = await create_users(db)
         await create_balances(db, users)
         await create_news(db)

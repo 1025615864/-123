@@ -858,8 +858,10 @@ class TestLawFirmConsultationsAPI:
         await test_session.commit()
         await test_session.refresh(user)
 
+        user_id = int(user.id)
+
         bal = UserBalance(
-            user_id=user.id,
+            user_id=user_id,
             balance=50.0,
             frozen=0.0,
             total_recharged=50.0,
@@ -873,7 +875,7 @@ class TestLawFirmConsultationsAPI:
         await test_session.commit()
         await test_session.refresh(lawyer)
 
-        token = create_access_token({"sub": str(user.id)})
+        token = create_access_token({"sub": str(user_id)})
 
         create_res = await client.post(
             "/api/lawfirm/consultations",
@@ -899,7 +901,7 @@ class TestLawFirmConsultationsAPI:
         assert pay_res.status_code == 200
 
         bal_before_res = await test_session.execute(
-            select(UserBalance).where(UserBalance.user_id == int(user.id))
+            select(UserBalance).where(UserBalance.user_id == int(user_id))
         )
         bal_before = bal_before_res.scalar_one()
         before_amount = float(bal_before.balance)
@@ -920,14 +922,14 @@ class TestLawFirmConsultationsAPI:
         assert str(order.status) == "refunded"
 
         bal_after_res = await test_session.execute(
-            select(UserBalance).where(UserBalance.user_id == int(user.id))
+            select(UserBalance).where(UserBalance.user_id == int(user_id))
         )
         bal_after = bal_after_res.scalar_one()
         assert float(bal_after.balance) >= before_amount
 
         refund_count_res = await test_session.execute(
             select(func.count(BalanceTransaction.id)).where(
-                BalanceTransaction.user_id == int(user.id),
+                BalanceTransaction.user_id == int(user_id),
                 BalanceTransaction.order_id == int(order.id),
                 BalanceTransaction.type == "refund",
             )
@@ -1392,6 +1394,455 @@ class TestPaymentAPI:
         )
         assert detail_res.status_code == 200
         assert _json_dict(detail_res).get("status") == "paid"
+
+    @pytest.mark.asyncio
+    async def test_wechat_notify_ai_pack_document_generate_grants_credits_idempotent(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        import base64
+        import json
+        import time
+        from datetime import datetime, timedelta
+
+        from sqlalchemy import select, func
+
+        from app.models.user import User
+        from app.models.system import SystemConfig
+        from app.models.payment import PaymentCallbackEvent
+        from app.models.user_quota import UserQuotaPackBalance
+        from app.routers import payment as payment_router
+        from app.utils.security import hash_password, create_access_token
+
+        from cryptography.hazmat.primitives.asymmetric import rsa, padding
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+
+        from app.utils.wechatpay_v3 import WeChatPayPlatformCert, dump_platform_certs_json
+
+        user = User(
+            username="u_wechat_ai_pack_test",
+            email="u_wechat_ai_pack_test@example.com",
+            nickname="u_wechat_ai_pack_test",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        user_id = int(user.id)
+
+        token = create_access_token({"sub": str(user_id)})
+
+        create_res = await client.post(
+            "/api/payment/orders",
+            json={
+                "order_type": "ai_pack",
+                "amount": 0.01,
+                "title": "t",
+                "description": "d",
+                "related_id": 10,
+                "related_type": "document_generate",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create_res.status_code == 200
+        order_no = str(create_res.json()["order_no"])
+
+        api_v3_key = "0123456789abcdef0123456789abcdef"
+        payment_router.settings.wechatpay_api_v3_key = api_v3_key
+
+        platform_private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        subject = issuer = x509.Name(
+            [x509.NameAttribute(NameOID.COMMON_NAME, "wx-platform")]
+        )
+        cert_obj = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .public_key(platform_private_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(datetime.utcnow() - timedelta(days=1))
+            .not_valid_after(datetime.utcnow() + timedelta(days=365))
+            .sign(platform_private_key, hashes.SHA256())
+        )
+        cert_pem = cert_obj.public_bytes(serialization.Encoding.PEM).decode("utf-8")
+        serial_no = "TEST_SERIAL_PACK_1"
+        cfg_json = dump_platform_certs_json([WeChatPayPlatformCert(serial_no=serial_no, pem=cert_pem)])
+        test_session.add(SystemConfig(key="WECHATPAY_PLATFORM_CERTS_JSON", value=cfg_json, category="payment"))
+        await test_session.commit()
+
+        trade_no = "WX_T_PACK_1"
+        resource_plain = {
+            "out_trade_no": order_no,
+            "transaction_id": trade_no,
+            "trade_state": "SUCCESS",
+            "amount": {"total": 1200},
+        }
+        resource_plain_bytes = json.dumps(resource_plain, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+        resource_nonce = "0123456789ab"
+        resource_ad = "transaction"
+        aesgcm = AESGCM(api_v3_key.encode("utf-8"))
+        cipher = aesgcm.encrypt(resource_nonce.encode("utf-8"), resource_plain_bytes, resource_ad.encode("utf-8"))
+        resource_ciphertext = base64.b64encode(cipher).decode("utf-8")
+
+        body_obj = {
+            "id": "EVT_PACK_1",
+            "create_time": "2020-01-01T00:00:00+08:00",
+            "resource_type": "encrypt-resource",
+            "event_type": "TRANSACTION.SUCCESS",
+            "summary": "ok",
+            "resource": {
+                "algorithm": "AEAD_AES_256_GCM",
+                "nonce": resource_nonce,
+                "associated_data": resource_ad,
+                "ciphertext": resource_ciphertext,
+            },
+        }
+        body_bytes = json.dumps(body_obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+        ts = str(int(time.time()))
+        header_nonce = "HDRNONCE_PACK_1"
+        msg = ts.encode("utf-8") + b"\n" + header_nonce.encode("utf-8") + b"\n" + body_bytes + b"\n"
+        sig = platform_private_key.sign(msg, padding.PKCS1v15(), hashes.SHA256())
+        sig_b64 = base64.b64encode(sig).decode("utf-8")
+
+        headers = {
+            "Content-Type": "application/json",
+            "Wechatpay-Serial": serial_no,
+            "Wechatpay-Timestamp": ts,
+            "Wechatpay-Nonce": header_nonce,
+            "Wechatpay-Signature": sig_b64,
+            "Wechatpay-Signature-Type": "WECHATPAY2-SHA256-RSA2048",
+        }
+
+        res1 = await client.post("/api/payment/wechat/notify", content=body_bytes, headers=headers)
+        assert res1.status_code == 200
+
+        res2 = await client.post("/api/payment/wechat/notify", content=body_bytes, headers=headers)
+        assert res2.status_code == 200
+
+        evt_count_res = await test_session.execute(
+            select(func.count(PaymentCallbackEvent.id)).where(
+                PaymentCallbackEvent.provider == "wechat",
+                PaymentCallbackEvent.trade_no == trade_no,
+            )
+        )
+        assert int(evt_count_res.scalar() or 0) == 1
+
+        bal_res = await test_session.execute(
+            select(UserQuotaPackBalance).where(UserQuotaPackBalance.user_id == int(user_id))
+        )
+        bal = bal_res.scalar_one_or_none()
+        assert bal is not None
+        assert int(getattr(bal, "document_generate_credits", 0)) == 10
+
+
+class TestQuotaPackAPI:
+    @pytest.mark.asyncio
+    async def test_ai_pack_balance_payment_grants_credits_and_reflected_in_quotas(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        from sqlalchemy import select
+
+        from app.models.user import User
+        from app.models.payment import UserBalance
+        from app.models.user_quota import UserQuotaPackBalance
+        from app.utils.security import hash_password, create_access_token
+
+        user = User(
+            username="u_ai_pack_pay",
+            email="u_ai_pack_pay@example.com",
+            nickname="u_ai_pack_pay",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        balance = UserBalance(
+            user_id=user.id,
+            balance=1000.0,
+            frozen=0.0,
+            total_recharged=1000.0,
+            total_consumed=0.0,
+        )
+        test_session.add(balance)
+        await test_session.commit()
+
+        token = create_access_token({"sub": str(user.id)})
+
+        create_res = await client.post(
+            "/api/payment/orders",
+            json={
+                "order_type": "ai_pack",
+                "amount": 0.01,
+                "title": "t",
+                "description": "d",
+                "related_id": 10,
+                "related_type": "ai_chat",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create_res.status_code == 200
+        order_no = str(create_res.json()["order_no"])
+
+        pay_res = await client.post(
+            f"/api/payment/orders/{order_no}/pay",
+            json={"payment_method": "balance"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert pay_res.status_code == 200
+
+        bal_res = await test_session.execute(
+            select(UserQuotaPackBalance).where(UserQuotaPackBalance.user_id == int(user.id))
+        )
+        bal = bal_res.scalar_one_or_none()
+        assert bal is not None
+        assert int(getattr(bal, "ai_chat_credits", 0)) >= 10
+
+        quota_res = await client.get(
+            "/api/user/me/quotas",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert quota_res.status_code == 200
+        q = _json_dict(quota_res)
+        assert _as_int(q.get("ai_chat_pack_remaining"), 0) >= 10
+
+    @pytest.mark.asyncio
+    async def test_document_pack_balance_payment_grants_credits_and_reflected_in_quotas(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        from sqlalchemy import select
+
+        from app.models.user import User
+        from app.models.payment import UserBalance
+        from app.models.user_quota import UserQuotaPackBalance
+        from app.utils.security import hash_password, create_access_token
+
+        user = User(
+            username="u_doc_pack_pay",
+            email="u_doc_pack_pay@example.com",
+            nickname="u_doc_pack_pay",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        balance = UserBalance(
+            user_id=user.id,
+            balance=1000.0,
+            frozen=0.0,
+            total_recharged=1000.0,
+            total_consumed=0.0,
+        )
+        test_session.add(balance)
+        await test_session.commit()
+
+        token = create_access_token({"sub": str(user.id)})
+
+        create_res = await client.post(
+            "/api/payment/orders",
+            json={
+                "order_type": "ai_pack",
+                "amount": 0.01,
+                "title": "t",
+                "description": "d",
+                "related_id": 10,
+                "related_type": "document_generate",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create_res.status_code == 200
+        order_no = str(create_res.json()["order_no"])
+
+        pay_res = await client.post(
+            f"/api/payment/orders/{order_no}/pay",
+            json={"payment_method": "balance"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert pay_res.status_code == 200
+
+        bal_res = await test_session.execute(
+            select(UserQuotaPackBalance).where(UserQuotaPackBalance.user_id == int(user.id))
+        )
+        bal = bal_res.scalar_one_or_none()
+        assert bal is not None
+        assert int(getattr(bal, "document_generate_credits", 0)) >= 10
+
+        quota_res = await client.get(
+            "/api/user/me/quotas",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert quota_res.status_code == 200
+        q = _json_dict(quota_res)
+        assert _as_int(q.get("document_generate_pack_remaining"), 0) >= 10
+
+    @pytest.mark.asyncio
+    async def test_ai_chat_consumes_pack_credits_when_daily_exhausted(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+        monkeypatch: MonkeyPatch,
+    ):
+        from datetime import date
+
+        from sqlalchemy import select
+
+        from app.models.user import User
+        from app.models.user_quota import UserQuotaDaily, UserQuotaPackBalance
+        from app.services.quota_service import FREE_AI_CHAT_DAILY_LIMIT
+        from app.utils.security import create_access_token, hash_password
+
+        import app.routers.ai as ai_router
+
+        monkeypatch.setattr(ai_router.settings, "openai_api_key", "test", raising=True)
+
+        user = User(
+            username="u_ai_pack_consume",
+            email="u_ai_pack_consume@example.com",
+            nickname="u_ai_pack_consume",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        today = date.today()
+        test_session.add(
+            UserQuotaDaily(
+                user_id=int(user.id),
+                day=today,
+                ai_chat_count=int(FREE_AI_CHAT_DAILY_LIMIT),
+                document_generate_count=0,
+            )
+        )
+        test_session.add(
+            UserQuotaPackBalance(
+                user_id=int(user.id),
+                ai_chat_credits=1,
+                document_generate_credits=0,
+            )
+        )
+        await test_session.commit()
+
+        token = create_access_token({"sub": str(user.id)})
+
+        class FakeAssistant:
+            async def chat(
+                self,
+                *,
+                message: str,
+                session_id: str | None = None,
+                initial_history: list[dict[str, str]] | None = None,
+            ) -> tuple[str, str, list[object]]:
+                _ = message
+                _ = initial_history
+                return (session_id or "s_pack_1"), "OK", []
+
+        monkeypatch.setattr(ai_router, "_try_get_ai_assistant", lambda: FakeAssistant(), raising=True)
+
+        res = await client.post(
+            "/api/ai/chat",
+            json={"message": "hello"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 200
+
+        bal_res = await test_session.execute(
+            select(UserQuotaPackBalance).where(UserQuotaPackBalance.user_id == int(user.id))
+        )
+        bal = bal_res.scalar_one_or_none()
+        assert bal is not None
+        assert int(getattr(bal, "ai_chat_credits", 0)) == 0
+
+    @pytest.mark.asyncio
+    async def test_document_generate_consumes_pack_credits_when_daily_exhausted(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        from datetime import date
+
+        from sqlalchemy import select
+
+        from app.models.user import User
+        from app.models.user_quota import UserQuotaDaily, UserQuotaPackBalance
+        from app.services.quota_service import FREE_DOCUMENT_GENERATE_DAILY_LIMIT
+        from app.utils.security import create_access_token, hash_password
+
+        user = User(
+            username="u_doc_pack_consume",
+            email="u_doc_pack_consume@example.com",
+            nickname="u_doc_pack_consume",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        today = date.today()
+        test_session.add(
+            UserQuotaDaily(
+                user_id=int(user.id),
+                day=today,
+                ai_chat_count=0,
+                document_generate_count=int(FREE_DOCUMENT_GENERATE_DAILY_LIMIT),
+            )
+        )
+        test_session.add(
+            UserQuotaPackBalance(
+                user_id=int(user.id),
+                ai_chat_credits=0,
+                document_generate_credits=1,
+            )
+        )
+        await test_session.commit()
+
+        token = create_access_token({"sub": str(user.id)})
+
+        res = await client.post(
+            "/api/documents/generate",
+            json={
+                "document_type": "complaint",
+                "case_type": "合同纠纷",
+                "plaintiff_name": "A",
+                "defendant_name": "B",
+                "facts": "f",
+                "claims": "c",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 200
+
+        bal_res = await test_session.execute(
+            select(UserQuotaPackBalance).where(UserQuotaPackBalance.user_id == int(user.id))
+        )
+        bal = bal_res.scalar_one_or_none()
+        assert bal is not None
+        assert int(getattr(bal, "document_generate_credits", 0)) == 0
+
+
+class TestPaymentWeChatNotifyAPI:
 
     @pytest.mark.asyncio
     async def test_wechat_notify_marks_order_paid_and_records_event_idempotent(

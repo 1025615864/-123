@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 import { useSearchParams, Link, useLocation } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import {
   Send,
   Bot,
@@ -31,17 +32,31 @@ import api from "../api/client";
 import { useAppMutation, useToast } from "../hooks";
 import { getApiErrorMessage } from "../utils";
 import PageHeader from "../components/PageHeader";
-import { Button, Modal } from "../components/ui";
+import { Badge, Button, Modal } from "../components/ui";
 import MessageActionsBar from "../components/chat/MessageActionsBar";
 import TemplateSelector from "../components/TemplateSelector";
 import { useTheme } from "../contexts/ThemeContext";
 import { useAuth } from "../contexts/AuthContext";
+import { queryKeys } from "../queryKeys";
 
 interface LawReference {
   law_name: string;
   article: string;
   content: string;
   relevance: number;
+}
+
+interface UserQuotaDailyResponse {
+  day: string;
+  ai_chat_limit: number;
+  ai_chat_used: number;
+  ai_chat_remaining: number;
+  document_generate_limit: number;
+  document_generate_used: number;
+  document_generate_remaining: number;
+  ai_chat_pack_remaining: number;
+  document_generate_pack_remaining: number;
+  is_vip_active: boolean;
 }
 
 interface ThinkingStep {
@@ -78,7 +93,7 @@ interface Message {
   disclaimer?: string;
 }
 
-const GUEST_AI_LIMIT = 5;
+const GUEST_AI_LIMIT = 3;
 const GUEST_AI_USED_KEY = "guest_ai_used";
 const GUEST_AI_RESET_AT_KEY = "guest_ai_reset_at";
 const GUEST_AI_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -122,11 +137,15 @@ export default function ChatPage() {
   const [analyzingFile, setAnalyzingFile] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const [scrollProgress, setScrollProgress] = useState(1);
+  const [scrollMax, setScrollMax] = useState(0);
+  const [, setScrollLocked] = useState(false);
   const streamingAssistantIndexRef = useRef<number | null>(null);
   const streamingAbortRef = useRef<AbortController | null>(null);
   const skipNextLoadSessionIdRef = useRef<string | null>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollLockedRef = useRef(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -134,14 +153,61 @@ export default function ChatPage() {
   const recordingChunksRef = useRef<BlobPart[]>([]);
   const toast = useToast();
 
+  const quotasQuery = useQuery({
+    queryKey: queryKeys.userMeQuotas(),
+    queryFn: async () => {
+      const res = await api.get("/user/me/quotas");
+      return res.data as UserQuotaDailyResponse;
+    },
+    enabled: isAuthenticated,
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  });
+
+  const aiChatRemaining = quotasQuery.data?.ai_chat_remaining;
+  const aiChatLimit = quotasQuery.data?.ai_chat_limit;
+  const documentRemaining = quotasQuery.data?.document_generate_remaining;
+  const documentLimit = quotasQuery.data?.document_generate_limit;
+  const aiChatPackRemaining = quotasQuery.data?.ai_chat_pack_remaining;
+  const documentPackRemaining =
+    quotasQuery.data?.document_generate_pack_remaining;
+  const isVipActive = quotasQuery.data?.is_vip_active === true;
+  const totalAiRemaining =
+    (typeof aiChatRemaining === "number" ? aiChatRemaining : 0) +
+    (typeof aiChatPackRemaining === "number" ? aiChatPackRemaining : 0);
+  const isAiQuotaExhausted =
+    isAuthenticated && !!quotasQuery.data && totalAiRemaining <= 0;
+
+  const UNLIMITED_THRESHOLD = 1_000_000;
+  const formatQuotaNumber = (n: unknown) =>
+    typeof n === "number" ? (n >= UNLIMITED_THRESHOLD ? "不限" : n) : "-";
+
   const handleChatScroll = useCallback(() => {
     const el = chatScrollRef.current;
     if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const near = distanceFromBottom <= 120;
+
+    const nextTop = el.scrollTop;
+
+    const max = Math.max(0, el.scrollHeight - el.clientHeight);
+    setScrollMax(max);
+    setScrollProgress(max > 0 ? nextTop / max : 1);
+
+    const distanceFromBottom = el.scrollHeight - nextTop - el.clientHeight;
+    const near = distanceFromBottom <= 80;
+
+    if (streaming && !near) {
+      scrollLockedRef.current = true;
+      setScrollLocked(true);
+    }
+    if (near) {
+      scrollLockedRef.current = false;
+      setScrollLocked(false);
+    }
+
     setIsNearBottom(near);
     setShowScrollToBottom(!near);
-  }, []);
+  }, [streaming]);
 
   const resizeInput = useCallback(() => {
     const el = inputRef.current;
@@ -165,8 +231,19 @@ export default function ChatPage() {
   }, []);
 
   const scrollToBottom = useCallback(
-    (behavior: ScrollBehavior = "smooth") => {
-      messagesEndRef.current?.scrollIntoView({ behavior });
+    (behavior: ScrollBehavior = "smooth", opts?: { unlock?: boolean }) => {
+      const el = chatScrollRef.current;
+      if (!el) return;
+      if (opts?.unlock) {
+        scrollLockedRef.current = false;
+        setScrollLocked(false);
+      }
+      const top = Math.max(0, el.scrollHeight - el.clientHeight);
+      if (behavior === "auto") {
+        el.scrollTop = top;
+        return;
+      }
+      el.scrollTo({ top, behavior });
     },
     []
   );
@@ -284,7 +361,8 @@ export default function ChatPage() {
         const res = await api.post("/ai/files/analyze", fd, {
           headers: { "Content-Type": "multipart/form-data" },
         });
-        const filename = String(res?.data?.filename ?? file.name).trim() || file.name;
+        const filename =
+          String(res?.data?.filename ?? file.name).trim() || file.name;
         const summary = String(res?.data?.summary ?? "").trim();
         if (!summary) {
           toast.error("文件分析失败，请重试");
@@ -298,7 +376,7 @@ export default function ChatPage() {
             content: `【文件分析：${filename}】\n${summary}`,
           },
         ]);
-        requestAnimationFrame(() => scrollToBottom());
+        requestAnimationFrame(() => scrollToBottom("smooth", { unlock: true }));
       } catch (e) {
         toast.error(getApiErrorMessage(e, "文件分析失败，请稍后再试"));
       } finally {
@@ -416,15 +494,18 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (streaming) {
-      if (!isNearBottom) return;
+      if (scrollLockedRef.current) return;
       scrollToBottom("auto");
+      requestAnimationFrame(() => {
+        handleChatScroll();
+      });
       return;
     }
 
     if (isNearBottom) {
       scrollToBottom("smooth");
     }
-  }, [messages, scrollToBottom, streaming, isNearBottom]);
+  }, [messages, scrollToBottom, streaming, isNearBottom, handleChatScroll]);
 
   useEffect(() => {
     requestAnimationFrame(() => {
@@ -461,8 +542,22 @@ export default function ChatPage() {
     }
 
     if (isGuest && Math.max(0, GUEST_AI_LIMIT - localGuestUsed) <= 0) {
-      toast.info("游客模式 24 小时内仅可试用 5 次，请登录后继续");
+      toast.info("游客模式 24 小时内仅可试用 3 次，请登录后继续");
       return;
+    }
+
+    if (!isGuest) {
+      const daily = quotasQuery.data?.ai_chat_remaining;
+      const pack = quotasQuery.data?.ai_chat_pack_remaining;
+      const total =
+        (typeof daily === "number" ? daily : 0) +
+        (typeof pack === "number" ? pack : 0);
+      if (!!quotasQuery.data && total <= 0) {
+        toast.info(
+          "今日 AI 咨询次数已用完，可前往个人中心开通 VIP 或购买次数包"
+        );
+        return;
+      }
     }
 
     let guestCounted = false;
@@ -491,7 +586,7 @@ export default function ChatPage() {
     setInput("");
     setMessages((prev) => [...prev, { role: "user", content: userMessage }]);
     requestAnimationFrame(() => {
-      scrollToBottom("smooth");
+      scrollToBottom("auto", { unlock: true });
     });
 
     let pendingRaf: number | null = null;
@@ -716,8 +811,7 @@ export default function ChatPage() {
                 : m.strategyReason,
             confidence:
               typeof confidence === "string" ? confidence : m.confidence,
-            riskLevel:
-              typeof riskLevel === "string" ? riskLevel : m.riskLevel,
+            riskLevel: typeof riskLevel === "string" ? riskLevel : m.riskLevel,
             searchQuality: cleanedSearchQuality ?? m.searchQuality,
             disclaimer:
               typeof disclaimer === "string" ? disclaimer : m.disclaimer,
@@ -803,6 +897,10 @@ export default function ChatPage() {
           }
 
           void requestQuickReplies(assistantText, pendingRefs);
+
+          if (!isGuest) {
+            void quotasQuery.refetch();
+          }
         }
       };
 
@@ -882,6 +980,8 @@ export default function ChatPage() {
             setGuestResetAt(resetAtMs);
             localStorage.setItem(GUEST_AI_RESET_AT_KEY, String(resetAtMs));
           }
+        } else {
+          void quotasQuery.refetch();
         }
         setMessages((prev) => {
           const idx = streamingAssistantIndexRef.current;
@@ -940,12 +1040,16 @@ export default function ChatPage() {
                 references: response.references || [],
                 quickReplies: [],
                 intent:
-                  typeof response.intent === "string" ? response.intent : undefined,
+                  typeof response.intent === "string"
+                    ? response.intent
+                    : undefined,
                 needsClarification:
                   typeof response.needs_clarification === "boolean"
                     ? response.needs_clarification
                     : undefined,
-                clarifyingQuestions: Array.isArray(response.clarifying_questions)
+                clarifyingQuestions: Array.isArray(
+                  response.clarifying_questions
+                )
                   ? response.clarifying_questions
                       .filter((q: any) => typeof q === "string" && q.trim())
                       .map((q: any) => String(q).trim())
@@ -968,7 +1072,8 @@ export default function ChatPage() {
                     ? response.risk_level
                     : undefined,
                 searchQuality:
-                  response.search_quality && typeof response.search_quality === "object"
+                  response.search_quality &&
+                  typeof response.search_quality === "object"
                     ? {
                         total_candidates: Number(
                           response.search_quality.total_candidates ?? 0
@@ -979,7 +1084,9 @@ export default function ChatPage() {
                         avg_similarity: Number(
                           response.search_quality.avg_similarity ?? 0
                         ),
-                        confidence: String(response.search_quality.confidence ?? ""),
+                        confidence: String(
+                          response.search_quality.confidence ?? ""
+                        ),
                       }
                     : undefined,
                 disclaimer:
@@ -998,7 +1105,9 @@ export default function ChatPage() {
             references: response.references || [],
             quickReplies: current.quickReplies || [],
             intent:
-              typeof response.intent === "string" ? response.intent : current.intent,
+              typeof response.intent === "string"
+                ? response.intent
+                : current.intent,
             needsClarification:
               typeof response.needs_clarification === "boolean"
                 ? response.needs_clarification
@@ -1026,7 +1135,8 @@ export default function ChatPage() {
                 ? response.risk_level
                 : current.riskLevel,
             searchQuality:
-              response.search_quality && typeof response.search_quality === "object"
+              response.search_quality &&
+              typeof response.search_quality === "object"
                 ? {
                     total_candidates: Number(
                       response.search_quality.total_candidates ?? 0
@@ -1037,7 +1147,9 @@ export default function ChatPage() {
                     avg_similarity: Number(
                       response.search_quality.avg_similarity ?? 0
                     ),
-                    confidence: String(response.search_quality.confidence ?? ""),
+                    confidence: String(
+                      response.search_quality.confidence ?? ""
+                    ),
                   }
                 : current.searchQuality,
             disclaimer:
@@ -1062,6 +1174,10 @@ export default function ChatPage() {
             ? (response.references as LawReference[])
             : []
         );
+
+        if (!isGuest) {
+          void quotasQuery.refetch();
+        }
       } catch (e) {
         toast.error(getApiErrorMessage(e, "请求失败，请稍后再试。"));
       } finally {
@@ -1150,6 +1266,19 @@ export default function ChatPage() {
         <div
           ref={chatScrollRef}
           onScroll={handleChatScroll}
+          onWheel={(e) => {
+            if (!streaming) return;
+            if ((e as any)?.deltaY < 0) {
+              scrollLockedRef.current = true;
+              setScrollLocked(true);
+            }
+          }}
+          onTouchStart={() => {
+            if (!streaming) return;
+            scrollLockedRef.current = true;
+            setScrollLocked(true);
+          }}
+          data-testid="chat-scroll-container"
           className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 scroll-smooth"
         >
           {messages.map((message, index) => (
@@ -1242,7 +1371,7 @@ export default function ChatPage() {
           <button
             type="button"
             onClick={() => {
-              scrollToBottom("smooth");
+              scrollToBottom("auto", { unlock: true });
               requestAnimationFrame(() => {
                 handleChatScroll();
               });
@@ -1252,6 +1381,43 @@ export default function ChatPage() {
           >
             <ChevronDown className="h-5 w-5" />
           </button>
+        )}
+
+        {scrollMax > 0 && (
+          <div className="absolute right-2 top-6 bottom-28 z-10 flex items-center">
+            <input
+              type="range"
+              min={0}
+              max={1000}
+              value={Math.max(
+                0,
+                Math.min(1000, Math.round(scrollProgress * 1000))
+              )}
+              onChange={(e) => {
+                const el = chatScrollRef.current;
+                if (!el) return;
+                const v = Number(e.target.value);
+                const ratio = Number.isFinite(v) ? v / 1000 : 1;
+                const max = Math.max(0, el.scrollHeight - el.clientHeight);
+                el.scrollTop = Math.max(0, Math.min(max, ratio * max));
+                handleChatScroll();
+              }}
+              onMouseDown={() => {
+                scrollLockedRef.current = true;
+                setScrollLocked(true);
+              }}
+              onTouchStart={() => {
+                scrollLockedRef.current = true;
+                setScrollLocked(true);
+              }}
+              className="h-full w-3 cursor-pointer opacity-60 hover:opacity-100"
+              style={{
+                writingMode: "vertical-rl",
+                WebkitAppearance: "slider-vertical" as any,
+              }}
+              aria-label="滚动历史"
+            />
+          </div>
         )}
 
         {/* Input Area */}
@@ -1285,6 +1451,60 @@ export default function ChatPage() {
                 </Link>
               </div>
             )}
+            {isAuthenticated && (
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200/70 bg-slate-50 px-4 py-2 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
+                <span className="flex flex-wrap items-center gap-2">
+                  <Badge
+                    variant={isVipActive ? "success" : "default"}
+                    size="sm"
+                  >
+                    {isVipActive ? "VIP" : "非VIP"}
+                  </Badge>
+                  <span>
+                    今日 AI 咨询剩余{" "}
+                    <span className="font-semibold text-slate-900 dark:text-white">
+                      {formatQuotaNumber(aiChatRemaining)}
+                    </span>{" "}
+                    / {formatQuotaNumber(aiChatLimit)} 次
+                    {typeof aiChatPackRemaining === "number" &&
+                      aiChatPackRemaining > 0 && (
+                        <>
+                          <span className="text-slate-500 dark:text-slate-400">
+                            （次数包 {aiChatPackRemaining}）
+                          </span>
+                        </>
+                      )}
+                    <span className="text-slate-500 dark:text-slate-400">
+                      ，
+                    </span>
+                    文书剩余{" "}
+                    <span className="font-semibold text-slate-900 dark:text-white">
+                      {formatQuotaNumber(documentRemaining)}
+                    </span>{" "}
+                    / {formatQuotaNumber(documentLimit)}{" "}
+                    次
+                    {typeof documentPackRemaining === "number" &&
+                      documentPackRemaining > 0 && (
+                        <>
+                          <span className="text-slate-500 dark:text-slate-400">
+                            （次数包 {documentPackRemaining}）
+                          </span>
+                        </>
+                      )}
+                  </span>
+                </span>
+                {!isVipActive &&
+                  !!quotasQuery.data &&
+                  totalAiRemaining <= 0 && (
+                    <Link
+                      to="/profile"
+                      className="font-medium text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200"
+                    >
+                      开通 VIP
+                    </Link>
+                  )}
+              </div>
+            )}
             {messages.length < 2 && (
               <div className="flex flex-wrap gap-2 justify-center mb-2">
                 {quickPrompts.map((p) => (
@@ -1298,7 +1518,7 @@ export default function ChatPage() {
                       }
                       void sendMessage(p);
                     }}
-                    disabled={loading || streaming}
+                    disabled={loading || streaming || isAiQuotaExhausted}
                     className="px-3 py-1.5 rounded-full bg-slate-100 hover:bg-slate-200 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:bg-slate-800 dark:hover:bg-slate-700 dark:focus-visible:ring-offset-slate-900 text-xs text-slate-600 dark:text-slate-300 transition-all"
                   >
                     {p}
@@ -1335,7 +1555,9 @@ export default function ChatPage() {
                 />
                 <Button
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={loading || streaming || transcribing || analyzingFile}
+                  disabled={
+                    loading || streaming || transcribing || analyzingFile
+                  }
                   isLoading={analyzingFile}
                   loadingText=""
                   size="sm"
@@ -1371,7 +1593,10 @@ export default function ChatPage() {
                           void sendMessage();
                         }
                   }
-                  disabled={loading || (!streaming && !input.trim())}
+                  disabled={
+                    loading ||
+                    (!streaming && (!input.trim() || isAiQuotaExhausted))
+                  }
                   isLoading={loading}
                   loadingText=""
                   size="sm"
@@ -1771,7 +1996,8 @@ function AssistantMessage({
         const lawName = String(ref?.law_name ?? "").trim();
         const article = String(ref?.article ?? "").trim();
         const refContent = String(ref?.content ?? "").trim();
-        const title = lawName || article ? `《${lawName}》${article}` : "法条引用";
+        const title =
+          lawName || article ? `《${lawName}》${article}` : "法条引用";
         parts.push(`- ${title}`);
         if (refContent) {
           parts.push(refContent);
@@ -2181,12 +2407,9 @@ function AssistantMessage({
                     检索质量
                   </span>
                   <span className="ml-2">
-                    候选 {Number(searchQuality.total_candidates ?? 0)}，通过
-                    {" "}
-                    {Number(searchQuality.qualified_count ?? 0)}，平均相似度
-                    {" "}
-                    {Number(searchQuality.avg_similarity ?? 0).toFixed(3)}，置信
-                    {" "}
+                    候选 {Number(searchQuality.total_candidates ?? 0)}，通过{" "}
+                    {Number(searchQuality.qualified_count ?? 0)}，平均相似度{" "}
+                    {Number(searchQuality.avg_similarity ?? 0).toFixed(3)}，置信{" "}
                     {String(searchQuality.confidence ?? "")}
                   </span>
                 </div>
@@ -2209,15 +2432,15 @@ function AssistantMessage({
       {normalizedQuickReplies.length > 0 && (
         <div className="flex flex-wrap gap-2 pt-1">
           {normalizedQuickReplies.map((text, idx) => (
-              <button
-                key={`qr-${idx}`}
-                type="button"
-                onClick={() => onQuickReplySelect?.(String(text))}
-                className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors dark:bg-slate-800/60 dark:hover:bg-slate-800 dark:text-slate-200 dark:border-slate-700"
-              >
-                {String(text)}
-              </button>
-            ))}
+            <button
+              key={`qr-${idx}`}
+              type="button"
+              onClick={() => onQuickReplySelect?.(String(text))}
+              className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-slate-50 hover:bg-slate-100 text-slate-700 border border-slate-200 transition-colors dark:bg-slate-800/60 dark:hover:bg-slate-800 dark:text-slate-200 dark:border-slate-700"
+            >
+              {String(text)}
+            </button>
+          ))}
         </div>
       )}
 
@@ -2239,15 +2462,15 @@ function AssistantMessage({
           )}
           <div className="flex flex-wrap gap-2 pt-2">
             {normalizedClarifyingQuestions.map((text, idx) => (
-                <button
-                  key={`cq-${idx}`}
-                  type="button"
-                  onClick={() => onQuickReplySelect?.(String(text))}
-                  className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition-colors dark:bg-indigo-900/20 dark:hover:bg-indigo-900/30 dark:text-indigo-200 dark:border-indigo-800"
-                >
-                  {String(text)}
-                </button>
-              ))}
+              <button
+                key={`cq-${idx}`}
+                type="button"
+                onClick={() => onQuickReplySelect?.(String(text))}
+                className="inline-flex items-center px-3 py-1.5 rounded-full text-xs font-medium bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition-colors dark:bg-indigo-900/20 dark:hover:bg-indigo-900/30 dark:text-indigo-200 dark:border-indigo-800"
+              >
+                {String(text)}
+              </button>
+            ))}
           </div>
         </div>
       )}

@@ -1,5 +1,7 @@
 """应用配置"""
+import os
 import sys
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from functools import lru_cache
@@ -8,6 +10,22 @@ from typing import ClassVar, cast
 
 def _running_tests() -> bool:
     return "pytest" in sys.modules
+
+
+def _resolve_env_files() -> list[str] | None:
+    if _running_tests():
+        return None
+
+    explicit = os.getenv("ENV_FILE", "").strip()
+    if explicit:
+        return [explicit]
+
+    here = Path(__file__).resolve()
+    backend_dir = here.parents[1]
+    repo_root = here.parents[2]
+
+    candidates = [backend_dir / ".env", repo_root / ".env"]
+    return [str(p) for p in candidates if p.exists()]
 
 
 class Settings(BaseSettings):
@@ -102,7 +120,7 @@ class Settings(BaseSettings):
         cast(
             object,
             {
-                "env_file": None if _running_tests() else ".env",
+                "env_file": _resolve_env_files(),
                 "extra": "ignore",
                 "from_attributes": True,
             },

@@ -1,4 +1,6 @@
 """法律文书生成API路由"""
+import os
+import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
@@ -12,9 +14,50 @@ from ..database import get_db
 from ..models.document import GeneratedDocument
 from ..models.user import User
 from ..utils.deps import get_current_user_optional, get_current_user
-from ..utils.rate_limiter import rate_limit, RateLimitConfig
+from ..utils.rate_limiter import rate_limit, RateLimitConfig, rate_limiter, get_client_ip
+from ..services.quota_service import quota_service
 
 router = APIRouter(prefix="/documents", tags=["文书生成"])
+
+
+def _get_int_env(key: str, default: int) -> int:
+    raw = os.getenv(key, "").strip()
+    if not raw:
+        return int(default)
+    try:
+        return int(raw)
+    except Exception:
+        return int(default)
+
+
+GUEST_DOCUMENT_GENERATE_LIMIT = _get_int_env("GUEST_DOCUMENT_GENERATE_LIMIT", 0)
+GUEST_DOCUMENT_GENERATE_WINDOW_SECONDS = _get_int_env(
+    "GUEST_DOCUMENT_GENERATE_WINDOW_SECONDS", 60 * 60 * 24
+)
+
+
+def _enforce_guest_document_quota(request: Request) -> None:
+    if int(GUEST_DOCUMENT_GENERATE_LIMIT) <= 0:
+        return
+
+    key = f"doc:guest:{get_client_ip(request)}"
+    allowed, remaining = rate_limiter.is_allowed(
+        key, int(GUEST_DOCUMENT_GENERATE_LIMIT), int(GUEST_DOCUMENT_GENERATE_WINDOW_SECONDS)
+    )
+    if allowed:
+        return
+
+    wait_time = rate_limiter.get_wait_time(key, int(GUEST_DOCUMENT_GENERATE_WINDOW_SECONDS))
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail="游客模式文书生成次数已用尽，请登录后继续",
+        headers={
+            "X-RateLimit-Limit": str(int(GUEST_DOCUMENT_GENERATE_LIMIT)),
+            "X-RateLimit-Remaining": str(max(0, remaining)),
+            "X-RateLimit-Reset": str(int(time.time() + wait_time)),
+            "Retry-After": str(int(wait_time)),
+        },
+    )
 
 
 class DocumentGenerateRequest(BaseModel):
@@ -153,9 +196,10 @@ async def generate_document(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """生成法律文书"""
-    _ = request
-    _ = current_user
-    _ = db
+    if current_user is None:
+        _enforce_guest_document_quota(request)
+    else:
+        await quota_service.enforce_document_generate_quota(db, current_user)
 
     if len(data.facts) > 8000 or len(data.claims) > 4000 or (data.evidence and len(data.evidence) > 4000):
         raise HTTPException(
@@ -198,6 +242,12 @@ async def generate_document(
         date=date_str,
     )
     
+    if current_user is not None:
+        try:
+            await quota_service.record_document_generate_usage(db, current_user)
+        except Exception:
+            pass
+
     return DocumentResponse(
         document_type=data.document_type,
         title=template_info["title"],

@@ -1,14 +1,28 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { FileText, Download, Copy, Check, ChevronRight, History, Trash2, Eye } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import api from '../api/client'
 import { useAppMutation, useToast } from '../hooks'
 import PageHeader from '../components/PageHeader'
 import { useTheme } from '../contexts/ThemeContext'
-import { Card, Button, Input, Modal, Pagination, EmptyState, Loading } from '../components/ui'
+import { Card, Button, Input, Modal, Pagination, EmptyState, Loading, Badge } from '../components/ui'
 import { getApiErrorMessage } from '../utils'
 import { queryKeys } from '../queryKeys'
 import { useAuth } from '../contexts/AuthContext'
+
+interface UserQuotaDailyResponse {
+  day: string
+  ai_chat_limit: number
+  ai_chat_used: number
+  ai_chat_remaining: number
+  document_generate_limit: number
+  document_generate_used: number
+  document_generate_remaining: number
+  ai_chat_pack_remaining: number
+  document_generate_pack_remaining: number
+  is_vip_active: boolean
+}
 
 interface DocumentType {
   type: string
@@ -44,6 +58,35 @@ export default function DocumentGeneratorPage() {
   const [copied, setCopied] = useState(false)
   const toast = useToast()
   const { actualTheme } = useTheme()
+
+  const quotasQuery = useQuery({
+    queryKey: queryKeys.userMeQuotas(),
+    queryFn: async () => {
+      const res = await api.get('/user/me/quotas')
+      return res.data as UserQuotaDailyResponse
+    },
+    enabled: isAuthenticated,
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  })
+
+  const aiChatRemaining = quotasQuery.data?.ai_chat_remaining
+  const aiChatLimit = quotasQuery.data?.ai_chat_limit
+  const documentRemaining = quotasQuery.data?.document_generate_remaining
+  const documentLimit = quotasQuery.data?.document_generate_limit
+  const aiChatPackRemaining = quotasQuery.data?.ai_chat_pack_remaining
+  const documentPackRemaining = quotasQuery.data?.document_generate_pack_remaining
+  const isVipActive = quotasQuery.data?.is_vip_active === true
+
+  const UNLIMITED_THRESHOLD = 1_000_000
+  const formatQuotaNumber = (n: unknown) =>
+    typeof n === 'number' ? (n >= UNLIMITED_THRESHOLD ? '不限' : n) : '-'
+  const totalDocumentRemaining =
+    (typeof documentRemaining === 'number' ? documentRemaining : 0) +
+    (typeof documentPackRemaining === 'number' ? documentPackRemaining : 0)
+  const isDocQuotaExhausted =
+    isAuthenticated && !!quotasQuery.data && totalDocumentRemaining <= 0
 
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyPage, setHistoryPage] = useState(1)
@@ -135,6 +178,16 @@ export default function DocumentGeneratorPage() {
     onSuccess: (response) => {
       setGeneratedDocument({ title: response.title, content: response.content })
       setStep(3)
+
+      if (isAuthenticated) {
+        void quotasQuery.refetch()
+      }
+    },
+    onError: (err) => {
+      const status = (err as any)?.response?.status
+      if (status === 429 && isAuthenticated) {
+        void quotasQuery.refetch()
+      }
     },
   })
 
@@ -193,6 +246,11 @@ export default function DocumentGeneratorPage() {
   const handleGenerate = async () => {
     if (!selectedType) return
 
+    if (isDocQuotaExhausted) {
+      toast.info('今日文书生成次数已用完，可前往个人中心开通 VIP 或购买次数包')
+      return
+    }
+
     if (generateMutation.isPending) return
     generateMutation.mutate()
   }
@@ -247,9 +305,47 @@ export default function DocumentGeneratorPage() {
         tone={actualTheme}
         right={
           isAuthenticated ? (
-            <Button variant="outline" onClick={() => setHistoryOpen(true)} icon={History}>
-              我的文书
-            </Button>
+            <div className="flex flex-col items-start gap-3">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600 dark:text-white/70">
+                <Badge variant={isVipActive ? 'success' : 'default'} size="sm">
+                  {isVipActive ? 'VIP' : '非VIP'}
+                </Badge>
+                <span>
+                  今日文书剩余{' '}
+                  <span className="font-semibold text-slate-900 dark:text-white">
+                    {formatQuotaNumber(documentRemaining)}
+                  </span>{' '}
+                  / {formatQuotaNumber(documentLimit)} 次
+                  {typeof documentPackRemaining === 'number' && documentPackRemaining > 0 && (
+                    <>
+                      <span className="text-slate-500 dark:text-white/50">（次数包 {documentPackRemaining}）</span>
+                    </>
+                  )}
+                  <span className="text-slate-500 dark:text-white/50">，</span>
+                  AI 咨询剩余{' '}
+                  <span className="font-semibold text-slate-900 dark:text-white">
+                    {formatQuotaNumber(aiChatRemaining)}
+                  </span>{' '}
+                  / {formatQuotaNumber(aiChatLimit)} 次
+                  {typeof aiChatPackRemaining === 'number' && aiChatPackRemaining > 0 && (
+                    <>
+                      <span className="text-slate-500 dark:text-white/50">（次数包 {aiChatPackRemaining}）</span>
+                    </>
+                  )}
+                </span>
+                {!isVipActive && isDocQuotaExhausted && (
+                  <Link
+                    to="/profile"
+                    className="font-medium text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200"
+                  >
+                    开通 VIP
+                  </Link>
+                )}
+              </div>
+              <Button variant="outline" onClick={() => setHistoryOpen(true)} icon={History}>
+                我的文书
+              </Button>
+            </div>
           ) : undefined
         }
       />
@@ -385,7 +481,7 @@ export default function DocumentGeneratorPage() {
               </Button>
               <Button 
                 onClick={handleGenerate} 
-                disabled={!formData.case_type || !formData.plaintiff_name || !formData.defendant_name || !formData.facts || !formData.claims || generateMutation.isPending}
+                disabled={!formData.case_type || !formData.plaintiff_name || !formData.defendant_name || !formData.facts || !formData.claims || generateMutation.isPending || isDocQuotaExhausted}
                 isLoading={generateMutation.isPending}
                 className="flex-1"
               >

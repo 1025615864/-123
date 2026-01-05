@@ -1,6 +1,6 @@
 # 项目报告（百姓法律助手 / 百姓助手）
 
-更新时间：2026-01-04
+更新时间：2026-01-06
 
 > 目的：为下一位接手工程师提供“一份文档就能上手”的项目报告。
 >
@@ -268,6 +268,15 @@ AI 咨询模块的实现细节与已知风险点已合并到本文档的「12.5 
 - 订单创建/支付/取消/退款
 - 回调验签依赖 `PAYMENT_WEBHOOK_SECRET`
 
+### 7.6 律师结算与商业化（/api/lawyer + /api/admin + /api/user/me/quotas）
+
+- **律师结算/提现（律师侧）**：钱包、收入明细、收款账户管理、提现申请与记录。
+  - 典型接口：`GET /api/lawyer/wallet`、`GET /api/lawyer/income-records`、`POST /api/lawyer/withdrawals`
+- **管理员侧**：提现审核与结算统计、CSV 导出（接口响应含脱敏策略）。
+  - 典型接口：`GET /api/admin/withdrawals`、`GET /api/admin/withdrawals/export`、`GET /api/admin/settlement-stats`
+- **商业化配额**：VIP/次数包额度展示与消耗。
+  - 典型接口：`GET /api/user/me/quotas`（配额查询）；支付购买走 `POST /api/payment/orders`（`order_type=vip|ai_pack`）
+
 ---
 
 ## 8. 测试与质量门禁
@@ -291,7 +300,7 @@ AI 咨询模块的实现细节与已知风险点已合并到本文档的「12.5 
     - `/admin/settings` 默认 tab 为 `base`，部分运维卡片只在 `AI 咨询` / `新闻 AI` tab 渲染，E2E 断言前需先切 tab
     - 移动端底部导航与“更多”弹层入口可能随导航结构调整，MobileNav 用例以 `dialog` + `日历` 等工具入口为准
 
-最新一次全量回归结果（2026-01-04）：后端 pytest 83 passed；Playwright E2E `73 passed, 0 failed`。
+最新一次全量回归结果（2026-01-06）：后端 pytest 95 passed；Playwright E2E `73 passed, 0 failed`；pyright / basedpyright `0 errors/warnings`。
 
 ---
 
@@ -380,7 +389,7 @@ AI 咨询模块的实现细节与已知风险点已合并到本文档的「12.5 
 
 本仓库的核心工程交接信息已收敛到 **本文件**。为减少文档分散、降低维护成本：
 
-- 原 `docs/` 下的多份说明文档已统一归档到 `docs/_archive/`（不删除，仅供追溯）。
+- 原 `docs/` 下的多份说明文档已统一归档到 `docs/_archive/`（默认保留用于追溯，必要时可清理）。
 - 本节给出“合并后的摘要版附录”，覆盖接手工程师最常用的开发/运维/架构/API/变更信息。
 
 ---
@@ -447,6 +456,7 @@ AI 咨询模块的实现细节与已知风险点已合并到本文档的「12.5 
 - **2025-12-27**：落地“Secrets 不入库”、News AI 运维状态接口、`StaleDataError` 并发兜底、生产部署与冒烟 SOP。
 - **2025-12-29**：News 模块发布（tag `news-module-20251229`）、补齐开发/架构/API 速查文档入口与测试结果记录。
 - **2026-01-04**：Playwright E2E 全量回归全绿（73 passed）；新增/完善 E2E 稳定化手段（DEBUG 设置新闻 `view_count` 并清 hot cache、Settings tab 断言约定、ChatHistory 伪 JWT 工具 `makeE2eJwt()`）。
+- **2026-01-06**：补齐律师结算/提现与商业化配额能力的交付口径；更新回归口径（pytest 95 passed、pyright/basedpyright 0）。
 
 ---
 

@@ -3,6 +3,7 @@ export const queryKeys = {
     ["notifications", { page, pageSize }] as const,
   notificationsPreview: (pageSize: number = 10) =>
     ["notifications-preview", { pageSize }] as const,
+  userMeQuotas: () => ["user-me-quotas"] as const,
   adminSystemNotifications: () => ["admin-system-notifications"] as const,
   calendarReminders: (page: number, pageSize: number, done: boolean | null) =>
     ["calendar-reminders", { page, pageSize, done }] as const,
@@ -37,8 +38,11 @@ export const queryKeys = {
     ["lawfirm-consultations", { page, pageSize }] as const,
 
   paymentOrdersBase: () => ["payment-orders"] as const,
-  paymentOrders: (page: number, pageSize: number, statusFilter: string | null) =>
-    ["payment-orders", { page, pageSize, statusFilter }] as const,
+  paymentOrders: (
+    page: number,
+    pageSize: number,
+    statusFilter: string | null
+  ) => ["payment-orders", { page, pageSize, statusFilter }] as const,
   paymentOrderDetail: (orderNo: string | null) =>
     ["payment-order", { orderNo }] as const,
 
@@ -59,6 +63,18 @@ export const queryKeys = {
   adminWeChatPlatformCerts: () => ["admin-wechat-platform-certs"] as const,
   adminPaymentReconcile: (orderNo: string) =>
     ["admin-payment-reconcile", { orderNo }] as const,
+
+  feedbackTicketsRoot: () => ["feedback-tickets"] as const,
+  feedbackTickets: (page: number, pageSize: number) =>
+    ["feedback-tickets", { page, pageSize }] as const,
+
+  adminFeedbackTicketsRoot: () => ["admin-feedback-tickets"] as const,
+  adminFeedbackTickets: (
+    page: number,
+    pageSize: number,
+    status: string | null,
+    keyword: string | null
+  ) => ["admin-feedback-tickets", { page, pageSize, status, keyword }] as const,
 
   newsCategories: () => ["news-categories"] as const,
   newsList: (

@@ -20,6 +20,7 @@ from ..models.lawfirm import (
 )
 from ..models.payment import PaymentOrder, PaymentStatus, UserBalance, BalanceTransaction
 from ..models.user import User
+from ..services.settlement_service import settlement_service
 from ..schemas.lawfirm import (
     LawFirmCreate, LawFirmUpdate, LawFirmResponse, LawFirmListResponse,
     LawyerCreate, LawyerResponse, LawyerListResponse,
@@ -776,6 +777,12 @@ async def lawyer_complete_consultation(
     await db.refresh(consultation)
 
     order = await _get_latest_consultation_order_any(db, int(consultation.id))
+
+    _ = await settlement_service.ensure_income_record_for_completed_consultation(
+        db,
+        consultation,
+        order,
+    )
 
     return ConsultationResponse(
         id=consultation.id,

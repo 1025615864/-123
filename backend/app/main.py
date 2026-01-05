@@ -119,6 +119,32 @@ async def lifespan(app: FastAPI):
             )
         )
 
+    settlement_enabled_raw = os.getenv("SETTLEMENT_JOB_ENABLED", "").strip().lower()
+    settlement_enabled_flag = settlement_enabled_raw in {"1", "true", "yes", "on"}
+    settlement_enabled = bool(settlement_enabled_flag) or bool(settings.debug)
+    if (not settings.debug) and (not redis_connected):
+        settlement_enabled = False
+
+    async def _settlement_job_wrapper() -> object:
+        async with AsyncSessionLocal() as session:
+            from .services.settlement_service import settlement_service
+
+            return await settlement_service.settle_due_income_records(session)
+
+    settlement_task: asyncio.Task[None] | None = None
+    if settlement_enabled:
+        settlement_interval_seconds = float(
+            os.getenv("SETTLEMENT_JOB_INTERVAL_SECONDS", "3600").strip() or "3600"
+        )
+        settlement_task = asyncio.create_task(
+            runner.run(
+                lock_key="locks:settlement",
+                lock_ttl_seconds=60,
+                interval_seconds=settlement_interval_seconds,
+                job=_settlement_job_wrapper,
+            )
+        )
+
     wechatpay_refresh_enabled_raw = os.getenv("WECHATPAY_CERT_REFRESH_ENABLED", "").strip().lower()
     wechatpay_refresh_enabled = wechatpay_refresh_enabled_raw in {"1", "true", "yes", "on"}
     if (not settings.debug) and (not redis_connected):
@@ -189,7 +215,7 @@ async def lifespan(app: FastAPI):
     yield
 
     stop_event.set()
-    for t in (scheduled_task, rss_task, news_ai_task, wechatpay_task):
+    for t in (scheduled_task, rss_task, news_ai_task, wechatpay_task, settlement_task):
         if t is None:
             continue
         _ = t.cancel()

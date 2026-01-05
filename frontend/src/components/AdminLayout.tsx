@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Outlet, Link, useLocation, Navigate } from 'react-router-dom'
 import { 
   LayoutDashboard, Users, Newspaper, Building2, 
-  Settings, LogOut, Scale, ChevronRight, Database, FileQuestion, Flame, FileText, Bell, Layers, MessageSquare, Rss, Activity, Shield, CreditCard 
+  Settings, LogOut, Scale, ChevronRight, Database, FileQuestion, Flame, FileText, Bell, Layers, MessageSquare, Rss, Activity, Shield, CreditCard, BarChart3 
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
 
@@ -47,6 +47,9 @@ const sidebarItems: SidebarItem[] = [
   { icon: FileQuestion, label: '咨询模板', path: '/admin/templates' },
   { icon: FileText, label: '操作日志', path: '/admin/logs' },
   { icon: Bell, label: '通知管理', path: '/admin/notifications' },
+  { icon: MessageSquare, label: '客服反馈', path: '/admin/feedback' },
+  { icon: CreditCard, label: '提现审核', path: '/admin/withdrawals' },
+  { icon: BarChart3, label: '结算统计', path: '/admin/settlement-stats' },
   { icon: CreditCard, label: '支付回调', path: '/admin/payment-callbacks' },
   { icon: Settings, label: '系统设置', path: '/admin/settings' },
 ]
