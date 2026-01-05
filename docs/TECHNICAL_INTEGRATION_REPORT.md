@@ -452,7 +452,7 @@ E2E 注意事项（常见失败原因）：
 - 热门新闻榜单为排序 + limit 场景，E2E 通过 DEBUG 管理接口一次性准备数据：`POST /api/news/admin/{news_id}/debug/set-view-count`（仅 `debug=true` 可用）。
 - 移动端底部导航与“更多”弹层入口随导航结构调整：论坛入口在底部导航，工具类（如日历）在“更多”弹层。
 
-最新一次回归结果（2026-01-06）：后端 pytest 95 passed；Playwright E2E `73 passed, 0 failed`；pyright / basedpyright `0 errors/warnings`。
+最新一次回归结果（2026-01-06）：后端 pytest 95 passed；Playwright E2E `76 passed, 0 failed`；pyright / basedpyright `0 errors/warnings`。
 
 ---
 

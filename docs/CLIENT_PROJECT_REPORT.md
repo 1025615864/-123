@@ -256,7 +256,7 @@
   - 已提供 Playwright E2E 覆盖关键业务链路（新闻/论坛/律所/支付/移动端回归等）。
   - 最新一次回归结果（2026-01-06）：
     - 后端 pytest：`95 passed`
-    - Playwright E2E：`73 passed, 0 failed`
+    - Playwright E2E：`76 passed, 0 failed`
     - pyright / basedpyright：`0 errors/warnings`
   - 说明：为保证回归稳定性，部分榜单类能力（如热门新闻）在测试环境下使用专用调试接口进行数据准备。
 
