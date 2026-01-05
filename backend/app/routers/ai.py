@@ -629,7 +629,8 @@ async def chat_with_ai_stream(
             yield f"event: references\ndata: {json.dumps({'references': refs}, ensure_ascii=False)}\n\n"
 
             if e2e_stream_scenario == "scroll":
-                yield f"event: content\ndata: {json.dumps({'text': '根据《民法典》第1条，以下为滚动测试内容：\n'}, ensure_ascii=False)}\n\n"
+                scroll_intro = "根据《民法典》第1条，以下为滚动测试内容：\n"
+                yield f"event: content\ndata: {json.dumps({'text': scroll_intro}, ensure_ascii=False)}\n\n"
 
                 lines = [f"{i}-内容\n" for i in range(1, 201)]
                 batch_size = 12
