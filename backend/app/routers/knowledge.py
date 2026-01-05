@@ -19,6 +19,8 @@ from ..schemas.knowledge import (
     BatchVectorizeRequest,
     BatchDeleteRequest,
     BatchOperationResponse,
+    BatchImportKnowledgeRequest,
+    BatchImportKnowledgeResponse,
 )
 from ..services.knowledge_service import get_knowledge_service, KnowledgeService
 from ..utils.deps import require_admin, get_current_user_optional
@@ -138,6 +140,30 @@ async def batch_delete_knowledge(
         success_count=success,
         failed_count=failed,
         message=f"成功删除 {success} 条，失败 {failed} 条",
+    )
+
+
+@router.post("/laws/batch-import", response_model=BatchImportKnowledgeResponse)
+async def batch_import_knowledge(
+    data: BatchImportKnowledgeRequest,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    service: Annotated[KnowledgeService, Depends(get_knowledge_service)],
+    current_user: Annotated[User, Depends(require_admin)],
+):
+    _ = current_user
+
+    if data.dry_run:
+        return BatchImportKnowledgeResponse(
+            success_count=0,
+            failed_count=0,
+            message=f"校验通过：共 {len(data.items)} 条（dry_run 未写入）",
+        )
+
+    success, failed = await service.batch_import_knowledge(db, data.items)
+    return BatchImportKnowledgeResponse(
+        success_count=success,
+        failed_count=failed,
+        message=f"导入完成：成功 {success} 条，失败 {failed} 条",
     )
 
 
@@ -527,8 +553,8 @@ class BatchImportRequest(BaseModel):
     items: list[BatchImportItem]
 
 
-@router.post("/laws/batch-import")
-async def batch_import_knowledge(
+@router.post("/laws/batch-import-legacy")
+async def batch_import_knowledge_legacy(
     data: BatchImportRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
     service: Annotated[KnowledgeService, Depends(get_knowledge_service)],

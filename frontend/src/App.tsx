@@ -23,6 +23,11 @@ const LawFirmPage = lazy(() => import("./pages/LawFirmPage"));
 const SearchPage = lazy(() => import("./pages/SearchPage"));
 const NotificationsFrontPage = lazy(() => import("./pages/NotificationsPage"));
 const OrdersHubPage = lazy(() => import("./pages/OrdersHubPage"));
+const FeedbackPage = lazy(() => import("./pages/FeedbackPage"));
+const LawyerIncomePage = lazy(() => import("./pages/LawyerIncomePage"));
+const LawyerWithdrawPage = lazy(() => import("./pages/LawyerWithdrawPage"));
+const LawyerWithdrawalsPage = lazy(() => import("./pages/LawyerWithdrawalsPage"));
+const LawyerBankAccountsPage = lazy(() => import("./pages/LawyerBankAccountsPage"));
 const LoginPage = lazy(() => import("./pages/LoginPage"));
 const RegisterPage = lazy(() => import("./pages/RegisterPage"));
 const TermsPage = lazy(() => import("./pages/TermsPage"));
@@ -81,6 +86,9 @@ const LawyerVerificationsPage = lazy(() => import("./pages/admin/LawyerVerificat
 const LogsPage = lazy(() => import("./pages/admin/LogsPage"));
 const NotificationsPage = lazy(() => import("./pages/admin/NotificationsPage"));
 const PaymentCallbacksPage = lazy(() => import("./pages/admin/PaymentCallbacksPage"));
+const FeedbackTicketsPage = lazy(() => import("./pages/admin/FeedbackTicketsPage"));
+const WithdrawalsPage = lazy(() => import("./pages/admin/WithdrawalsPage"));
+const SettlementStatsPage = lazy(() => import("./pages/admin/SettlementStatsPage"));
 
 // 加载中组件
 function PageLoading() {
@@ -119,6 +127,9 @@ function App() {
                 <Route path="logs" element={<LogsPage />} />
                 <Route path="notifications" element={<NotificationsPage />} />
                 <Route path="payment-callbacks" element={<PaymentCallbacksPage />} />
+                <Route path="feedback" element={<FeedbackTicketsPage />} />
+                <Route path="withdrawals" element={<WithdrawalsPage />} />
+                <Route path="settlement-stats" element={<SettlementStatsPage />} />
                 <Route path="*" element={<NotFoundPage />} />
               </Route>
 
@@ -142,6 +153,7 @@ function App() {
                   path="notifications"
                   element={<NotificationsFrontPage />}
                 />
+                <Route path="feedback" element={<FeedbackPage />} />
                 <Route path="orders" element={<OrdersHubPage />} />
                 <Route path="news" element={<NewsPage />} />
                 <Route
@@ -154,6 +166,10 @@ function App() {
                 <Route path="lawfirm" element={<LawFirmPage />} />
                 <Route path="lawyer/verification" element={<LawyerVerificationPage />} />
                 <Route path="lawyer" element={<LawyerDashboardPage />} />
+                <Route path="lawyer/income" element={<LawyerIncomePage />} />
+                <Route path="lawyer/withdraw" element={<LawyerWithdrawPage />} />
+                <Route path="lawyer/withdrawals" element={<LawyerWithdrawalsPage />} />
+                <Route path="lawyer/bank-accounts" element={<LawyerBankAccountsPage />} />
                 <Route
                   path="lawfirm/consultations"
                   element={<Navigate to="/orders?tab=consultations" replace />}

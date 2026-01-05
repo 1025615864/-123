@@ -299,7 +299,13 @@ export default function PostDetailPage() {
   }, [postId, isDeletedView, user?.id, isAuthenticated]);
 
   const postQuery = useQuery({
-    queryKey: [...postQueryKey, { deleted: isDeletedView }] as const,
+    queryKey: [
+      ...postQueryKey,
+      {
+        deleted: isDeletedView,
+        viewer: isAuthenticated ? user?.id ?? null : null,
+      },
+    ] as const,
     queryFn: async () => {
       const url = isDeletedView
         ? `/forum/posts/${postId}/recycle`

@@ -2,9 +2,9 @@
 
 项目名称：百姓法律助手（百姓助手）
 
-版本：v1.0
+版本：v1.1
 
-更新时间：2026-01-04
+更新时间：2026-01-06
 
 适用对象：甲方研发/运维/安全/测试工程师
 
@@ -75,6 +75,7 @@
     - `/search`（全局搜索）
     - `/notifications`（通知系统）
     - `/payment`（支付订单）
+    - `/lawyer`（律师结算/提现：钱包、收入、收款账户、提现申请）
     - `/calendar`（法律日历）
     - `/system`（系统配置/运维状态/日志）
     - `/admin`（统计与导出等管理后台 API）
@@ -87,6 +88,10 @@
     - `/news` 新闻列表与详情
     - `/forum` 论坛
     - `/lawfirm` 律所
+    - `/orders` 我的订单 / 我的预约（统一入口，tab 切换）
+    - `/lawfirm/consultations` 律师预约（兼容入口：会重定向到 `/orders?tab=consultations`）
+    - `/lawyer/verification` 律师认证申请
+    - `/lawyer` 律师工作台
     - `/documents` 文书生成
     - `/calendar` 法律日历
     - `/notifications` 通知
@@ -314,14 +319,39 @@
      - `platform_certs_json`：粘贴平台证书 JSON（需为后端 `dump_platform_certs_json` 的输出格式）。
      - `cert_pem`：粘贴单个证书 PEM（可选传 `serial_no` / `expire_time`）。
 
-### 5.12 法律日历（/api/calendar）
+### 5.12 律师结算与商业化（/api/lawyer + /api/admin + /api/user/me/quotas）
+
+- 律师侧（需 `lawyer` 权限）
+
+  - 钱包：`GET /api/lawyer/wallet`
+  - 收入明细：`GET /api/lawyer/income-records`
+  - 导出收入：`GET /api/lawyer/income-records/export`
+  - 收款账户：`GET /api/lawyer/bank-accounts` / `POST /api/lawyer/bank-accounts` / `DELETE /api/lawyer/bank-accounts/{id}`
+  - 提现：`GET /api/lawyer/withdrawals` / `POST /api/lawyer/withdrawals`
+
+- 管理员侧（需 `admin` 权限）
+
+  - 提现申请：`GET /api/admin/withdrawals` / `GET /api/admin/withdrawals/{id}`
+  - 提现审核与打款状态：`POST /api/admin/withdrawals/{id}/approve|reject|complete|fail`
+  - 结算统计：`GET /api/admin/settlement-stats`
+  - CSV 导出：
+    - 提现：`GET /api/admin/withdrawals/export`
+    - 收入：`GET /api/admin/income-records/export`
+
+- 商业化与配额
+  - 配额查询：`GET /api/user/me/quotas`
+  - 下单购买：`POST /api/payment/orders`（`order_type=vip|ai_pack`）
+    - `vip`：购买会员（天数/价格由 SystemConfig 可配置）
+    - `ai_pack`：购买次数包（AI 咨询/文书生成；价格/可选包由 SystemConfig 可配置）
+
+### 5.13 法律日历（/api/calendar）
 
 - 创建提醒：`POST /api/calendar/reminders`
 - 列表：`GET /api/calendar/reminders`
 - 更新：`PUT /api/calendar/reminders/{id}`
 - 删除：`DELETE /api/calendar/reminders/{id}`
 
-### 5.13 WebSocket
+### 5.14 WebSocket
 
 - 连接：`ws://<host>/ws?token=<jwt>`
 - 状态：`GET /ws/status`
@@ -422,7 +452,7 @@ E2E 注意事项（常见失败原因）：
 - 热门新闻榜单为排序 + limit 场景，E2E 通过 DEBUG 管理接口一次性准备数据：`POST /api/news/admin/{news_id}/debug/set-view-count`（仅 `debug=true` 可用）。
 - 移动端底部导航与“更多”弹层入口随导航结构调整：论坛入口在底部导航，工具类（如日历）在“更多”弹层。
 
-最新一次回归结果（2026-01-04）：后端 pytest 83 passed；Playwright E2E `73 passed, 0 failed`。
+最新一次回归结果（2026-01-06）：后端 pytest 95 passed；Playwright E2E `73 passed, 0 failed`；pyright / basedpyright `0 errors/warnings`。
 
 ---
 
@@ -451,7 +481,8 @@ E2E 注意事项（常见失败原因）：
   - `/news` 新闻
   - `/forum` 论坛
   - `/lawfirm` 律所
-  - `/lawfirm/consultations` 律师预约（用户侧）
+  - `/orders` 我的订单 / 我的预约（统一入口，tab 切换）
+  - `/lawfirm/consultations` 律师预约（用户侧，兼容入口：会重定向到 `/orders?tab=consultations`）
   - `/lawyer/verification` 律师认证申请（用户侧）
   - `/lawyer` 律师工作台（律师侧，仅律师可见入口）
   - `/documents` 文书生成
@@ -488,6 +519,7 @@ E2E 注意事项（常见失败原因）：
 ### 11.2 关键页面入口
 
 - 用户侧律师认证申请：`/lawyer/verification`
+- 用户侧我的订单/我的预约（统一入口）：`/orders`
 - 律师工作台：`/lawyer`
   - 入口仅在用户角色为 `lawyer` 时展示（目前在个人中心页面中显示）。
 - 管理端律师认证审核：`/admin/lawyer-verifications`
@@ -515,7 +547,7 @@ E2E 注意事项（常见失败原因）：
 - 普通用户：
 
   - 登录后访问 `/lawyer/verification` 可查看/提交认证申请。
-  - 在律所详情页发起预约并完成支付后，在 `/lawfirm/consultations` 中看到状态为 `confirmed` 且支付状态为 `paid`。
+  - 在律所详情页发起预约并完成支付后，在 `/orders?tab=consultations` 中看到状态为 `confirmed` 且支付状态为 `paid`。（兼容入口：`/lawfirm/consultations` 会重定向到该页面）
 
 - 管理员：
 
@@ -570,7 +602,7 @@ E2E 注意事项（常见失败原因）：
 
 - 使用任一“普通用户”账号进入某个律所详情页并预约律师（例如 `lawyer1`）
 - 在弹窗内选择“余额支付”完成支付
-- 进入 `/lawfirm/consultations`：
+- 进入 `/orders?tab=consultations`：
   - 应看到该预约 `payment_status=paid`
   - `status` 为 `confirmed`
 

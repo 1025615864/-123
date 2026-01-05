@@ -193,9 +193,17 @@ export default function LawyerDashboardPage() {
         layout="mdStart"
         tone={actualTheme}
         right={
-          <Button variant="outline" onClick={() => listQuery.refetch()} disabled={listQuery.isFetching}>
-            刷新
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => (window.location.href = '/lawyer/income')}>
+              收入
+            </Button>
+            <Button variant="outline" onClick={() => (window.location.href = '/lawyer/withdraw')}>
+              提现
+            </Button>
+            <Button variant="outline" onClick={() => listQuery.refetch()} disabled={listQuery.isFetching}>
+              刷新
+            </Button>
+          </div>
         }
       />
 

@@ -59,6 +59,7 @@ async def init_db() -> None:
     """初始化数据库表"""
     for module_name in (
         "app.models.user",
+        "app.models.user_quota",
         "app.models.user_consent",
         "app.models.consultation",
         "app.models.forum",
@@ -66,11 +67,13 @@ async def init_db() -> None:
         "app.models.news_ai",
         "app.models.news_workbench",
         "app.models.lawfirm",
+        "app.models.settlement",
         "app.models.knowledge",
         "app.models.notification",
         "app.models.payment",
         "app.models.system",
         "app.models.calendar",
+        "app.models.feedback",
     ):
         _ = importlib.import_module(module_name)
     async with engine.begin() as conn:

@@ -22,16 +22,29 @@ import {
   ExternalLink,
   Edit,
   Trash2,
+  Sparkles,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import api from "../api/client";
 import { useAppMutation, useToast } from "../hooks";
-import { Card, Button, Input, Modal, Loading, EmptyState, FadeInImage, Pagination, Textarea, Badge } from "../components/ui";
+import {
+  Card,
+  Button,
+  Input,
+  Modal,
+  Loading,
+  EmptyState,
+  FadeInImage,
+  Pagination,
+  Textarea,
+  Badge,
+} from "../components/ui";
 import PageHeader from "../components/PageHeader";
 import { useTheme } from "../contexts/ThemeContext";
 import type { Post } from "../types";
 import { getApiErrorMessage } from "../utils";
+import { queryKeys } from "../queryKeys";
 
 export default function ProfilePage() {
   const { user } = useAuth();
@@ -39,6 +52,30 @@ export default function ProfilePage() {
   const toast = useToast();
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  type PricingPackItem = { count: number; price: number };
+  type PricingResp = {
+    vip: { days: number; price: number };
+    packs: {
+      ai_chat: PricingPackItem[];
+      document_generate: PricingPackItem[];
+    };
+  };
+
+  const pricingQuery = useQuery({
+    queryKey: ["payment-pricing"],
+    queryFn: async () => {
+      const res = await api.get("/payment/pricing");
+      return res.data as PricingResp;
+    },
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  });
+
+  const vipPlan = pricingQuery.data?.vip;
+  const vipDays = Number(vipPlan?.days || 30);
+  const vipPrice = Number(vipPlan?.price || 29);
 
   const vipExpiresAt = useMemo(() => {
     const raw = user?.vip_expires_at;
@@ -53,20 +90,26 @@ export default function ProfilePage() {
     return vipExpiresAt.getTime() > Date.now();
   }, [vipExpiresAt]);
 
-  const buyVipMutation = useAppMutation<any, { payment_method: "balance" | "alipay" }>({
+  const buyVipMutation = useAppMutation<
+    any,
+    { payment_method: "balance" | "alipay" }
+  >({
     mutationFn: async ({ payment_method }) => {
       const createRes = await api.post("/payment/orders", {
         order_type: "vip",
-        amount: 9.9,
+        amount: vipPrice,
         title: "VIP会员",
         description: "VIP会员",
       });
       const orderNo = String(createRes.data?.order_no || "").trim();
       if (!orderNo) throw new Error("未获取到订单号");
 
-      const payRes = await api.post(`/payment/orders/${encodeURIComponent(orderNo)}/pay`, {
-        payment_method,
-      });
+      const payRes = await api.post(
+        `/payment/orders/${encodeURIComponent(orderNo)}/pay`,
+        {
+          payment_method,
+        }
+      );
 
       return { order_no: orderNo, ...(payRes.data || {}) };
     },
@@ -77,8 +120,14 @@ export default function ProfilePage() {
     if (!user) return;
     if (buyVipMutation.isPending) return;
 
-    const useBalance = window.confirm("开通/续费 VIP：确定使用余额支付吗？取消将使用支付宝支付");
-    const payment_method: "balance" | "alipay" = useBalance ? "balance" : "alipay";
+    const useBalance = window.confirm(
+      `开通/续费 VIP（${vipDays}天 ¥${vipPrice.toFixed(
+        2
+      )}）：确定使用余额支付吗？取消将使用支付宝支付`
+    );
+    const payment_method: "balance" | "alipay" = useBalance
+      ? "balance"
+      : "alipay";
 
     buyVipMutation.mutate(
       { payment_method },
@@ -97,6 +146,113 @@ export default function ProfilePage() {
 
           toast.success("开通成功");
           queryClient.invalidateQueries({ queryKey: ["user-me"] as any });
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.userMeQuotas() as any,
+          });
+        },
+      }
+    );
+  };
+
+  type PackRelatedType = "ai_chat" | "document_generate";
+
+  const [showPackModal, setShowPackModal] = useState(false);
+  const [packRelatedType, setPackRelatedType] =
+    useState<PackRelatedType>("ai_chat");
+
+  const buyPackMutation = useAppMutation<
+    any,
+    {
+      pack_count: number;
+      related_type: PackRelatedType;
+      amount: number;
+      payment_method: "balance" | "alipay";
+    }
+  >({
+    mutationFn: async ({
+      pack_count,
+      related_type,
+      amount,
+      payment_method,
+    }) => {
+      const title =
+        related_type === "document_generate"
+          ? `文书生成次数包（${pack_count}次）`
+          : `AI咨询次数包（${pack_count}次）`;
+      const description =
+        related_type === "document_generate"
+          ? "文书生成次数包"
+          : "AI咨询次数包";
+
+      const createRes = await api.post("/payment/orders", {
+        order_type: "ai_pack",
+        amount: Number.isFinite(amount) && amount > 0 ? amount : 0.01,
+        title,
+        description,
+        related_id: pack_count,
+        related_type,
+      });
+      const orderNo = String(createRes.data?.order_no || "").trim();
+      if (!orderNo) throw new Error("未获取到订单号");
+
+      const payRes = await api.post(
+        `/payment/orders/${encodeURIComponent(orderNo)}/pay`,
+        { payment_method }
+      );
+      return { order_no: orderNo, ...(payRes.data || {}) };
+    },
+    errorMessageFallback: "购买失败，请稍后重试",
+  });
+
+  const handleBuyPack = (related_type: PackRelatedType) => {
+    if (!user) return;
+    if (buyPackMutation.isPending) return;
+
+    setPackRelatedType(related_type);
+    setShowPackModal(true);
+  };
+
+  const handleConfirmBuyPack = (opt: PricingPackItem) => {
+    if (!user) return;
+    if (buyPackMutation.isPending) return;
+
+    const label =
+      packRelatedType === "document_generate" ? "文书生成" : "AI 咨询";
+    const useBalance = window.confirm(
+      `购买${label}次数包（${opt.count}次 ¥${Number(opt.price || 0).toFixed(
+        2
+      )}）：确定使用余额支付吗？取消将使用支付宝支付`
+    );
+    const payment_method: "balance" | "alipay" = useBalance
+      ? "balance"
+      : "alipay";
+
+    buyPackMutation.mutate(
+      {
+        pack_count: opt.count,
+        related_type: packRelatedType,
+        amount: Number(opt.price || 0),
+        payment_method,
+      },
+      {
+        onSuccess: async (data) => {
+          if (payment_method === "alipay") {
+            const url = String((data as any)?.pay_url || "").trim();
+            if (url) {
+              window.open(url, "_blank", "noopener,noreferrer");
+              toast.success("已打开支付宝支付页面");
+            } else {
+              toast.error("未获取到支付链接");
+            }
+            return;
+          }
+
+          toast.success("购买成功");
+          setShowPackModal(false);
+          queryClient.invalidateQueries({ queryKey: ["user-me"] as any });
+          queryClient.invalidateQueries({
+            queryKey: queryKeys.userMeQuotas() as any,
+          });
         },
       }
     );
@@ -144,10 +300,21 @@ export default function ProfilePage() {
     category: "法律咨询",
   });
 
-  const statsQueryKey = useMemo(() => ["user-me-stats", user?.id] as const, [user?.id]);
-  const favoritesQueryKey = useMemo(() => ["forum-favorites", user?.id, { page: 1, page_size: 5 }] as const, [user?.id]);
+  const statsQueryKey = useMemo(
+    () => ["user-me-stats", user?.id] as const,
+    [user?.id]
+  );
+  const favoritesQueryKey = useMemo(
+    () => ["forum-favorites", user?.id, { page: 1, page_size: 5 }] as const,
+    [user?.id]
+  );
   const myPostsQueryKey = useMemo(
-    () => ["forum-me-posts", user?.id, { page: myPostsPage, page_size: myPostsPageSize }] as const,
+    () =>
+      [
+        "forum-me-posts",
+        user?.id,
+        { page: myPostsPage, page_size: myPostsPageSize },
+      ] as const,
     [myPostsPage, myPostsPageSize, user?.id]
   );
 
@@ -155,7 +322,11 @@ export default function ProfilePage() {
     queryKey: statsQueryKey,
     queryFn: async () => {
       const res = await api.get("/user/me/stats");
-      return (res.data || { post_count: 0, favorite_count: 0, comment_count: 0 }) as {
+      return (res.data || {
+        post_count: 0,
+        favorite_count: 0,
+        comment_count: 0,
+      }) as {
         post_count: number;
         favorite_count: number;
         comment_count: number;
@@ -170,7 +341,9 @@ export default function ProfilePage() {
   const favoritesQuery = useQuery({
     queryKey: favoritesQueryKey,
     queryFn: async () => {
-      const res = await api.get("/forum/favorites", { params: { page: 1, page_size: 5 } });
+      const res = await api.get("/forum/favorites", {
+        params: { page: 1, page_size: 5 },
+      });
       const items = res.data?.items ?? [];
       return (Array.isArray(items) ? items : []) as Post[];
     },
@@ -206,9 +379,15 @@ export default function ProfilePage() {
 
   const myPosts = myPostsQuery.data?.items ?? [];
   const myPostsTotal = myPostsQuery.data?.total ?? 0;
-  const myPostsTotalPages = Math.max(1, Math.ceil(myPostsTotal / myPostsPageSize));
-  const myPostsError = myPostsQuery.isError ? getApiErrorMessage(myPostsQuery.error, "我的帖子加载失败") : null;
-  const myPostsLoading = (myPostsQuery.isLoading || myPostsQuery.isFetching) && myPosts.length === 0;
+  const myPostsTotalPages = Math.max(
+    1,
+    Math.ceil(myPostsTotal / myPostsPageSize)
+  );
+  const myPostsError = myPostsQuery.isError
+    ? getApiErrorMessage(myPostsQuery.error, "我的帖子加载失败")
+    : null;
+  const myPostsLoading =
+    (myPostsQuery.isLoading || myPostsQuery.isFetching) && myPosts.length === 0;
 
   const loadUserStats = useCallback(() => {
     queryClient.refetchQueries({ queryKey: statsQueryKey as any });
@@ -233,20 +412,37 @@ export default function ProfilePage() {
     if (statsQuery.data) {
       setUserStats(statsQuery.data);
     }
-  }, [statsQuery.data, statsQuery.error, statsQuery.isError, statsQuery.isFetching, statsQuery.isLoading]);
+  }, [
+    statsQuery.data,
+    statsQuery.error,
+    statsQuery.isError,
+    statsQuery.isFetching,
+    statsQuery.isLoading,
+  ]);
 
   useEffect(() => {
     setFavoritesLoading(favoritesQuery.isLoading || favoritesQuery.isFetching);
     if (favoritesQuery.isError) {
-      setFavoritesError(getApiErrorMessage(favoritesQuery.error, "收藏内容加载失败"));
+      setFavoritesError(
+        getApiErrorMessage(favoritesQuery.error, "收藏内容加载失败")
+      );
       setFavorites([]);
       return;
     }
     setFavoritesError(null);
     setFavorites(favoritesQuery.data ?? []);
-  }, [favoritesQuery.data, favoritesQuery.error, favoritesQuery.isError, favoritesQuery.isFetching, favoritesQuery.isLoading]);
+  }, [
+    favoritesQuery.data,
+    favoritesQuery.error,
+    favoritesQuery.isError,
+    favoritesQuery.isFetching,
+    favoritesQuery.isLoading,
+  ]);
 
-  const toggleFavoriteMutation = useAppMutation<{ favorited?: boolean }, number>({
+  const toggleFavoriteMutation = useAppMutation<
+    { favorited?: boolean },
+    number
+  >({
     mutationFn: async (postId: number) => {
       const res = await api.post(`/forum/posts/${postId}/favorite`);
       return res.data as { favorited?: boolean };
@@ -254,10 +450,15 @@ export default function ProfilePage() {
     errorMessageFallback: "操作失败，请稍后重试",
     onSuccess: (result, postId) => {
       if (result?.favorited === false) {
-        queryClient.setQueryData<Post[]>(favoritesQueryKey as any, (old) => (Array.isArray(old) ? old.filter((p) => p.id !== postId) : old));
+        queryClient.setQueryData<Post[]>(favoritesQueryKey as any, (old) =>
+          Array.isArray(old) ? old.filter((p) => p.id !== postId) : old
+        );
         queryClient.setQueryData(statsQueryKey as any, (old: any) => {
           if (!old) return old;
-          return { ...old, favorite_count: Math.max(0, Number(old.favorite_count || 0) - 1) };
+          return {
+            ...old,
+            favorite_count: Math.max(0, Number(old.favorite_count || 0) - 1),
+          };
         });
         setFavorites((prev) => prev.filter((p) => p.id !== postId));
         setUserStats((prev) => ({
@@ -298,15 +499,16 @@ export default function ProfilePage() {
     });
   };
 
-  const updateMyPostMutation = useAppMutation<Post, { id: number; title: string; content: string; category: string }>({
+  const updateMyPostMutation = useAppMutation<
+    Post,
+    { id: number; title: string; content: string; category: string }
+  >({
     mutationFn: async (payload) => {
-      const res = await api.put(`/forum/posts/${payload.id}`,
-        {
-          title: payload.title,
-          content: payload.content,
-          category: payload.category,
-        }
-      );
+      const res = await api.put(`/forum/posts/${payload.id}`, {
+        title: payload.title,
+        content: payload.content,
+        category: payload.category,
+      });
       return res.data as Post;
     },
     successMessage: "更新成功",
@@ -314,7 +516,9 @@ export default function ProfilePage() {
     onSuccess: (updated) => {
       queryClient.setQueryData(myPostsQueryKey as any, (old: any) => {
         if (!old) return old;
-        const nextItems = Array.isArray(old.items) ? old.items.map((p: Post) => (p.id === updated.id ? updated : p)) : old.items;
+        const nextItems = Array.isArray(old.items)
+          ? old.items.map((p: Post) => (p.id === updated.id ? updated : p))
+          : old.items;
         return { ...old, items: nextItems };
       });
       closeEditPost();
@@ -330,14 +534,19 @@ export default function ProfilePage() {
     onSuccess: (_, id) => {
       queryClient.setQueryData(myPostsQueryKey as any, (old: any) => {
         if (!old) return old;
-        const nextItems = Array.isArray(old.items) ? old.items.filter((p: Post) => p.id !== id) : old.items;
+        const nextItems = Array.isArray(old.items)
+          ? old.items.filter((p: Post) => p.id !== id)
+          : old.items;
         const nextTotal = Math.max(0, Number(old.total || 0) - 1);
         return { ...old, items: nextItems, total: nextTotal };
       });
 
       queryClient.setQueryData(statsQueryKey as any, (old: any) => {
         if (!old) return old;
-        return { ...old, post_count: Math.max(0, Number(old.post_count || 0) - 1) };
+        return {
+          ...old,
+          post_count: Math.max(0, Number(old.post_count || 0) - 1),
+        };
       });
       setUserStats((prev) => ({
         ...prev,
@@ -483,7 +692,10 @@ export default function ProfilePage() {
     updateProfileMutation.mutate(formData);
   };
 
-  const changePasswordMutation = useAppMutation<void, { old_password: string; new_password: string }>({
+  const changePasswordMutation = useAppMutation<
+    void,
+    { old_password: string; new_password: string }
+  >({
     mutationFn: async (payload) => {
       await api.put("/user/me/password", payload);
     },
@@ -527,11 +739,27 @@ export default function ProfilePage() {
       value: userStats.post_count,
       color: "text-blue-600 dark:text-blue-400",
     },
-    { icon: Heart, label: "收藏内容", value: userStats.favorite_count, color: "text-pink-600 dark:text-pink-400" },
-    { icon: Clock, label: "评论数", value: userStats.comment_count, color: "text-emerald-600 dark:text-green-400" },
+    {
+      icon: Heart,
+      label: "收藏内容",
+      value: userStats.favorite_count,
+      color: "text-pink-600 dark:text-pink-400",
+    },
+    {
+      icon: Clock,
+      label: "评论数",
+      value: userStats.comment_count,
+      color: "text-emerald-600 dark:text-green-400",
+    },
   ];
 
-  const postCategories = ["法律咨询", "经验分享", "案例讨论", "政策解读", "其他"];
+  const postCategories = [
+    "法律咨询",
+    "经验分享",
+    "案例讨论",
+    "政策解读",
+    "其他",
+  ];
 
   // 格式化日期
   const formatDate = (dateString: string) => {
@@ -550,8 +778,12 @@ export default function ProfilePage() {
           <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-gradient-to-br from-amber-500/20 to-orange-500/10 flex items-center justify-center">
             <Shield className="h-10 w-10 text-amber-600 dark:text-amber-400" />
           </div>
-          <h2 className="text-xl font-semibold text-slate-900 mb-2 dark:text-white">请先登录</h2>
-          <p className="text-slate-600 dark:text-white/50">登录后即可查看和编辑个人信息</p>
+          <h2 className="text-xl font-semibold text-slate-900 mb-2 dark:text-white">
+            请先登录
+          </h2>
+          <p className="text-slate-600 dark:text-white/50">
+            登录后即可查看和编辑个人信息
+          </p>
         </Card>
       </div>
     );
@@ -609,7 +841,9 @@ export default function ProfilePage() {
               <h3 className="text-2xl font-bold text-slate-900 mb-1 dark:text-white">
                 {user.nickname || user.username}
               </h3>
-              <p className="text-slate-600 text-sm mb-4 dark:text-white/50">@{user.username}</p>
+              <p className="text-slate-600 text-sm mb-4 dark:text-white/50">
+                @{user.username}
+              </p>
 
               {/* 角色标签 */}
               <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-gradient-to-r from-amber-500/10 to-orange-500/10 border border-amber-500/20">
@@ -641,7 +875,9 @@ export default function ProfilePage() {
               ) : statsError ? (
                 <div className="col-span-3 flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
                   <div>{statsError}</div>
-                  <Button variant="outline" onClick={loadUserStats}>重试</Button>
+                  <Button variant="outline" onClick={loadUserStats}>
+                    重试
+                  </Button>
                 </div>
               ) : (
                 stats.map(({ icon: Icon, label, value, color }) => (
@@ -649,8 +885,12 @@ export default function ProfilePage() {
                     <div className="w-10 h-10 mx-auto mb-2 rounded-xl bg-slate-900/5 flex items-center justify-center group-hover:bg-slate-900/10 transition-colors dark:bg-white/5 dark:group-hover:bg-white/10">
                       <Icon className={`h-5 w-5 ${color}`} />
                     </div>
-                    <p className="text-xl font-bold text-slate-900 dark:text-white">{value}</p>
-                    <p className="text-xs text-slate-500 dark:text-white/40">{label}</p>
+                    <p className="text-xl font-bold text-slate-900 dark:text-white">
+                      {value}
+                    </p>
+                    <p className="text-xs text-slate-500 dark:text-white/40">
+                      {label}
+                    </p>
                   </div>
                 ))
               )}
@@ -659,12 +899,16 @@ export default function ProfilePage() {
 
           {/* 账户状态 */}
           <Card variant="surface" padding="md">
-            <h4 className="text-sm font-medium text-slate-600 mb-4 dark:text-white/60">账户状态</h4>
+            <h4 className="text-sm font-medium text-slate-600 mb-4 dark:text-white/60">
+              账户状态
+            </h4>
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Mail className="h-4 w-4 text-slate-400 dark:text-white/40" />
-                  <span className="text-sm text-slate-700 dark:text-white/70">邮箱验证</span>
+                  <span className="text-sm text-slate-700 dark:text-white/70">
+                    邮箱验证
+                  </span>
                 </div>
                 <div className="flex items-center gap-1 text-green-400">
                   <CheckCircle className="h-4 w-4" />
@@ -674,7 +918,9 @@ export default function ProfilePage() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Phone className="h-4 w-4 text-slate-400 dark:text-white/40" />
-                  <span className="text-sm text-slate-700 dark:text-white/70">手机绑定</span>
+                  <span className="text-sm text-slate-700 dark:text-white/70">
+                    手机绑定
+                  </span>
                 </div>
                 {user.phone ? (
                   <div className="flex items-center gap-1 text-green-400">
@@ -691,7 +937,9 @@ export default function ProfilePage() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Lock className="h-4 w-4 text-slate-400 dark:text-white/40" />
-                  <span className="text-sm text-slate-700 dark:text-white/70">账户安全</span>
+                  <span className="text-sm text-slate-700 dark:text-white/70">
+                    账户安全
+                  </span>
                 </div>
                 <div className="flex items-center gap-1 text-green-400">
                   <CheckCircle className="h-4 w-4" />
@@ -701,7 +949,9 @@ export default function ProfilePage() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Calendar className="h-4 w-4 text-slate-400 dark:text-white/40" />
-                  <span className="text-sm text-slate-700 dark:text-white/70">律师预约</span>
+                  <span className="text-sm text-slate-700 dark:text-white/70">
+                    律师预约
+                  </span>
                 </div>
                 <Link
                   to="/orders?tab=consultations"
@@ -715,7 +965,9 @@ export default function ProfilePage() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Shield className="h-4 w-4 text-slate-400 dark:text-white/40" />
-                  <span className="text-sm text-slate-700 dark:text-white/70">律师认证</span>
+                  <span className="text-sm text-slate-700 dark:text-white/70">
+                    律师认证
+                  </span>
                 </div>
                 <Link
                   to="/lawyer/verification"
@@ -730,7 +982,9 @@ export default function ProfilePage() {
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <MessageSquare className="h-4 w-4 text-slate-400 dark:text-white/40" />
-                    <span className="text-sm text-slate-700 dark:text-white/70">律师工作台</span>
+                    <span className="text-sm text-slate-700 dark:text-white/70">
+                      律师工作台
+                    </span>
                   </div>
                   <Link
                     to="/lawyer"
@@ -745,16 +999,22 @@ export default function ProfilePage() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Star className="h-4 w-4 text-slate-400 dark:text-white/40" />
-                  <span className="text-sm text-slate-700 dark:text-white/70">VIP会员</span>
+                  <span className="text-sm text-slate-700 dark:text-white/70">
+                    VIP会员
+                  </span>
                 </div>
                 <div className="flex items-center gap-2">
                   <span
                     className={`text-xs ${
-                      isVipActive ? "text-green-500" : "text-slate-500 dark:text-white/50"
+                      isVipActive
+                        ? "text-green-500"
+                        : "text-slate-500 dark:text-white/50"
                     }`}
                   >
                     {isVipActive
-                      ? `有效期至 ${vipExpiresAt ? vipExpiresAt.toLocaleDateString() : ""}`
+                      ? `有效期至 ${
+                          vipExpiresAt ? vipExpiresAt.toLocaleDateString() : ""
+                        }`
                       : "未开通"}
                   </span>
                   <button
@@ -771,8 +1031,46 @@ export default function ProfilePage() {
 
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-slate-400 dark:text-white/40" />
+                  <span className="text-sm text-slate-700 dark:text-white/70">
+                    AI咨询次数包
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleBuyPack("ai_chat")}
+                  disabled={buyPackMutation.isPending}
+                  className="text-amber-600 text-xs hover:text-amber-700 flex items-center gap-1 dark:text-amber-400 dark:hover:text-amber-300 disabled:opacity-50"
+                >
+                  购买
+                  <ExternalLink className="h-3 w-3" />
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
                   <FileText className="h-4 w-4 text-slate-400 dark:text-white/40" />
-                  <span className="text-sm text-slate-700 dark:text-white/70">我的订单</span>
+                  <span className="text-sm text-slate-700 dark:text-white/70">
+                    文书生成次数包
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleBuyPack("document_generate")}
+                  disabled={buyPackMutation.isPending}
+                  className="text-amber-600 text-xs hover:text-amber-700 flex items-center gap-1 dark:text-amber-400 dark:hover:text-amber-300 disabled:opacity-50"
+                >
+                  购买
+                  <ExternalLink className="h-3 w-3" />
+                </button>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <FileText className="h-4 w-4 text-slate-400 dark:text-white/40" />
+                  <span className="text-sm text-slate-700 dark:text-white/70">
+                    我的订单
+                  </span>
                 </div>
                 <Link
                   to="/orders?tab=payment"
@@ -785,8 +1083,26 @@ export default function ProfilePage() {
 
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
+                  <MessageSquare className="h-4 w-4 text-slate-400 dark:text-white/40" />
+                  <span className="text-sm text-slate-700 dark:text-white/70">
+                    客服反馈
+                  </span>
+                </div>
+                <Link
+                  to="/feedback"
+                  className="text-amber-600 text-xs hover:text-amber-700 flex items-center gap-1 dark:text-amber-400 dark:hover:text-amber-300"
+                >
+                  查看
+                  <ExternalLink className="h-3 w-3" />
+                </Link>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
                   <Bell className="h-4 w-4 text-slate-400 dark:text-white/40" />
-                  <span className="text-sm text-slate-700 dark:text-white/70">通知中心</span>
+                  <span className="text-sm text-slate-700 dark:text-white/70">
+                    通知中心
+                  </span>
                 </div>
                 <Link
                   to="/notifications"
@@ -809,8 +1125,12 @@ export default function ProfilePage() {
                 <User className="h-5 w-5 text-amber-600 dark:text-amber-400" />
               </div>
               <div>
-                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">基本信息</h3>
-                <p className="text-sm text-slate-600 dark:text-white/50">更新您的个人资料信息</p>
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+                  基本信息
+                </h3>
+                <p className="text-sm text-slate-600 dark:text-white/50">
+                  更新您的个人资料信息
+                </p>
               </div>
             </div>
 
@@ -875,15 +1195,21 @@ export default function ProfilePage() {
                 <Lock className="h-5 w-5 text-blue-400" />
               </div>
               <div>
-                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">安全设置</h3>
-                <p className="text-sm text-slate-600 dark:text-white/50">管理您的账户安全选项</p>
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+                  安全设置
+                </h3>
+                <p className="text-sm text-slate-600 dark:text-white/50">
+                  管理您的账户安全选项
+                </p>
               </div>
             </div>
 
             <div className="p-4 rounded-xl bg-slate-900/5 border border-slate-200/70 dark:bg-white/[0.02] dark:border-white/5">
               <div className="flex items-center justify-between">
                 <div>
-                  <h4 className="text-slate-900 font-medium dark:text-white">登录密码</h4>
+                  <h4 className="text-slate-900 font-medium dark:text-white">
+                    登录密码
+                  </h4>
                   <p className="text-sm text-slate-600 mt-1 dark:text-white/50">
                     定期更换密码可以提高账户安全性
                   </p>
@@ -906,8 +1232,12 @@ export default function ProfilePage() {
                   <FileText className="h-5 w-5 text-slate-600 dark:text-white/60" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold text-slate-900 dark:text-white">我的帖子</h3>
-                  <p className="text-sm text-slate-600 dark:text-white/50">管理您发布的帖子内容</p>
+                  <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+                    我的帖子
+                  </h3>
+                  <p className="text-sm text-slate-600 dark:text-white/50">
+                    管理您发布的帖子内容
+                  </p>
                 </div>
               </div>
               <Link
@@ -944,11 +1274,19 @@ export default function ProfilePage() {
                         </Link>
                         <div className="flex flex-wrap items-center gap-2 mb-2">
                           {post.review_status === "pending" ? (
-                            <Badge variant="warning" size="sm" title={post.review_reason || undefined}>
+                            <Badge
+                              variant="warning"
+                              size="sm"
+                              title={post.review_reason || undefined}
+                            >
                               审核中
                             </Badge>
                           ) : post.review_status === "rejected" ? (
-                            <Badge variant="danger" size="sm" title={post.review_reason || undefined}>
+                            <Badge
+                              variant="danger"
+                              size="sm"
+                              title={post.review_reason || undefined}
+                            >
                               已驳回
                             </Badge>
                           ) : (
@@ -959,7 +1297,9 @@ export default function ProfilePage() {
                         </div>
                         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-white/40">
                           <span>{post.category}</span>
-                          <span>{new Date(post.created_at).toLocaleDateString()}</span>
+                          <span>
+                            {new Date(post.created_at).toLocaleDateString()}
+                          </span>
                           <span className="flex items-center gap-1">
                             <Heart className="h-3 w-3" />
                             {post.like_count}
@@ -973,7 +1313,12 @@ export default function ProfilePage() {
 
                       <div className="shrink-0 flex items-center gap-2">
                         <Link to={`/forum/post/${post.id}`}>
-                          <Button variant="ghost" size="sm" className="p-2" title="查看">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="p-2"
+                            title="查看"
+                          >
                             <Eye className="h-4 w-4" />
                           </Button>
                         </Link>
@@ -983,7 +1328,10 @@ export default function ProfilePage() {
                           className="p-2"
                           title="编辑"
                           onClick={() => openEditPost(post)}
-                          disabled={updateMyPostMutation.isPending || deleteMyPostMutation.isPending}
+                          disabled={
+                            updateMyPostMutation.isPending ||
+                            deleteMyPostMutation.isPending
+                          }
                         >
                           <Edit className="h-4 w-4" />
                         </Button>
@@ -993,7 +1341,10 @@ export default function ProfilePage() {
                           className="p-2 text-red-500 hover:text-red-600 dark:text-red-300 dark:hover:text-red-200"
                           title="删除"
                           onClick={() => handleDeleteMyPost(post.id)}
-                          disabled={deleteMyPostMutation.isPending || updateMyPostMutation.isPending}
+                          disabled={
+                            deleteMyPostMutation.isPending ||
+                            updateMyPostMutation.isPending
+                          }
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -1032,12 +1383,16 @@ export default function ProfilePage() {
                   <Heart className="h-5 w-5 text-pink-400" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold text-slate-900 dark:text-white">我的收藏</h3>
-                  <p className="text-sm text-slate-600 dark:text-white/50">您收藏的文章和帖子</p>
+                  <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+                    我的收藏
+                  </h3>
+                  <p className="text-sm text-slate-600 dark:text-white/50">
+                    您收藏的文章和帖子
+                  </p>
                 </div>
               </div>
-              <Link 
-                to={`/forum?cat=${encodeURIComponent('我的收藏')}`} 
+              <Link
+                to={`/forum?cat=${encodeURIComponent("我的收藏")}`}
                 className="text-amber-600 text-sm hover:text-amber-700 flex items-center gap-1 dark:text-amber-400 dark:hover:text-amber-300"
               >
                 查看全部
@@ -1050,7 +1405,9 @@ export default function ProfilePage() {
             ) : favoritesError ? (
               <div className="flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
                 <div>{favoritesError}</div>
-                <Button variant="outline" onClick={loadFavorites}>重试</Button>
+                <Button variant="outline" onClick={loadFavorites}>
+                  重试
+                </Button>
               </div>
             ) : favorites.length > 0 ? (
               <div className="space-y-3">
@@ -1062,7 +1419,9 @@ export default function ProfilePage() {
                   >
                     <div className="flex items-start justify-between gap-4">
                       <div className="min-w-0">
-                        <h4 className="text-slate-900 font-medium line-clamp-1 mb-2 dark:text-white">{post.title}</h4>
+                        <h4 className="text-slate-900 font-medium line-clamp-1 mb-2 dark:text-white">
+                          {post.title}
+                        </h4>
                         <div className="flex items-center gap-4 text-xs text-slate-500 dark:text-white/40">
                           <span className="flex items-center gap-1">
                             <Heart className="h-3 w-3" />
@@ -1126,16 +1485,25 @@ export default function ProfilePage() {
           <Input
             label="标题"
             value={editPostForm.title}
-            onChange={(e) => setEditPostForm((prev) => ({ ...prev, title: e.target.value }))}
+            onChange={(e) =>
+              setEditPostForm((prev) => ({ ...prev, title: e.target.value }))
+            }
             placeholder="请输入标题"
             className="py-3"
           />
 
           <div>
-            <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">分类</label>
+            <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">
+              分类
+            </label>
             <select
               value={editPostForm.category}
-              onChange={(e) => setEditPostForm((prev) => ({ ...prev, category: e.target.value }))}
+              onChange={(e) =>
+                setEditPostForm((prev) => ({
+                  ...prev,
+                  category: e.target.value,
+                }))
+              }
               className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none transition hover:border-slate-300 focus-visible:border-amber-500/50 focus-visible:ring-2 focus-visible:ring-amber-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white dark:hover:border-white/20 dark:focus-visible:ring-offset-slate-900"
             >
               {postCategories.map((c) => (
@@ -1149,7 +1517,9 @@ export default function ProfilePage() {
           <Textarea
             label="内容"
             value={editPostForm.content}
-            onChange={(e) => setEditPostForm((prev) => ({ ...prev, content: e.target.value }))}
+            onChange={(e) =>
+              setEditPostForm((prev) => ({ ...prev, content: e.target.value }))
+            }
             placeholder="请输入内容"
             className="min-h-[220px]"
           />
@@ -1164,11 +1534,65 @@ export default function ProfilePage() {
             >
               取消
             </Button>
-            <Button type="submit" isLoading={updateMyPostMutation.isPending} className="flex-1">
+            <Button
+              type="submit"
+              isLoading={updateMyPostMutation.isPending}
+              className="flex-1"
+            >
               保存
             </Button>
           </div>
         </form>
+      </Modal>
+
+      <Modal
+        isOpen={showPackModal}
+        onClose={() => {
+          if (buyPackMutation.isPending) return;
+          setShowPackModal(false);
+        }}
+        title={
+          packRelatedType === "document_generate"
+            ? "购买文书生成次数包"
+            : "购买 AI 咨询次数包"
+        }
+        description="请选择次数包档位"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-3 gap-3">
+            {(pricingQuery.data?.packs?.[packRelatedType] &&
+            Array.isArray(pricingQuery.data?.packs?.[packRelatedType])
+              ? pricingQuery.data?.packs?.[packRelatedType]
+              : ([
+                  { count: 10, price: 12 },
+                  { count: 50, price: 49 },
+                  { count: 100, price: 79 },
+                ] as PricingPackItem[])
+            ).map((opt) => (
+              <Button
+                key={opt.count}
+                type="button"
+                variant="outline"
+                disabled={buyPackMutation.isPending}
+                onClick={() => handleConfirmBuyPack(opt)}
+              >
+                {opt.price
+                  ? `${opt.count}次 (¥${Number(opt.price || 0).toFixed(2)})`
+                  : `${opt.count}次`}
+              </Button>
+            ))}
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            onClick={() => setShowPackModal(false)}
+            disabled={buyPackMutation.isPending}
+            className="w-full"
+          >
+            取消
+          </Button>
+        </div>
       </Modal>
 
       {/* 密码修改弹窗 */}
@@ -1188,7 +1612,9 @@ export default function ProfilePage() {
       >
         <form onSubmit={handlePasswordChange} className="space-y-5">
           <div className="space-y-1">
-            <label className="text-sm text-slate-700 dark:text-white/70">当前密码</label>
+            <label className="text-sm text-slate-700 dark:text-white/70">
+              当前密码
+            </label>
             <div className="relative">
               <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400 dark:text-white/40" />
               <input
@@ -1219,7 +1645,9 @@ export default function ProfilePage() {
           </div>
 
           <div className="space-y-1">
-            <label className="text-sm text-slate-700 dark:text-white/70">新密码</label>
+            <label className="text-sm text-slate-700 dark:text-white/70">
+              新密码
+            </label>
             <div className="relative">
               <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400 dark:text-white/40" />
               <input
@@ -1251,7 +1679,9 @@ export default function ProfilePage() {
           </div>
 
           <div className="space-y-1">
-            <label className="text-sm text-slate-700 dark:text-white/70">确认新密码</label>
+            <label className="text-sm text-slate-700 dark:text-white/70">
+              确认新密码
+            </label>
             <div className="relative">
               <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400 dark:text-white/40" />
               <input

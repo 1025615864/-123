@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Save, Key, Globe, Bell, Shield, HelpCircle, Sparkles } from "lucide-react";
+import { Save, Key, Globe, Bell, Shield, HelpCircle, Sparkles, CreditCard } from "lucide-react";
 import { Card, Input, Button, Textarea } from "../../components/ui";
 import { useQuery } from "@tanstack/react-query";
 import api from "../../api/client";
@@ -142,6 +142,14 @@ export default function SettingsPage() {
     newsReviewPolicyEnabled: false,
     newsReviewPolicyJson:
       '{\n  "safe": "approved",\n  "warning": "pending",\n  "danger": "pending",\n  "unknown": "pending"\n}',
+    vipDefaultDays: "30",
+    vipDefaultPrice: "29",
+    aiChatPackOptionsJson: '{\n  "10": 12,\n  "50": 49,\n  "100": 79\n}',
+    documentGeneratePackOptionsJson: '{\n  "10": 12,\n  "50": 49,\n  "100": 79\n}',
+    freeAiChatDailyLimit: "5",
+    vipAiChatDailyLimit: "1000000000",
+    freeDocumentGenerateDailyLimit: "10",
+    vipDocumentGenerateDailyLimit: "50",
     enableNotifications: true,
     maintenanceMode: false,
   });
@@ -149,6 +157,7 @@ export default function SettingsPage() {
   const tabItems = [
     { key: "base", label: "站点与基础", icon: Globe },
     { key: "ai", label: "AI 咨询", icon: Shield },
+    { key: "commercial", label: "商业化", icon: CreditCard },
     { key: "news_ai", label: "新闻 AI", icon: Key },
     { key: "content", label: "内容与审核", icon: HelpCircle },
     { key: "notify", label: "通知与维护", icon: Bell },
@@ -290,6 +299,23 @@ export default function SettingsPage() {
           typeof configMap["NEWS_REVIEW_POLICY_JSON"] === "string"
             ? configMap["NEWS_REVIEW_POLICY_JSON"]
             : prev.newsReviewPolicyJson,
+        vipDefaultDays: configMap["VIP_DEFAULT_DAYS"] || prev.vipDefaultDays,
+        vipDefaultPrice: configMap["VIP_DEFAULT_PRICE"] || prev.vipDefaultPrice,
+        aiChatPackOptionsJson:
+          configMap["AI_CHAT_PACK_OPTIONS_JSON"] || prev.aiChatPackOptionsJson,
+        documentGeneratePackOptionsJson:
+          configMap["DOCUMENT_GENERATE_PACK_OPTIONS_JSON"] ||
+          prev.documentGeneratePackOptionsJson,
+        freeAiChatDailyLimit:
+          configMap["FREE_AI_CHAT_DAILY_LIMIT"] || prev.freeAiChatDailyLimit,
+        vipAiChatDailyLimit:
+          configMap["VIP_AI_CHAT_DAILY_LIMIT"] || prev.vipAiChatDailyLimit,
+        freeDocumentGenerateDailyLimit:
+          configMap["FREE_DOCUMENT_GENERATE_DAILY_LIMIT"] ||
+          prev.freeDocumentGenerateDailyLimit,
+        vipDocumentGenerateDailyLimit:
+          configMap["VIP_DOCUMENT_GENERATE_DAILY_LIMIT"] ||
+          prev.vipDocumentGenerateDailyLimit,
         enableNotifications: configMap["enable_notifications"] !== "false",
         maintenanceMode: configMap["maintenance_mode"] === "true",
       };
@@ -310,17 +336,13 @@ export default function SettingsPage() {
 
   const generateFaqMutation = useAppMutation<void, void>({
     mutationFn: async (_: void) => {
-      await api.post(
-        "/system/faq/generate",
-        null,
-        {
-          params: {
-            days: 30,
-            max_items: 20,
-            scan_limit: 200,
-          },
-        }
-      );
+      await api.post("/system/faq/generate", null, {
+        params: {
+          days: 30,
+          max_items: 20,
+          scan_limit: 200,
+        },
+      });
     },
     successMessage: "FAQ 已生成",
     errorMessageFallback: "FAQ 生成失败",
@@ -374,6 +396,46 @@ export default function SettingsPage() {
           key: "NEWS_REVIEW_POLICY_JSON",
           value: settings.newsReviewPolicyJson,
           category: "news_review",
+        },
+        {
+          key: "VIP_DEFAULT_DAYS",
+          value: String(settings.vipDefaultDays || "").trim(),
+          category: "commercial",
+        },
+        {
+          key: "VIP_DEFAULT_PRICE",
+          value: String(settings.vipDefaultPrice || "").trim(),
+          category: "commercial",
+        },
+        {
+          key: "AI_CHAT_PACK_OPTIONS_JSON",
+          value: String(settings.aiChatPackOptionsJson || "").trim(),
+          category: "commercial",
+        },
+        {
+          key: "DOCUMENT_GENERATE_PACK_OPTIONS_JSON",
+          value: String(settings.documentGeneratePackOptionsJson || "").trim(),
+          category: "commercial",
+        },
+        {
+          key: "FREE_AI_CHAT_DAILY_LIMIT",
+          value: String(settings.freeAiChatDailyLimit || "").trim(),
+          category: "commercial",
+        },
+        {
+          key: "VIP_AI_CHAT_DAILY_LIMIT",
+          value: String(settings.vipAiChatDailyLimit || "").trim(),
+          category: "commercial",
+        },
+        {
+          key: "FREE_DOCUMENT_GENERATE_DAILY_LIMIT",
+          value: String(settings.freeDocumentGenerateDailyLimit || "").trim(),
+          category: "commercial",
+        },
+        {
+          key: "VIP_DOCUMENT_GENERATE_DAILY_LIMIT",
+          value: String(settings.vipDocumentGenerateDailyLimit || "").trim(),
+          category: "commercial",
         },
         {
           key: "enable_notifications",
@@ -443,10 +505,68 @@ export default function SettingsPage() {
         });
       }
 
+      const vipDays = Number(String(settings.vipDefaultDays || "").trim());
+      if (!Number.isFinite(vipDays) || vipDays <= 0) {
+        toast.error("VIP_DEFAULT_DAYS 必须是大于 0 的数字");
+        return;
+      }
+      const vipPrice = Number(String(settings.vipDefaultPrice || "").trim());
+      if (!Number.isFinite(vipPrice) || vipPrice <= 0) {
+        toast.error("VIP_DEFAULT_PRICE 必须是大于 0 的数字");
+        return;
+      }
+
+      const freeAi = Number(String(settings.freeAiChatDailyLimit || "").trim());
+      const vipAi = Number(String(settings.vipAiChatDailyLimit || "").trim());
+      const freeDoc = Number(String(settings.freeDocumentGenerateDailyLimit || "").trim());
+      const vipDoc = Number(String(settings.vipDocumentGenerateDailyLimit || "").trim());
+      if (!Number.isFinite(freeAi) || freeAi < 0) {
+        toast.error("FREE_AI_CHAT_DAILY_LIMIT 必须是大于等于 0 的数字");
+        return;
+      }
+      if (!Number.isFinite(vipAi) || vipAi < 0) {
+        toast.error("VIP_AI_CHAT_DAILY_LIMIT 必须是大于等于 0 的数字");
+        return;
+      }
+      if (!Number.isFinite(freeDoc) || freeDoc < 0) {
+        toast.error("FREE_DOCUMENT_GENERATE_DAILY_LIMIT 必须是大于等于 0 的数字");
+        return;
+      }
+      if (!Number.isFinite(vipDoc) || vipDoc < 0) {
+        toast.error("VIP_DOCUMENT_GENERATE_DAILY_LIMIT 必须是大于等于 0 的数字");
+        return;
+      }
+
+      if (String(settings.aiChatPackOptionsJson || "").trim()) {
+        try {
+          const parsed: unknown = JSON.parse(String(settings.aiChatPackOptionsJson || ""));
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            throw new Error("AI_CHAT_PACK_OPTIONS_JSON 必须为对象 JSON");
+          }
+        } catch (e) {
+          toast.error("AI咨询次数包配置 JSON 格式不正确");
+          return;
+        }
+      }
+
+      if (String(settings.documentGeneratePackOptionsJson || "").trim()) {
+        try {
+          const parsed: unknown = JSON.parse(
+            String(settings.documentGeneratePackOptionsJson || "")
+          );
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            throw new Error("DOCUMENT_GENERATE_PACK_OPTIONS_JSON 必须为对象 JSON");
+          }
+        } catch (e) {
+          toast.error("文书生成次数包配置 JSON 格式不正确");
+          return;
+        }
+      }
+
       if (saveMutation.isPending) return;
       saveMutation.mutate({ configs });
-    } catch {
-      // 错误已处理
+    } catch (e) {
+      toast.error(getApiErrorMessage(e, "保存失败，请稍后重试"));
     }
   };
 
@@ -540,6 +660,138 @@ export default function SettingsPage() {
               }
             />
           </div>
+            </Card>
+          </>
+        ) : null}
+
+        {activeTab === "commercial" ? (
+          <>
+            <Card variant="surface" padding="lg">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center">
+                  <CreditCard className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+                    商业化配置
+                  </h3>
+                  <p className="text-slate-600 text-sm dark:text-white/40">
+                    VIP 与次数包定价（保存后对新订单生效）
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <Input
+                  label="VIP_DEFAULT_DAYS"
+                  value={settings.vipDefaultDays}
+                  onChange={(e) =>
+                    setSettings({ ...settings, vipDefaultDays: e.target.value })
+                  }
+                  placeholder="30"
+                />
+                <Input
+                  label="VIP_DEFAULT_PRICE"
+                  value={settings.vipDefaultPrice}
+                  onChange={(e) =>
+                    setSettings({ ...settings, vipDefaultPrice: e.target.value })
+                  }
+                  placeholder="29"
+                />
+                <Textarea
+                  label="AI_CHAT_PACK_OPTIONS_JSON"
+                  value={settings.aiChatPackOptionsJson}
+                  onChange={(e) =>
+                    setSettings({
+                      ...settings,
+                      aiChatPackOptionsJson: e.target.value,
+                    })
+                  }
+                  placeholder='{
+  "10": 12,
+  "50": 49,
+  "100": 79
+}'
+                />
+                <Textarea
+                  label="DOCUMENT_GENERATE_PACK_OPTIONS_JSON"
+                  value={settings.documentGeneratePackOptionsJson}
+                  onChange={(e) =>
+                    setSettings({
+                      ...settings,
+                      documentGeneratePackOptionsJson: e.target.value,
+                    })
+                  }
+                  placeholder='{
+  "10": 12,
+  "50": 49,
+  "100": 79
+}'
+                />
+              </div>
+            </Card>
+
+            <Card variant="surface" padding="lg">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center">
+                  <CreditCard className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+                    配额配置
+                  </h3>
+                  <p className="text-slate-600 text-sm dark:text-white/40">
+                    每日可用次数（保存后对新请求生效）
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <Input
+                  label="FREE_AI_CHAT_DAILY_LIMIT"
+                  value={settings.freeAiChatDailyLimit}
+                  onChange={(e) =>
+                    setSettings({
+                      ...settings,
+                      freeAiChatDailyLimit: e.target.value,
+                    })
+                  }
+                  placeholder="5"
+                />
+                <Input
+                  label="VIP_AI_CHAT_DAILY_LIMIT"
+                  value={settings.vipAiChatDailyLimit}
+                  onChange={(e) =>
+                    setSettings({
+                      ...settings,
+                      vipAiChatDailyLimit: e.target.value,
+                    })
+                  }
+                  placeholder="1000000000"
+                />
+                <Input
+                  label="FREE_DOCUMENT_GENERATE_DAILY_LIMIT"
+                  value={settings.freeDocumentGenerateDailyLimit}
+                  onChange={(e) =>
+                    setSettings({
+                      ...settings,
+                      freeDocumentGenerateDailyLimit: e.target.value,
+                    })
+                  }
+                  placeholder="10"
+                />
+                <Input
+                  label="VIP_DOCUMENT_GENERATE_DAILY_LIMIT"
+                  value={settings.vipDocumentGenerateDailyLimit}
+                  onChange={(e) =>
+                    setSettings({
+                      ...settings,
+                      vipDocumentGenerateDailyLimit: e.target.value,
+                    })
+                  }
+                  placeholder="50"
+                />
+              </div>
             </Card>
           </>
         ) : null}

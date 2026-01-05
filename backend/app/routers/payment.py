@@ -27,6 +27,7 @@ from ..database import get_db
 from ..models.payment import PaymentOrder, UserBalance, BalanceTransaction, PaymentStatus, PaymentCallbackEvent
 from ..models.system import SystemConfig
 from ..models.user import User
+from ..models.user_quota import UserQuotaPackBalance
 from ..utils.deps import get_current_user, require_admin
 from ..utils.wechatpay_v3 import (
     WeChatPayPlatformCert,
@@ -41,8 +42,108 @@ router = APIRouter(prefix="/payment", tags=["支付管理"])
 
 settings = get_settings()
 
-VIP_DEFAULT_DAYS = 30
-VIP_DEFAULT_PRICE = 9.9
+def _get_int_env(key: str, default: int) -> int:
+    raw = os.getenv(key, "").strip()
+    if not raw:
+        return int(default)
+    try:
+        return int(raw)
+    except Exception:
+        return int(default)
+
+
+def _get_float_env(key: str, default: float) -> float:
+    raw = os.getenv(key, "").strip()
+    if not raw:
+        return float(default)
+    try:
+        return float(raw)
+    except Exception:
+        return float(default)
+
+
+VIP_DEFAULT_DAYS = _get_int_env("VIP_DEFAULT_DAYS", 30)
+VIP_DEFAULT_PRICE = _get_float_env("VIP_DEFAULT_PRICE", 29.0)
+
+AI_CHAT_PACK_OPTIONS: dict[int, float] = {
+    10: 12.0,
+    50: 49.0,
+    100: 79.0,
+}
+
+DOCUMENT_GENERATE_PACK_OPTIONS: dict[int, float] = dict(AI_CHAT_PACK_OPTIONS)
+
+AI_PACK_RELATED_TYPES = {"ai_chat", "document_generate"}
+
+
+def _parse_pack_options(value: str | None, *, fallback: dict[int, float]) -> dict[int, float]:
+    raw = str(value or "").strip()
+    if not raw:
+        return dict(fallback)
+    try:
+        obj: object = json.loads(raw)
+    except Exception:
+        return dict(fallback)
+    if not isinstance(obj, dict):
+        return dict(fallback)
+
+    out: dict[int, float] = {}
+    obj_dict = cast(dict[object, object], obj)
+    for k_obj, v_obj in obj_dict.items():
+        try:
+            kk = int(str(k_obj).strip())
+            vv = float(str(v_obj).strip())
+        except Exception:
+            continue
+        if kk <= 0 or vv <= 0:
+            continue
+        out[kk] = vv
+    return out or dict(fallback)
+
+
+async def _get_system_config_value(db: AsyncSession, key: str) -> str | None:
+    res = await db.execute(select(SystemConfig.value).where(SystemConfig.key == str(key).strip()))
+    v = res.scalar_one_or_none()
+    return str(v) if isinstance(v, str) else None
+
+
+async def _get_int_config(db: AsyncSession, key: str, default: int) -> int:
+    raw = await _get_system_config_value(db, key)
+    if raw is None:
+        return int(default)
+    try:
+        return int(str(raw).strip())
+    except Exception:
+        return int(default)
+
+
+async def _get_float_config(db: AsyncSession, key: str, default: float) -> float:
+    raw = await _get_system_config_value(db, key)
+    if raw is None:
+        return float(default)
+    try:
+        return float(str(raw).strip())
+    except Exception:
+        return float(default)
+
+
+async def _get_vip_plan(db: AsyncSession) -> tuple[int, float]:
+    days = await _get_int_config(db, "VIP_DEFAULT_DAYS", VIP_DEFAULT_DAYS)
+    price = await _get_float_config(db, "VIP_DEFAULT_PRICE", VIP_DEFAULT_PRICE)
+    if days <= 0:
+        days = int(VIP_DEFAULT_DAYS)
+    if price <= 0:
+        price = float(VIP_DEFAULT_PRICE)
+    return int(days), float(price)
+
+
+async def _get_pack_options(db: AsyncSession, related_type: str) -> dict[int, float]:
+    rt = str(related_type or "").strip().lower() or "ai_chat"
+    if rt == "document_generate":
+        raw = await _get_system_config_value(db, "DOCUMENT_GENERATE_PACK_OPTIONS_JSON")
+        return _parse_pack_options(raw, fallback=DOCUMENT_GENERATE_PACK_OPTIONS)
+    raw = await _get_system_config_value(db, "AI_CHAT_PACK_OPTIONS_JSON")
+    return _parse_pack_options(raw, fallback=AI_CHAT_PACK_OPTIONS)
 
 
 # ============ 请求/响应模型 ============
@@ -200,14 +301,6 @@ async def _record_callback_event(
         await db.rollback()
     except Exception:
         await db.rollback()
-
-
-async def _get_system_config_value(db: AsyncSession, key: str) -> str | None:
-    res = await db.execute(select(SystemConfig).where(SystemConfig.key == key))
-    row = res.scalar_one_or_none()
-    if not row:
-        return None
-    return row.value
 
 
 async def _set_system_config_value(
@@ -385,13 +478,67 @@ async def _maybe_apply_vip_membership_in_tx(db: AsyncSession, order: PaymentOrde
         current = current.replace(tzinfo=timezone.utc)
 
     base = current if isinstance(current, datetime) and current > now else now
-    new_expires_at = base + timedelta(days=VIP_DEFAULT_DAYS)
+    vip_days, _vip_price = await _get_vip_plan(db)
+    new_expires_at = base + timedelta(days=int(vip_days))
 
     _ = await db.execute(
         update(User)
         .where(User.id == int(order.user_id))
         .values(vip_expires_at=new_expires_at)
     )
+
+
+async def _maybe_apply_ai_pack_in_tx(db: AsyncSession, order: PaymentOrder) -> None:
+    if str(getattr(order, "order_type", "")).lower() != "ai_pack":
+        return
+
+    related_type = str(getattr(order, "related_type", "") or "").strip().lower() or "ai_chat"
+    if related_type not in AI_PACK_RELATED_TYPES:
+        return
+
+    related_id_raw: object | None = cast(object | None, getattr(order, "related_id", None))
+    if related_id_raw is None:
+        return
+
+    pack_count: int
+    if isinstance(related_id_raw, bool):
+        return
+    if isinstance(related_id_raw, int):
+        pack_count = related_id_raw
+    elif isinstance(related_id_raw, float):
+        pack_count = int(related_id_raw)
+    elif isinstance(related_id_raw, str) and related_id_raw.strip():
+        try:
+            pack_count = int(related_id_raw.strip())
+        except Exception:
+            return
+    else:
+        return
+
+    options = await _get_pack_options(db, related_type)
+    if pack_count not in options:
+        return
+
+    res = await db.execute(
+        select(UserQuotaPackBalance).where(UserQuotaPackBalance.user_id == int(order.user_id))
+    )
+    row = res.scalar_one_or_none()
+    if row is None:
+        row = UserQuotaPackBalance(
+            user_id=int(order.user_id),
+            ai_chat_credits=0,
+            document_generate_credits=0,
+        )
+        db.add(row)
+        await db.flush()
+
+    if related_type == "document_generate":
+        current = int(getattr(row, "document_generate_credits", 0))
+        row.document_generate_credits = current + int(pack_count)
+    else:
+        current = int(getattr(row, "ai_chat_credits", 0))
+        row.ai_chat_credits = current + int(pack_count)
+    db.add(row)
 
 
 async def _mark_order_paid_in_tx(
@@ -466,6 +613,7 @@ async def _mark_order_paid_in_tx(
         db.add(transaction)
 
     await _maybe_apply_vip_membership_in_tx(db, order)
+    await _maybe_apply_ai_pack_in_tx(db, order)
     await _maybe_confirm_lawyer_consultation_in_tx(db, order)
 
 
@@ -528,12 +676,43 @@ async def create_order(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """创建支付订单"""
-    if data.order_type not in {"consultation", "service", "vip", "recharge"}:
+    if data.order_type not in {"consultation", "service", "vip", "recharge", "ai_pack"}:
         raise HTTPException(status_code=400, detail="无效的订单类型")
 
     if data.order_type == "vip":
-        amount = _quantize_amount(VIP_DEFAULT_PRICE)
-        title = f"VIP会员（{VIP_DEFAULT_DAYS}天）"
+        vip_days, vip_price = await _get_vip_plan(db)
+        amount = _quantize_amount(vip_price)
+        title = f"VIP会员（{int(vip_days)}天）"
+        description = data.description
+    elif data.order_type == "ai_pack":
+        related_type = str(getattr(data, "related_type", "") or "").strip().lower() or "ai_chat"
+        if related_type not in AI_PACK_RELATED_TYPES:
+            raise HTTPException(status_code=400, detail="无效的次数包类型")
+
+        related_id_raw: object | None = cast(object | None, getattr(data, "related_id", None))
+        pack_count: int | None = None
+        if isinstance(related_id_raw, bool) or related_id_raw is None:
+            pack_count = None
+        elif isinstance(related_id_raw, int):
+            pack_count = related_id_raw
+        elif isinstance(related_id_raw, float):
+            pack_count = int(related_id_raw)
+        elif isinstance(related_id_raw, str) and related_id_raw.strip():
+            try:
+                pack_count = int(related_id_raw.strip())
+            except Exception:
+                pack_count = None
+
+        options = await _get_pack_options(db, related_type)
+        if pack_count is None or pack_count not in options:
+            raise HTTPException(status_code=400, detail="无效的次数包")
+
+        amount = _quantize_amount(options[int(pack_count)])
+        title = (
+            f"文书生成次数包（{int(pack_count)}次）"
+            if related_type == "document_generate"
+            else f"AI咨询次数包（{int(pack_count)}次）"
+        )
         description = data.description
     else:
         amount = _quantize_amount(data.amount)
@@ -567,6 +746,27 @@ async def create_order(
         "order_no": order.order_no,
         "amount": order.actual_amount,
         "expires_at": order.expires_at,
+    }
+
+
+@router.get("/pricing", summary="获取商业化价格表")
+async def get_pricing(db: Annotated[AsyncSession, Depends(get_db)]):
+    vip_days, vip_price = await _get_vip_plan(db)
+    ai_options = await _get_pack_options(db, "ai_chat")
+    doc_options = await _get_pack_options(db, "document_generate")
+
+    def _to_list(options: dict[int, float]):
+        return [
+            {"count": int(k), "price": float(v)}
+            for k, v in sorted(options.items(), key=lambda kv: int(kv[0]))
+        ]
+
+    return {
+        "vip": {"days": int(vip_days), "price": float(vip_price)},
+        "packs": {
+            "ai_chat": _to_list(ai_options),
+            "document_generate": _to_list(doc_options),
+        },
     }
 
 
@@ -685,6 +885,7 @@ async def pay_order(
             db.add(transaction)
 
             await _maybe_apply_vip_membership_in_tx(db, order)
+            await _maybe_apply_ai_pack_in_tx(db, order)
             await _maybe_confirm_lawyer_consultation_in_tx(db, order)
 
             await db.commit()
@@ -1922,7 +2123,8 @@ async def admin_payment_channel_status(
     try:
         obj_raw: object = json.loads(cfg_raw or "")
         if isinstance(obj_raw, dict):
-            v = obj_raw.get("updated_at")
+            obj_dict = cast(dict[str, object], obj_raw)
+            v = obj_dict.get("updated_at")
             if isinstance(v, bool):
                 updated_at = None
             elif isinstance(v, (int, float)):

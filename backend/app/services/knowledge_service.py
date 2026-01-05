@@ -164,6 +164,65 @@ class KnowledgeService:
         await db.commit()
         deleted = cast(CursorResult[tuple[()]], cursor_result).rowcount or 0
         return deleted, len(ids) - deleted
+
+    async def batch_import_knowledge(
+        self,
+        db: AsyncSession,
+        items: list[LegalKnowledgeCreate],
+    ) -> tuple[int, int]:
+        success = 0
+        failed = 0
+
+        for item in items:
+            try:
+                kt = item.knowledge_type.value
+                title = str(item.title).strip()
+                article_number = str(item.article_number).strip() if item.article_number else None
+
+                existing_res = await db.execute(
+                    select(LegalKnowledge).where(
+                        LegalKnowledge.knowledge_type == kt,
+                        LegalKnowledge.title == title,
+                        LegalKnowledge.article_number == article_number,
+                    )
+                )
+                existing = existing_res.scalar_one_or_none()
+
+                if existing is None:
+                    knowledge = LegalKnowledge(
+                        knowledge_type=kt,
+                        title=title,
+                        article_number=article_number,
+                        content=item.content,
+                        summary=item.summary,
+                        category=item.category,
+                        keywords=item.keywords,
+                        source=item.source,
+                        effective_date=item.effective_date,
+                        weight=item.weight,
+                        is_active=item.is_active,
+                    )
+                    db.add(knowledge)
+                else:
+                    existing.content = item.content
+                    existing.summary = item.summary
+                    existing.category = item.category
+                    existing.keywords = item.keywords
+                    existing.source = item.source
+                    existing.effective_date = item.effective_date
+                    existing.weight = item.weight
+                    existing.is_active = item.is_active
+                    existing.is_vectorized = False
+                    db.add(existing)
+
+                await db.commit()
+                success += 1
+            except Exception:
+                logger.exception("批量导入失败：%s", getattr(item, "title", ""))
+                await db.rollback()
+                failed += 1
+
+        return success, failed
     
     # === 向量化操作 ===
     

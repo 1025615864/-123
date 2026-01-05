@@ -148,3 +148,14 @@ class BatchOperationResponse(BaseModel):
     success_count: int
     failed_count: int
     message: str
+
+
+class BatchImportKnowledgeRequest(BaseModel):
+    items: list[LegalKnowledgeCreate] = Field(..., min_length=1, description="要导入的知识条目")
+    dry_run: bool = Field(False, description="仅校验不入库")
+
+
+class BatchImportKnowledgeResponse(BaseModel):
+    success_count: int
+    failed_count: int
+    message: str

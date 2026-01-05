@@ -6,6 +6,7 @@ import tempfile
 import json
 import logging
 import time
+import os
 import inspect as py_inspect
 import urllib.parse
 from collections.abc import Callable
@@ -22,6 +23,7 @@ from ..models.consultation import Consultation, ChatMessage
 from ..models.user import User
 from ..config import get_settings
 from ..services.ai_metrics import ai_metrics
+from ..services.quota_service import quota_service
 from ..services.report_generator import (
     build_consultation_report_from_export_data,
     generate_consultation_report_pdf,
@@ -53,8 +55,18 @@ settings = get_settings()
 
 logger = logging.getLogger(__name__)
 
-GUEST_AI_LIMIT = 5
-GUEST_AI_WINDOW_SECONDS = 60 * 60 * 24
+def _get_int_env(key: str, default: int) -> int:
+    raw = os.getenv(key, "").strip()
+    if not raw:
+        return int(default)
+    try:
+        return int(raw)
+    except Exception:
+        return int(default)
+
+
+GUEST_AI_LIMIT = _get_int_env("GUEST_AI_LIMIT", 3)
+GUEST_AI_WINDOW_SECONDS = _get_int_env("GUEST_AI_WINDOW_SECONDS", 60 * 60 * 24)
 
 SEED_HISTORY_MAX_MESSAGES = 20
 
@@ -152,7 +164,7 @@ def _enforce_guest_ai_quota(request: Request) -> None:
     wait_time = rate_limiter.get_wait_time(key, GUEST_AI_WINDOW_SECONDS)
     raise HTTPException(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-        detail="游客模式 24 小时内仅可试用 5 次，请登录后继续",
+        detail=f"游客模式 24 小时内仅可试用 {int(GUEST_AI_LIMIT)} 次，请登录后继续",
         headers={
             "X-RateLimit-Limit": str(GUEST_AI_LIMIT),
             "X-RateLimit-Remaining": str(max(0, remaining)),
@@ -299,6 +311,8 @@ async def chat_with_ai(
 
         if current_user is None:
             _enforce_guest_ai_quota(request)
+        else:
+            await quota_service.enforce_ai_chat_quota(db, current_user)
 
         logger.info(
             "ai_chat_request request_id=%s user_id=%s session_id=%s message=%s",
@@ -414,6 +428,12 @@ async def chat_with_ai(
         assistant_message_id = cast(int | None, getattr(ai_message, "id", None))
         
         await db.commit()
+
+        if current_user is not None:
+            try:
+                await quota_service.record_ai_chat_usage(db, current_user)
+            except Exception:
+                logger.exception("quota_consume_failed request_id=%s", request_id)
 
         logger.info(
             "ai_chat_response request_id=%s user_id=%s session_id=%s assistant_message_id=%s",
@@ -568,6 +588,7 @@ async def chat_with_ai_stream(
     e2e_mock_enabled = bool(settings.debug) and str(request.headers.get("X-E2E-Mock-AI") or "").strip() == "1"
     if e2e_mock_enabled:
         forced_persist_error = str(request.headers.get("X-E2E-Force-Persist-Error") or "").strip()
+        e2e_stream_scenario = str(request.headers.get("X-E2E-Stream-Scenario") or "").strip().lower()
 
         async def event_generator():
             session_id = str(payload.session_id or "").strip() or f"e2e_{uuid.uuid4().hex}"
@@ -607,7 +628,21 @@ async def chat_with_ai_stream(
             ]
             yield f"event: references\ndata: {json.dumps({'references': refs}, ensure_ascii=False)}\n\n"
 
-            yield f"event: content\ndata: {json.dumps({'text': '根据《民法典》第1条，给您一个示例回复。'}, ensure_ascii=False)}\n\n"
+            if e2e_stream_scenario == "scroll":
+                yield f"event: content\ndata: {json.dumps({'text': '根据《民法典》第1条，以下为滚动测试内容：\n'}, ensure_ascii=False)}\n\n"
+
+                lines = [f"{i}-内容\n" for i in range(1, 201)]
+                batch_size = 12
+                for batch_start in range(0, len(lines), batch_size):
+                    batch_text = "".join(lines[batch_start : batch_start + batch_size])
+                    yield f"event: content\ndata: {json.dumps({'text': batch_text}, ensure_ascii=False)}\n\n"
+
+                    if batch_start == batch_size * 4:
+                        await asyncio.sleep(0.9)
+                    else:
+                        await asyncio.sleep(0.02)
+            else:
+                yield f"event: content\ndata: {json.dumps({'text': '根据《民法典》第1条，给您一个示例回复。'}, ensure_ascii=False)}\n\n"
 
             final_done: dict[str, object] = {
                 "session_id": session_id,
@@ -675,6 +710,8 @@ async def chat_with_ai_stream(
 
         if current_user is None:
             _enforce_guest_ai_quota(request)
+        else:
+            await quota_service.enforce_ai_chat_quota(db, current_user)
 
         logger.info(
             "ai_chat_stream_request request_id=%s user_id=%s session_id=%s message=%s",
@@ -715,6 +752,12 @@ async def chat_with_ai_stream(
                 message=message,
                 request_id=request_id,
             )
+
+        if current_user is not None:
+            try:
+                await quota_service.record_ai_chat_usage(db, current_user)
+            except Exception:
+                logger.exception("quota_consume_failed request_id=%s", request_id)
 
         async def event_generator():
             session_id: str | None = None

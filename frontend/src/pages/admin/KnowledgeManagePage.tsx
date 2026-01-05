@@ -99,6 +99,9 @@ export default function KnowledgeManagePage() {
   const [selectedCategory, setSelectedCategory] = useState<string>("");
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importJson, setImportJson] = useState("");
+  const [importDryRun, setImportDryRun] = useState(false);
   const [editingItem, setEditingItem] = useState<LegalKnowledge | null>(null);
   const [page, setPage] = useState(1);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
@@ -190,6 +193,21 @@ export default function KnowledgeManagePage() {
     },
     errorMessageFallback: "操作失败，请稍后重试",
     invalidateQueryKeys: [queryKeys.adminKnowledgeListRoot(), queryKeys.knowledgeStats()],
+  });
+
+  const batchImportMutation = useAppMutation<{ message?: string }, { items: unknown[]; dry_run: boolean }>({
+    mutationFn: async ({ items, dry_run }) => {
+      const res = await api.post("/knowledge/laws/batch-import", { items, dry_run });
+      return (res.data || {}) as { message?: string };
+    },
+    errorMessageFallback: "导入失败，请稍后重试",
+    invalidateQueryKeys: [queryKeys.adminKnowledgeListRoot(), queryKeys.knowledgeStats()],
+    onSuccess: (res) => {
+      toast.success(String(res?.message || "导入完成"));
+      setShowImportModal(false);
+      setImportJson("");
+      setImportDryRun(false);
+    },
   });
 
   const batchVectorizeMutation = useAppMutation<void, number[]>({
@@ -345,6 +363,9 @@ export default function KnowledgeManagePage() {
           <p className="text-slate-600 mt-1 dark:text-white/50">管理法律条文、案例和司法解释</p>
         </div>
         <div className="flex gap-3">
+          <Button variant="outline" icon={Upload} onClick={() => setShowImportModal(true)}>
+            批量导入
+          </Button>
           <Button variant="outline" icon={Upload} onClick={handleSyncAll}>
             同步向量库
           </Button>
@@ -642,6 +663,67 @@ export default function KnowledgeManagePage() {
           submitLabel="保存"
           submitLoading={editMutation.isPending}
         />
+      </Modal>
+
+      {/* 批量导入弹窗 */}
+      <Modal
+        isOpen={showImportModal}
+        onClose={() => {
+          setShowImportModal(false);
+        }}
+        title="批量导入（JSON）"
+        description="粘贴 JSON 数组，每个元素为一个知识条目"
+        size="lg"
+      >
+        <div className="space-y-4">
+          <Textarea
+            label="JSON"
+            value={importJson}
+            onChange={(e) => setImportJson(e.target.value)}
+            rows={10}
+            placeholder='例如：[{"knowledge_type":"law","title":"民法典","article_number":"第1条","content":"...","category":"民法","summary":null,"keywords":null,"source":null,"effective_date":null,"weight":1,"is_active":true}]'
+          />
+          <label className="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-white/70">
+            <input
+              type="checkbox"
+              checked={importDryRun}
+              onChange={(e) => setImportDryRun(e.target.checked)}
+              className="rounded"
+            />
+            仅校验（dry_run，不写入）
+          </label>
+
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setShowImportModal(false)}>
+              取消
+            </Button>
+            <Button
+              isLoading={batchImportMutation.isPending}
+              onClick={() => {
+                const raw = importJson.trim();
+                if (!raw) {
+                  toast.error("请粘贴 JSON");
+                  return;
+                }
+                let parsed: any;
+                try {
+                  parsed = JSON.parse(raw);
+                } catch (e) {
+                  toast.error("JSON 格式错误");
+                  return;
+                }
+                const items = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.items) ? parsed.items : null;
+                if (!items || !Array.isArray(items) || items.length === 0) {
+                  toast.error("请提供 JSON 数组（或 {items: [...]}）");
+                  return;
+                }
+                batchImportMutation.mutate({ items, dry_run: importDryRun });
+              }}
+            >
+              提交
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

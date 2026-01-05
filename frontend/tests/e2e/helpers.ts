@@ -2,8 +2,8 @@ import { Buffer } from "buffer";
 import { expect } from "@playwright/test";
 
 export const apiBase = process.env.E2E_API_BASE ?? "http://localhost:5173/api";
-export const adminUsername = process.env.E2E_ADMIN_USER ?? "123311";
-export const adminPassword = process.env.E2E_ADMIN_PASS ?? "123311";
+export const adminUsername = process.env.E2E_ADMIN_USER ?? "admin";
+export const adminPassword = process.env.E2E_ADMIN_PASS ?? "admin123";
 
 export function makeE2eJwt(expSecondsFromNow: number = 3600): string {
   const header = Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url");

@@ -25,6 +25,7 @@ async def test_engine():
         "app.models.news",
         "app.models.news_ai",
         "app.models.lawfirm",
+        "app.models.settlement",
         "app.models.knowledge",
         "app.models.document",
         "app.models.notification",

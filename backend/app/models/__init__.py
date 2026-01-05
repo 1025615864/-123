@@ -1,5 +1,6 @@
 """数据模型"""
 from .user import User
+from .user_quota import UserQuotaDaily
 from .consultation import Consultation, ChatMessage
 from .forum import Post, Comment, PostLike, CommentLike, PostFavorite, PostReaction
 from .news import News, NewsFavorite, NewsViewHistory, NewsSubscription
@@ -10,9 +11,12 @@ from .knowledge import LegalKnowledge, ConsultationTemplate
 from .notification import Notification
 from .system import SystemConfig, AdminLog
 from .calendar import CalendarReminder
+from .feedback import FeedbackTicket
+from .settlement import LawyerWallet, LawyerIncomeRecord, LawyerBankAccount, WithdrawalRequest
 
 __all__ = [
     "User", 
+    "UserQuotaDaily",
     "Consultation", 
     "ChatMessage",
     "Post",
@@ -40,4 +44,9 @@ __all__ = [
     "SystemConfig",
     "AdminLog",
     "CalendarReminder",
+    "FeedbackTicket",
+    "LawyerWallet",
+    "LawyerIncomeRecord",
+    "LawyerBankAccount",
+    "WithdrawalRequest",
 ]

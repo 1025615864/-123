@@ -13,6 +13,7 @@ from ..schemas.user import (
     Token, LoginResponse, RegisterResponse, PasswordChange, MessageResponse,
     PasswordResetRequest, PasswordResetConfirm
 )
+from ..schemas.quota import UserQuotaDailyResponse
 from ..services.user_service import user_service
 from ..services.forum_service import forum_service
 from ..services.email_service import email_service
@@ -20,6 +21,7 @@ from ..utils.security import create_access_token, verify_password, hash_password
 from ..utils.deps import get_current_user, require_admin
 from ..utils.rate_limiter import rate_limit, RateLimitConfig
 from ..config import get_settings
+from ..services.quota_service import quota_service
 
 settings = get_settings()
 
@@ -153,6 +155,15 @@ async def login(login_data: UserLogin, db: Annotated[AsyncSession, Depends(get_d
 async def get_me(current_user: Annotated[User, Depends(get_current_user)]):
     """获取当前登录用户的信息"""
     return UserResponse.model_validate(current_user)
+
+
+@router.get("/me/quotas", response_model=UserQuotaDailyResponse, summary="获取当前用户配额")
+async def get_my_quotas(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    data = await quota_service.get_today_quota(db, current_user)
+    return UserQuotaDailyResponse.model_validate(data)
 
 
 @router.put("/me", response_model=UserResponse, summary="更新当前用户信息")
