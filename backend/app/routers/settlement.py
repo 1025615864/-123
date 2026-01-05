@@ -10,7 +10,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import Integer, cast as sa_cast, func, select
+from sqlalchemy import Integer, cast as sa_cast, func, select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database import get_db
@@ -302,7 +302,7 @@ async def lawyer_create_bank_account(
             )
         )
         await db.execute(
-            LawyerBankAccount.__table__.update()
+            sa_update(LawyerBankAccount)
             .where(
                 LawyerBankAccount.lawyer_id == int(lawyer.id),
                 LawyerBankAccount.id != int(row.id),
@@ -367,7 +367,7 @@ async def lawyer_update_bank_account(
 
     if bool(row.is_default):
         await db.execute(
-            LawyerBankAccount.__table__.update()
+            sa_update(LawyerBankAccount)
             .where(
                 LawyerBankAccount.lawyer_id == int(lawyer.id),
                 LawyerBankAccount.id != int(row.id),
@@ -441,12 +441,12 @@ async def lawyer_set_default_bank_account(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="账户不存在")
 
     await db.execute(
-        LawyerBankAccount.__table__.update()
+        sa_update(LawyerBankAccount)
         .where(LawyerBankAccount.lawyer_id == int(lawyer.id))
         .values(is_default=False)
     )
     await db.execute(
-        LawyerBankAccount.__table__.update()
+        sa_update(LawyerBankAccount)
         .where(LawyerBankAccount.id == int(row.id))
         .values(is_default=True)
     )
