@@ -300,7 +300,7 @@ AI 咨询模块的实现细节与已知风险点已合并到本文档的「12.5 
     - `/admin/settings` 默认 tab 为 `base`，部分运维卡片只在 `AI 咨询` / `新闻 AI` tab 渲染，E2E 断言前需先切 tab
     - 移动端底部导航与“更多”弹层入口可能随导航结构调整，MobileNav 用例以 `dialog` + `日历` 等工具入口为准
 
-最新一次全量回归结果（2026-01-06）：后端 pytest 95 passed；Playwright E2E `73 passed, 0 failed`；pyright / basedpyright `0 errors/warnings`。
+最新一次全量回归结果（2026-01-06）：后端 pytest 95 passed；Playwright E2E `76 passed, 0 failed`；pyright / basedpyright `0 errors/warnings`。
 
 ---
 
@@ -456,7 +456,7 @@ AI 咨询模块的实现细节与已知风险点已合并到本文档的「12.5 
 - **2025-12-27**：落地“Secrets 不入库”、News AI 运维状态接口、`StaleDataError` 并发兜底、生产部署与冒烟 SOP。
 - **2025-12-29**：News 模块发布（tag `news-module-20251229`）、补齐开发/架构/API 速查文档入口与测试结果记录。
 - **2026-01-04**：Playwright E2E 全量回归全绿（73 passed）；新增/完善 E2E 稳定化手段（DEBUG 设置新闻 `view_count` 并清 hot cache、Settings tab 断言约定、ChatHistory 伪 JWT 工具 `makeE2eJwt()`）。
-- **2026-01-06**：补齐律师结算/提现与商业化配额能力的交付口径；更新回归口径（pytest 95 passed、pyright/basedpyright 0）。
+- **2026-01-06**：补齐律师结算/提现与商业化配额能力的交付口径；更新回归口径（pytest 95 passed、Playwright 76 passed、pyright/basedpyright 0）；并将部分已完成的过程文档归档到 `docs/_archive/`。
 
 ---
 
@@ -472,6 +472,10 @@ AI 咨询模块的实现细节与已知风险点已合并到本文档的「12.5 
 - `_archive/AI_CONSULTATION_STATUS.md`
 - `_archive/UPDATE_LOG.md`
 - `_archive/反馈与建议.md`
+- `_archive/律师结算功能需求说明书.md`
+- `_archive/百姓法律助手商业化策略与定价方案.md`
+- `_archive/甲方反馈.md`
+- `_archive/甲方反馈回复.md`
 
 ---
 
