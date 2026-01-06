@@ -15,6 +15,7 @@ import {
   History,
   Plus,
   BookOpen,
+  Copy,
   Brain,
   Search,
   FileText,
@@ -27,6 +28,7 @@ import {
   Mic,
   MicOff,
   Paperclip,
+  RotateCcw,
 } from "lucide-react";
 import api from "../api/client";
 import { useAppMutation, useToast } from "../hooks";
@@ -43,7 +45,7 @@ interface LawReference {
   law_name: string;
   article: string;
   content: string;
-  relevance: number;
+  relevance?: number;
 }
 
 interface UserQuotaDailyResponse {
@@ -82,6 +84,10 @@ interface Message {
   quickReplies?: string[];
   thinkingSteps?: ThinkingStep[];
   isThinking?: boolean;
+  streamState?: "streaming" | "done" | "stopped" | "error";
+  streamError?: string;
+  streamRequestId?: string;
+  streamErrorCode?: string;
   intent?: string;
   needsClarification?: boolean;
   clarifyingQuestions?: string[];
@@ -492,6 +498,26 @@ export default function ChatPage() {
     []
   );
 
+  const followUpPrompts = useMemo(
+    () => [
+      "需要准备哪些证据？",
+      "有没有时效/期限需要注意？",
+      "下一步我应该怎么做？",
+      "可能的风险点有哪些？",
+      "费用/成本大概如何？",
+    ],
+    []
+  );
+
+  const showFollowUpPrompts = useMemo(() => {
+    if (loading || streaming) return false;
+    if (!Array.isArray(messages) || messages.length === 0) return false;
+    const hasUser = messages.some((m) => m.role === "user");
+    if (!hasUser) return false;
+    const last = messages[messages.length - 1];
+    return last?.role === "assistant";
+  }, [loading, messages, streaming]);
+
   useEffect(() => {
     if (streaming) {
       if (scrollLockedRef.current) return;
@@ -634,6 +660,18 @@ export default function ChatPage() {
     );
     const streamUrl = `${apiBaseUrl}/ai/chat/stream`;
 
+    const updateStreamingAssistant = (updater: (m: Message) => Message) => {
+      setMessages((prev) => {
+        const next = [...prev];
+        const idx = streamingAssistantIndexRef.current ?? next.length - 1;
+        if (idx < 0 || idx >= next.length) return prev;
+        const current = next[idx];
+        if (!current || current.role !== "assistant") return prev;
+        next[idx] = updater(current);
+        return next;
+      });
+    };
+
     try {
       setStreaming(true);
 
@@ -651,6 +689,10 @@ export default function ChatPage() {
             references: [],
             thinkingSteps: [],
             isThinking: true,
+            streamState: "streaming",
+            streamError: undefined,
+            streamRequestId: undefined,
+            streamErrorCode: undefined,
             intent: undefined,
             needsClarification: undefined,
             clarifyingQuestions: undefined,
@@ -721,18 +763,9 @@ export default function ChatPage() {
       let pendingRefs: LawReference[] = [];
       let receivedSessionId: string | null = null;
       let pendingText = "";
+      let doneHandled = false;
 
-      const applyAssistantUpdate = (updater: (m: Message) => Message) => {
-        setMessages((prev) => {
-          const next = [...prev];
-          const idx = streamingAssistantIndexRef.current ?? next.length - 1;
-          if (idx < 0 || idx >= next.length) return prev;
-          const current = next[idx];
-          if (!current || current.role !== "assistant") return prev;
-          next[idx] = updater(current);
-          return next;
-        });
-      };
+      const applyAssistantUpdate = updateStreamingAssistant;
 
       const flushTextNow = () => {
         if (pendingRaf != null) {
@@ -853,6 +886,7 @@ export default function ChatPage() {
         }
         if (eventType === "done") {
           flushTextNow();
+          doneHandled = true;
           if (receivedSessionId) {
             setCurrentSessionId(receivedSessionId);
           }
@@ -862,7 +896,11 @@ export default function ChatPage() {
             applyAssistantUpdate((m) => ({ ...m, id: mid }));
           }
 
-          applyAssistantUpdate((m) => ({ ...m, isThinking: false }));
+          applyAssistantUpdate((m) => ({
+            ...m,
+            isThinking: false,
+            streamState: "done",
+          }));
 
           const persistError = data?.persist_error;
           if (typeof persistError === "string" && persistError.trim()) {
@@ -934,9 +972,40 @@ export default function ChatPage() {
         }
       }
 
+      flushTextNow();
+      applyAssistantUpdate((m) => {
+        if (m.streamState === "done") return m;
+        return {
+          ...m,
+          isThinking: false,
+          streamState: "error",
+          streamError: "连接中断，回答可能不完整，可点击重试。",
+        };
+      });
+
+      if (!doneHandled) {
+        toast.warning("连接中断，回答可能不完整，可点击重试");
+      }
+      void requestQuickReplies(assistantText, pendingRefs);
+      if (!isGuest) {
+        void quotasQuery.refetch();
+      }
       return;
     } catch (err: any) {
       if (err?.name === "AbortError") {
+        try {
+          flushPendingText?.();
+        } catch {
+          // ignore
+        }
+        updateStreamingAssistant((m) => ({
+          ...m,
+          isThinking: false,
+          streamState: "stopped",
+          streamError: "已停止生成",
+        }));
+
+        setInput((prev) => (String(prev ?? "").trim() ? prev : userMessage));
         toast.info("已停止生成");
         return;
       }
@@ -953,18 +1022,18 @@ export default function ChatPage() {
         }
 
         toast.info("登录已过期，请重新登录");
-        setMessages((prev) => {
-          const idx = streamingAssistantIndexRef.current;
-          const content = "登录已过期，请重新登录后继续使用。";
-          if (idx == null || idx < 0 || idx >= prev.length) {
-            return [...prev, { role: "assistant", content }];
-          }
-          const next = [...prev];
-          const current = next[idx];
-          if (!current || current.role !== "assistant") return prev;
-          next[idx] = { ...current, content };
-          return next;
-        });
+        updateStreamingAssistant((m) => ({
+          ...m,
+          content: String(m.content ?? "").trim()
+            ? m.content
+            : "登录已过期，请重新登录后继续使用。",
+          isThinking: false,
+          streamState: "error",
+          streamError: "登录已过期",
+          streamRequestId: err?.requestId,
+          streamErrorCode: err?.errorCode,
+        }));
+        setInput((prev) => (String(prev ?? "").trim() ? prev : userMessage));
         return;
       }
 
@@ -983,40 +1052,30 @@ export default function ChatPage() {
         } else {
           void quotasQuery.refetch();
         }
-        setMessages((prev) => {
-          const idx = streamingAssistantIndexRef.current;
-          if (idx == null || idx < 0 || idx >= prev.length) {
-            return [...prev, { role: "assistant", content: message }];
-          }
-          const next = [...prev];
-          const current = next[idx];
-          if (!current || current.role !== "assistant") return prev;
-          next[idx] = { ...current, content: message };
-          return next;
-        });
+        updateStreamingAssistant((m) => ({
+          ...m,
+          content: String(m.content ?? "").trim() ? m.content : message,
+          isThinking: false,
+          streamState: "error",
+          streamError: message,
+          streamRequestId: err?.requestId,
+          streamErrorCode: err?.errorCode,
+        }));
+        setInput((prev) => (String(prev ?? "").trim() ? prev : userMessage));
         return;
       }
 
-      setMessages((prev) => {
-        const idx = streamingAssistantIndexRef.current;
-        if (idx == null || idx < 0 || idx >= prev.length) {
-          return [
-            ...prev,
-            {
-              role: "assistant",
-              content: `抱歉，本次请求失败：${message}`,
-            },
-          ];
-        }
-        const next = [...prev];
-        const current = next[idx];
-        if (!current || current.role !== "assistant") return prev;
-        next[idx] = {
-          ...current,
-          content: `抱歉，本次请求失败：${message}`,
-        };
-        return next;
-      });
+      updateStreamingAssistant((m) => ({
+        ...m,
+        content: String(m.content ?? "").trim() ? m.content : "",
+        isThinking: false,
+        streamState: "error",
+        streamError: message,
+        streamRequestId: err?.requestId,
+        streamErrorCode: err?.errorCode,
+      }));
+
+      setInput((prev) => (String(prev ?? "").trim() ? prev : userMessage));
 
       // fallback to non-stream API when stream fails
       try {
@@ -1039,6 +1098,10 @@ export default function ChatPage() {
                 content: response.answer,
                 references: response.references || [],
                 quickReplies: [],
+                streamState: "done",
+                streamError: undefined,
+                streamRequestId: undefined,
+                streamErrorCode: undefined,
                 intent:
                   typeof response.intent === "string"
                     ? response.intent
@@ -1104,6 +1167,11 @@ export default function ChatPage() {
             content: response.answer,
             references: response.references || [],
             quickReplies: current.quickReplies || [],
+            isThinking: false,
+            streamState: "done",
+            streamError: undefined,
+            streamRequestId: undefined,
+            streamErrorCode: undefined,
             intent:
               typeof response.intent === "string"
                 ? response.intent
@@ -1325,6 +1393,10 @@ export default function ChatPage() {
                       references={message.references}
                       thinkingSteps={message.thinkingSteps}
                       isThinking={message.isThinking}
+                      streamState={message.streamState}
+                      streamError={message.streamError}
+                      streamRequestId={message.streamRequestId}
+                      streamErrorCode={message.streamErrorCode}
                       quickReplies={message.quickReplies}
                       intent={message.intent}
                       needsClarification={message.needsClarification}
@@ -1481,8 +1553,7 @@ export default function ChatPage() {
                     <span className="font-semibold text-slate-900 dark:text-white">
                       {formatQuotaNumber(documentRemaining)}
                     </span>{" "}
-                    / {formatQuotaNumber(documentLimit)}{" "}
-                    次
+                    / {formatQuotaNumber(documentLimit)} 次
                     {typeof documentPackRemaining === "number" &&
                       documentPackRemaining > 0 && (
                         <>
@@ -1493,16 +1564,44 @@ export default function ChatPage() {
                       )}
                   </span>
                 </span>
-                {!isVipActive &&
-                  !!quotasQuery.data &&
-                  totalAiRemaining <= 0 && (
+                <div className="flex items-center gap-3">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    icon={RotateCcw}
+                    isLoading={quotasQuery.isFetching}
+                    loadingText="刷新中..."
+                    onClick={() => quotasQuery.refetch()}
+                    className="h-8"
+                  >
+                    刷新配额
+                  </Button>
+                  {!!quotasQuery.data && totalAiRemaining <= 0 ? (
+                    <div className="flex items-center gap-3">
+                      {!isVipActive ? (
+                        <Link
+                          to="/profile"
+                          className="font-medium text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200"
+                        >
+                          开通 VIP
+                        </Link>
+                      ) : null}
+                      <Link
+                        to="/profile"
+                        className="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+                      >
+                        购买次数包
+                      </Link>
+                    </div>
+                  ) : (
                     <Link
                       to="/profile"
-                      className="font-medium text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200"
+                      className="font-medium text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white"
                     >
-                      开通 VIP
+                      个人中心
                     </Link>
                   )}
+                </div>
               </div>
             )}
             {messages.length < 2 && (
@@ -1520,6 +1619,28 @@ export default function ChatPage() {
                     }}
                     disabled={loading || streaming || isAiQuotaExhausted}
                     className="px-3 py-1.5 rounded-full bg-slate-100 hover:bg-slate-200 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:bg-slate-800 dark:hover:bg-slate-700 dark:focus-visible:ring-offset-slate-900 text-xs text-slate-600 dark:text-slate-300 transition-all"
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {showFollowUpPrompts && (
+              <div className="flex flex-wrap gap-2 justify-center mb-2">
+                {followUpPrompts.map((p) => (
+                  <button
+                    key={p}
+                    onClick={() => {
+                      if (loading || streaming) {
+                        setInput(p);
+                        requestAnimationFrame(() => inputRef.current?.focus());
+                        return;
+                      }
+                      void sendMessage(p);
+                    }}
+                    disabled={loading || streaming || isAiQuotaExhausted}
+                    className="px-3 py-1.5 rounded-full bg-white border border-slate-200 hover:bg-slate-50 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:bg-slate-900/30 dark:border-white/10 dark:hover:bg-white/[0.05] dark:focus-visible:ring-offset-slate-900 text-xs text-slate-600 dark:text-slate-200 transition-all"
                   >
                     {p}
                   </button>
@@ -1559,10 +1680,12 @@ export default function ChatPage() {
                     loading || streaming || transcribing || analyzingFile
                   }
                   isLoading={analyzingFile}
-                  loadingText=""
+                  loadingText="分析中..."
                   size="sm"
-                  aria-label="上传文件"
-                  className="w-10 h-10 p-0 rounded-full transition-all bg-slate-100 hover:bg-slate-200 text-slate-600 shadow-md hover:shadow-lg dark:bg-slate-700 dark:hover:bg-slate-600 dark:text-slate-200"
+                  aria-label={analyzingFile ? "分析中" : "上传文件"}
+                  className={`h-10 rounded-full transition-all shadow-md hover:shadow-lg ${
+                    analyzingFile ? "px-4 w-auto" : "w-10 p-0"
+                  } bg-slate-100 hover:bg-slate-200 text-slate-600 dark:bg-slate-700 dark:hover:bg-slate-600 dark:text-slate-200`}
                 >
                   <Paperclip className="h-4 w-4" />
                 </Button>
@@ -1570,10 +1693,18 @@ export default function ChatPage() {
                   onClick={toggleRecording}
                   disabled={loading || streaming || transcribing}
                   isLoading={transcribing}
-                  loadingText=""
+                  loadingText="识别中..."
                   size="sm"
-                  aria-label={recording ? "停止录音" : "语音输入"}
-                  className={`w-10 h-10 p-0 rounded-full transition-all ${
+                  aria-label={
+                    transcribing
+                      ? "识别中"
+                      : recording
+                        ? "停止录音"
+                        : "语音输入"
+                  }
+                  className={`h-10 rounded-full transition-all ${
+                    transcribing ? "px-4 w-auto" : "w-10 p-0"
+                  } ${
                     recording
                       ? "bg-red-600 hover:bg-red-700 text-white shadow-md hover:shadow-lg"
                       : "bg-slate-100 hover:bg-slate-200 text-slate-600 shadow-md hover:shadow-lg dark:bg-slate-700 dark:hover:bg-slate-600 dark:text-slate-200"
@@ -1598,9 +1729,12 @@ export default function ChatPage() {
                     (!streaming && (!input.trim() || isAiQuotaExhausted))
                   }
                   isLoading={loading}
-                  loadingText=""
+                  loadingText="发送中..."
                   size="sm"
-                  className={`w-10 h-10 p-0 rounded-full transition-all ${
+                  aria-label={loading ? "发送中" : streaming ? "停止生成" : "发送"}
+                  className={`h-10 rounded-full transition-all ${
+                    loading ? "px-4 w-auto" : "w-10 p-0"
+                  } ${
                     input.trim() || streaming
                       ? "bg-blue-600 hover:bg-blue-700 text-white shadow-md hover:shadow-lg"
                       : "bg-slate-100 text-slate-400 dark:bg-slate-700"
@@ -1730,6 +1864,10 @@ function AssistantMessage({
   references,
   thinkingSteps,
   isThinking,
+  streamState,
+  streamError,
+  streamRequestId,
+  streamErrorCode,
   quickReplies,
   intent,
   needsClarification,
@@ -1749,6 +1887,10 @@ function AssistantMessage({
   references?: LawReference[];
   thinkingSteps?: ThinkingStep[];
   isThinking?: boolean;
+  streamState?: "streaming" | "done" | "stopped" | "error";
+  streamError?: string;
+  streamRequestId?: string;
+  streamErrorCode?: string;
   quickReplies?: string[];
   intent?: string;
   needsClarification?: boolean;
@@ -1765,6 +1907,7 @@ function AssistantMessage({
 }) {
   const [showRefs, setShowRefs] = useState(false);
   const [activeRef, setActiveRef] = useState<LawReference | null>(null);
+  const [expandedRefs, setExpandedRefs] = useState<Record<string, boolean>>({});
   const [favorited, setFavorited] = useState(false);
   const toast = useToast();
   const [rated, setRated] = useState<number | null>(null);
@@ -1787,6 +1930,10 @@ function AssistantMessage({
     } catch {
       setFavorited(false);
     }
+  }, [messageId]);
+
+  useEffect(() => {
+    setExpandedRefs({});
   }, [messageId]);
 
   const toggleFavorite = () => {
@@ -1899,6 +2046,82 @@ function AssistantMessage({
     return items;
   }, [content]);
 
+  const structuredSummary = useMemo(() => {
+    const strip = (s: string) =>
+      String(s ?? "")
+        .replace(/\*\*([^*]+)\*\*/g, "$1")
+        .replace(/\*([^*]+)\*/g, "$1")
+        .replace(/`([^`]+)`/g, "$1")
+        .replace(/^>\s?/, "")
+        .replace(/\s+/g, " ")
+        .trim();
+
+    const findSection = (keywords: string[]) => {
+      const idx = blocks.findIndex(
+        (b) =>
+          (b.type === "h2" || b.type === "h3") &&
+          keywords.some((k) => String(b.text ?? "").includes(k))
+      );
+      if (idx < 0) return null;
+
+      const out: string[] = [];
+      for (let i = idx + 1; i < blocks.length; i++) {
+        const b = blocks[i];
+        if (b.type === "h2" || b.type === "h3") break;
+        if (b.type === "br" || b.type === "code") continue;
+        const text = strip(b.text);
+        if (!text) continue;
+        out.push(text);
+        if (out.length >= 8) break;
+      }
+      return out.length > 0 ? out : null;
+    };
+
+    const fallbackConclusion = () => {
+      for (const b of blocks) {
+        if (b.type !== "p" && b.type !== "quote") continue;
+        const text = strip(b.text);
+        if (text) return text;
+      }
+      return "";
+    };
+
+    const fallbackHighlights = () => {
+      const out: string[] = [];
+      for (const b of blocks) {
+        if (b.type !== "li" && b.type !== "oli") continue;
+        const text = strip(b.text);
+        if (!text) continue;
+        out.push(text);
+        if (out.length >= 4) break;
+      }
+      return out;
+    };
+
+    const conclusionSection = findSection(["结论", "总结", "答案"]);
+    const highlightsSection = findSection(["要点", "重点", "关键点"]);
+
+    const conclusion =
+      (conclusionSection && conclusionSection[0]) || fallbackConclusion();
+
+    const highlights =
+      highlightsSection ??
+      (() => {
+        const list = fallbackHighlights();
+        return list.length > 0 ? list : null;
+      })();
+
+    const shouldShow =
+      (strip(conclusion).length >= 16 || (highlights?.length ?? 0) > 0) &&
+      blocks.length >= 6;
+
+    return {
+      shouldShow,
+      conclusion: strip(conclusion),
+      highlights: Array.isArray(highlights) ? highlights : [],
+    };
+  }, [blocks]);
+
   const normalizedQuickReplies = useMemo(() => {
     const raw = Array.isArray(quickReplies) ? quickReplies : [];
     const seen = new Set<string>();
@@ -1944,12 +2167,65 @@ function AssistantMessage({
       (typeof strategyReason === "string" && strategyReason.trim())
   );
 
+  const statusBanner = useMemo(() => {
+    if (isStreaming) return null;
+    if (streamState !== "error" && streamState !== "stopped") return null;
+    const text =
+      streamState === "stopped"
+        ? "已停止生成"
+        : String(streamError ?? "生成中断，可点击重试").trim() ||
+          "生成中断，可点击重试";
+
+    const suffixParts: string[] = [];
+    if (typeof streamErrorCode === "string" && streamErrorCode.trim()) {
+      suffixParts.push(`错误码: ${streamErrorCode.trim()}`);
+    }
+    if (typeof streamRequestId === "string" && streamRequestId.trim()) {
+      suffixParts.push(`请求ID: ${streamRequestId.trim()}`);
+    }
+    const suffix =
+      suffixParts.length > 0 ? `（${suffixParts.join("，")}）` : "";
+
+    const showRetry = typeof onRegenerate === "function";
+    const retryText = streamState === "stopped" ? "继续生成" : "重试";
+
+    return (
+      <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-100">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="whitespace-pre-wrap break-words">
+              {text}
+              {suffix}
+            </div>
+          </div>
+          {showRetry && (
+            <button
+              type="button"
+              onClick={() => onRegenerate?.()}
+              className="shrink-0 rounded-lg border border-amber-300 bg-white px-2 py-1 text-xs font-medium text-amber-900 hover:bg-amber-50 active:scale-[0.99] dark:border-amber-800/60 dark:bg-amber-950/30 dark:text-amber-100 dark:hover:bg-amber-950/40"
+            >
+              {retryText}
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }, [
+    isStreaming,
+    onRegenerate,
+    streamError,
+    streamErrorCode,
+    streamRequestId,
+    streamState,
+  ]);
+
   const rate = async (value: number) => {
     if (!messageId) return;
     if (!localStorage.getItem("token")) {
       toast.info("登录后可评价");
       return;
     }
+    if (rateMutation.isPending) return;
     rateMutation.mutate({ message_id: messageId, rating: value });
   };
 
@@ -1989,23 +2265,81 @@ function AssistantMessage({
   const copyWithReferences = async () => {
     const parts: string[] = [];
     parts.push(String(content ?? ""));
-    const refs = Array.isArray(references) ? references : [];
-    if (refs.length > 0) {
+    if (Array.isArray(references) && references.length > 0) {
       parts.push("\n\n相关法条：");
-      for (const ref of refs) {
-        const lawName = String(ref?.law_name ?? "").trim();
-        const article = String(ref?.article ?? "").trim();
-        const refContent = String(ref?.content ?? "").trim();
-        const title =
-          lawName || article ? `《${lawName}》${article}` : "法条引用";
-        parts.push(`- ${title}`);
-        if (refContent) {
-          parts.push(refContent);
+      for (const group of groupedReferences) {
+        const lawName = String(group.lawName ?? "").trim() || "相关法条";
+        parts.push(`《${lawName}》`);
+
+        const items = Array.isArray(group.items) ? group.items : [];
+        for (const item of items) {
+          const article = String(item.ref?.article ?? "").trim();
+          const title = article ? article : "条文";
+          parts.push(`- ${title}`);
+
+          const body = String(item.ref?.content ?? "").trim();
+          if (body) parts.push(body);
+          parts.push("");
         }
         parts.push("");
       }
     }
     await copyTextToClipboard(parts.join("\n").trim());
+  };
+
+  const copyReferencesOnly = () => {
+    const groups = groupedReferences;
+    if (!Array.isArray(groups) || groups.length === 0) {
+      void copyTextToClipboard("");
+      return;
+    }
+
+    const parts: string[] = [];
+    for (const group of groups) {
+      const lawName = String(group.lawName ?? "").trim() || "相关法条";
+      parts.push(`《${lawName}》`);
+
+      const items = Array.isArray(group.items) ? group.items : [];
+      for (const item of items) {
+        const article = String(item.ref?.article ?? "").trim();
+        const title = article ? article : "条文";
+        parts.push(`- ${title}`);
+        const body = String(item.ref?.content ?? "").trim();
+        if (body) parts.push(body);
+        parts.push("");
+      }
+      parts.push("");
+    }
+
+    void copyTextToClipboard(parts.join("\n").trim());
+  };
+
+  const groupedReferences = useMemo(() => {
+    const refs = Array.isArray(references) ? references : [];
+    const groups: Record<
+      string,
+      Array<{ ref: LawReference; key: string; article: string }>
+    > = {};
+
+    for (let i = 0; i < refs.length; i++) {
+      const ref = refs[i];
+      if (!ref) continue;
+      const lawName = String(ref.law_name ?? "").trim() || "相关法条";
+      const article = String(ref.article ?? "").trim();
+      const key = `${i}-${lawName}-${article}`;
+      (groups[lawName] ||= []).push({ ref, key, article });
+    }
+
+    return Object.entries(groups).map(([lawName, items]) => ({ lawName, items }));
+  }, [references]);
+
+  const copyActiveRef = () => {
+    if (!activeRef) return;
+    const title = `《${String(activeRef.law_name ?? "")}》${String(
+      activeRef.article ?? ""
+    )}`;
+    const body = String(activeRef.content ?? "");
+    void copyTextToClipboard(`${title}\n${body}`.trim());
   };
 
   const renderedBlocks = useMemo(() => {
@@ -2321,6 +2655,16 @@ function AssistantMessage({
         size="lg"
       >
         <div className="space-y-4">
+          <div className="flex justify-end">
+            <Button
+              variant="outline"
+              size="sm"
+              icon={Copy}
+              onClick={copyActiveRef}
+            >
+              复制该法条
+            </Button>
+          </div>
           <div className="text-sm leading-relaxed text-slate-700 dark:text-slate-200 whitespace-pre-wrap">
             {activeRef?.content}
           </div>
@@ -2333,6 +2677,42 @@ function AssistantMessage({
       </Modal>
 
       <ThinkingProcess steps={thinkingSteps} isThinking={Boolean(isThinking)} />
+
+      {statusBanner}
+
+      {structuredSummary.shouldShow && (
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 shadow-sm dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+              结论与要点
+            </div>
+          </div>
+
+          {structuredSummary.conclusion && (
+            <div className="mt-2 rounded-xl bg-white px-3 py-2 text-sm leading-relaxed text-slate-800 dark:bg-slate-900/40 dark:text-slate-100">
+              <span className="mr-2 text-xs font-semibold text-blue-700 dark:text-blue-300">
+                结论
+              </span>
+              <span className="whitespace-pre-wrap">{structuredSummary.conclusion}</span>
+            </div>
+          )}
+
+          {structuredSummary.highlights.length > 0 && (
+            <div className="mt-2">
+              <div className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                要点
+              </div>
+              <ul className="mt-1 space-y-1 pl-5 list-disc marker:text-slate-400">
+                {structuredSummary.highlights.slice(0, 4).map((t, i) => (
+                  <li key={`hl-${i}`} className="text-sm text-slate-700 dark:text-slate-200">
+                    <span className="whitespace-pre-wrap">{t}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
 
       {(!content || content.trim().length === 0) && isStreaming ? (
         <div className="flex items-center gap-2 text-sm text-slate-500">
@@ -2509,37 +2889,143 @@ function AssistantMessage({
 
           {showRefs && (
             <div className="mt-3 space-y-2 animate-fade-in">
-              {references.map((ref, idx) => (
-                <div
-                  key={idx}
-                  className="p-4 rounded-xl bg-slate-50 border border-slate-100 dark:bg-slate-800/50 dark:border-slate-700"
+              <div className="flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={copyReferencesOnly}
+                  className="text-xs px-2 py-1 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:bg-slate-900/30 dark:border-white/10 dark:text-slate-200 dark:hover:bg-white/[0.05] flex items-center gap-1"
                 >
-                  <div className="flex items-start gap-3">
-                    <div className="p-1.5 bg-blue-100 rounded-lg dark:bg-blue-900/50">
-                      <BookOpen className="h-4 w-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                  <Copy className="h-3.5 w-3.5" />
+                  复制全部法条
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next: Record<string, boolean> = {};
+                    for (const group of groupedReferences) {
+                      for (const item of group.items) {
+                        const text = String(item.ref?.content ?? "");
+                        if (text.length > 220) next[item.key] = true;
+                      }
+                    }
+                    setExpandedRefs(next);
+                  }}
+                  className="text-xs px-2 py-1 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:bg-slate-900/30 dark:border-white/10 dark:text-slate-200 dark:hover:bg-white/[0.05]"
+                >
+                  全部展开
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setExpandedRefs({})}
+                  className="text-xs px-2 py-1 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:bg-slate-900/30 dark:border-white/10 dark:text-slate-200 dark:hover:bg-white/[0.05]"
+                >
+                  全部收起
+                </button>
+              </div>
+
+              {groupedReferences.map((group) => (
+                <div key={group.lawName} className="space-y-2">
+                  <div className="flex items-center justify-between px-1">
+                    <div className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                      《{group.lawName}》
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-slate-900 dark:text-white">
-                        《{ref.law_name}》{ref.article}
-                      </p>
-                      <p className="text-sm text-slate-600 mt-1 leading-relaxed dark:text-slate-400">
-                        {ref.content}
-                      </p>
-                      {ref.relevance && (
-                        <div className="mt-2 flex items-center gap-2">
-                          <div className="h-1.5 w-24 bg-slate-200 rounded-full overflow-hidden dark:bg-slate-700">
-                            <div
-                              className="h-full bg-blue-500 rounded-full"
-                              style={{ width: `${ref.relevance * 100}%` }}
-                            />
-                          </div>
-                          <span className="text-xs text-slate-400">
-                            关联度 {Math.round(ref.relevance * 100)}%
-                          </span>
-                        </div>
-                      )}
+                    <div className="text-[11px] text-slate-400 dark:text-slate-500">
+                      {group.items.length} 条
                     </div>
                   </div>
+
+                  {group.items.map((item) => (
+                    <div
+                      key={item.key}
+                      className="p-4 rounded-xl bg-slate-50 border border-slate-100 dark:bg-slate-800/50 dark:border-slate-700"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-start gap-3 min-w-0">
+                          <div className="p-1.5 bg-blue-100 rounded-lg dark:bg-blue-900/50">
+                            <BookOpen className="h-4 w-4 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold text-slate-900 dark:text-white">
+                              {item.article ? item.article : "条文"}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const title = `《${String(item.ref?.law_name ?? "")}》${String(
+                                item.ref?.article ?? ""
+                              )}`;
+                              const body = String(item.ref?.content ?? "");
+                              void copyTextToClipboard(`${title}\n${body}`.trim());
+                            }}
+                            className="p-1.5 rounded-lg text-slate-500 hover:bg-black/5 hover:text-slate-700 dark:text-white/60 dark:hover:bg-white/10 dark:hover:text-white"
+                            title="复制该条法条"
+                          >
+                            <Copy className="h-4 w-4" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => setActiveRef(item.ref)}
+                            className="p-1.5 rounded-lg text-slate-500 hover:bg-black/5 hover:text-slate-700 dark:text-white/60 dark:hover:bg-white/10 dark:hover:text-white"
+                            title="查看详情"
+                          >
+                            <FileText className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="pt-2">
+                        {(() => {
+                          const raw = String(item.ref?.content ?? "");
+                          const maxChars = 220;
+                          const isLong = raw.length > maxChars;
+                          const expanded = Boolean(expandedRefs[item.key]);
+                          const display =
+                            expanded || !isLong ? raw : `${raw.slice(0, maxChars)}…`;
+
+                          return (
+                            <>
+                              <div className="text-sm text-slate-600 mt-1 leading-relaxed dark:text-slate-400 whitespace-pre-wrap">
+                                {display}
+                              </div>
+                              {isLong ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setExpandedRefs((prev) => ({
+                                      ...prev,
+                                      [item.key]: !prev[item.key],
+                                    }))
+                                  }
+                                  className="mt-2 text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+                                >
+                                  {expanded ? "收起" : "展开全文"}
+                                </button>
+                              ) : null}
+                            </>
+                          );
+                        })()}
+
+                        {item.ref.relevance && (
+                          <div className="mt-2 flex items-center gap-2">
+                            <div className="h-1.5 w-24 bg-slate-200 rounded-full overflow-hidden dark:bg-slate-700">
+                              <div
+                                className="h-full bg-blue-500 rounded-full"
+                                style={{ width: `${item.ref.relevance * 100}%` }}
+                              />
+                            </div>
+                            <span className="text-xs text-slate-400">
+                              关联度 {Math.round(item.ref.relevance * 100)}%
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               ))}
             </div>

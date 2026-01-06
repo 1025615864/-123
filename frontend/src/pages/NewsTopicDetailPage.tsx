@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ArrowLeft, Calendar, Eye, Layers, Newspaper, Tag } from "lucide-react";
+import { ArrowLeft, Calendar, Eye, Layers, Newspaper, Tag, RefreshCw } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Card,
-  Loading,
+  Button,
   EmptyState,
   Badge,
   Pagination,
   FadeInImage,
+  ListSkeleton,
 } from "../components/ui";
 import PageHeader from "../components/PageHeader";
 import api from "../api/client";
@@ -195,10 +196,6 @@ export default function NewsTopicDetailPage() {
     });
   };
 
-  if (detailQuery.isLoading && !topic) {
-    return <Loading />;
-  }
-
   return (
     <div className="space-y-10">
       <Card variant="surface" padding="md">
@@ -217,6 +214,19 @@ export default function NewsTopicDetailPage() {
           description={topic?.description ?? ""}
           layout="mdCenter"
           tone={actualTheme}
+          right={
+            <Button
+              variant="outline"
+              size="sm"
+              icon={RefreshCw}
+              isLoading={detailQuery.isFetching}
+              loadingText="刷新中..."
+              onClick={() => detailQuery.refetch()}
+              disabled={detailQuery.isFetching}
+            >
+              刷新
+            </Button>
+          }
         />
       </Card>
 
@@ -239,7 +249,9 @@ export default function NewsTopicDetailPage() {
         </Badge>
       </div>
 
-      {items.length === 0 ? (
+      {detailQuery.isLoading && items.length === 0 ? (
+        <ListSkeleton count={6} />
+      ) : items.length === 0 ? (
         <EmptyState
           icon={Newspaper}
           title="暂无内容"

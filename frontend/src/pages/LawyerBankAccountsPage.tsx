@@ -8,7 +8,8 @@ import {
   Card,
   EmptyState,
   Input,
-  Loading,
+  ListSkeleton,
+  Skeleton,
 } from "../components/ui";
 import api from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
@@ -36,6 +37,9 @@ export default function LawyerBankAccountsPage() {
   const { actualTheme } = useTheme();
   const toast = useToast();
 
+  const [activeDeleteId, setActiveDeleteId] = useState<number | null>(null);
+  const [activeDefaultId, setActiveDefaultId] = useState<number | null>(null);
+
   const [bankName, setBankName] = useState("");
   const [accountNo, setAccountNo] = useState("");
   const [accountHolder, setAccountHolder] = useState("");
@@ -50,6 +54,7 @@ export default function LawyerBankAccountsPage() {
     enabled: isAuthenticated,
     retry: 1,
     refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
   });
 
   useEffect(() => {
@@ -96,6 +101,12 @@ export default function LawyerBankAccountsPage() {
     onSuccess: () => {
       listQuery.refetch();
     },
+    onMutate: async (id) => {
+      setActiveDeleteId(id);
+    },
+    onSettled: (_data, _err, id) => {
+      setActiveDeleteId((prev) => (prev === id ? null : prev));
+    },
   });
 
   const setDefaultMutation = useAppMutation<unknown, number>({
@@ -107,7 +118,18 @@ export default function LawyerBankAccountsPage() {
     onSuccess: () => {
       listQuery.refetch();
     },
+    onMutate: async (id) => {
+      setActiveDefaultId(id);
+    },
+    onSettled: (_data, _err, id) => {
+      setActiveDefaultId((prev) => (prev === id ? null : prev));
+    },
   });
+
+  const actionBusy =
+    createMutation.isPending ||
+    deleteMutation.isPending ||
+    setDefaultMutation.isPending;
 
   if (!isAuthenticated) {
     return (
@@ -130,7 +152,22 @@ export default function LawyerBankAccountsPage() {
   }
 
   if (listQuery.isLoading && !listQuery.data) {
-    return <Loading text="加载中..." tone={actualTheme} />;
+    return (
+      <div className="space-y-10">
+        <PageHeader
+          eyebrow="律师"
+          title="收款账户"
+          description="管理银行卡（MVP）"
+          layout="mdStart"
+          tone={actualTheme}
+          right={<Skeleton width="90px" height="36px" />}
+        />
+
+        <Card variant="surface" padding="lg">
+          <ListSkeleton count={3} />
+        </Card>
+      </div>
+    );
   }
 
   return (
@@ -146,7 +183,9 @@ export default function LawyerBankAccountsPage() {
             variant="outline"
             icon={RefreshCw}
             onClick={() => listQuery.refetch()}
-            disabled={listQuery.isFetching}
+            isLoading={listQuery.isFetching}
+            loadingText="刷新中..."
+            disabled={listQuery.isFetching || actionBusy}
           >
             刷新
           </Button>
@@ -163,58 +202,83 @@ export default function LawyerBankAccountsPage() {
           />
         ) : (
           <div className="space-y-3">
-            {items.map((a) => (
-              <Card
-                key={a.id}
-                variant="surface"
-                padding="md"
-                className="border border-slate-200/70 dark:border-white/10"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <div className="text-sm font-semibold text-slate-900 dark:text-white">
-                        {a.bank_name ? a.bank_name + " " : ""}{" "}
-                        {a.account_no_masked}
-                      </div>
-                      {a.is_default ? (
-                        <Badge variant="success" size="sm">
-                          默认
-                        </Badge>
-                      ) : null}
-                      {!a.is_active ? (
-                        <Badge variant="warning" size="sm">
-                          已停用
-                        </Badge>
-                      ) : null}
-                    </div>
-                    <div className="mt-2 text-xs text-slate-600 dark:text-white/60">
-                      户名：{a.account_holder}
-                    </div>
-                  </div>
+            {items.map((a) => {
+              const defaultLoading =
+                setDefaultMutation.isPending && activeDefaultId === a.id;
+              const deleteLoading =
+                deleteMutation.isPending && activeDeleteId === a.id;
+              const disableOther =
+                actionBusy && !(defaultLoading || deleteLoading);
 
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setDefaultMutation.mutate(a.id)}
-                      disabled={setDefaultMutation.isPending || a.is_default}
-                    >
-                      设为默认
-                    </Button>
-                    <Button
-                      variant="danger"
-                      size="sm"
-                      icon={Trash2}
-                      onClick={() => deleteMutation.mutate(a.id)}
-                      disabled={deleteMutation.isPending}
-                    >
-                      删除
-                    </Button>
+              return (
+                <Card
+                  key={a.id}
+                  variant="surface"
+                  padding="md"
+                  className="border border-slate-200/70 dark:border-white/10"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <div className="text-sm font-semibold text-slate-900 dark:text-white">
+                          {a.bank_name ? a.bank_name + " " : ""}{" "}
+                          {a.account_no_masked}
+                        </div>
+                        {a.is_default ? (
+                          <Badge variant="success" size="sm">
+                            默认
+                          </Badge>
+                        ) : null}
+                        {!a.is_active ? (
+                          <Badge variant="warning" size="sm">
+                            已停用
+                          </Badge>
+                        ) : null}
+                      </div>
+                      <div className="mt-2 text-xs text-slate-600 dark:text-white/60">
+                        户名：{a.account_holder}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          if (actionBusy) return;
+                          setDefaultMutation.mutate(a.id);
+                        }}
+                        isLoading={defaultLoading}
+                        loadingText="设置中..."
+                        disabled={
+                          a.is_default ||
+                          (actionBusy && !defaultLoading) ||
+                          disableOther
+                        }
+                      >
+                        设为默认
+                      </Button>
+                      <Button
+                        variant="danger"
+                        size="sm"
+                        icon={Trash2}
+                        onClick={() => {
+                          if (actionBusy) return;
+                          deleteMutation.mutate(a.id);
+                        }}
+                        isLoading={deleteLoading}
+                        loadingText="删除中..."
+                        disabled={
+                          (actionBusy && !deleteLoading) || disableOther
+                        }
+                      >
+                        删除
+                      </Button>
+                    </div>
                   </div>
-                </div>
-              </Card>
-            ))}
+                </Card>
+              );
+            })}
           </div>
         )}
       </Card>
@@ -233,18 +297,21 @@ export default function LawyerBankAccountsPage() {
             value={bankName}
             onChange={(e) => setBankName(e.target.value)}
             placeholder="例如：工商银行"
+            disabled={actionBusy}
           />
           <Input
             label="卡号"
             value={accountNo}
             onChange={(e) => setAccountNo(e.target.value)}
             placeholder="例如：6222..."
+            disabled={actionBusy}
           />
           <Input
             label="户名"
             value={accountHolder}
             onChange={(e) => setAccountHolder(e.target.value)}
             placeholder="例如：张三"
+            disabled={actionBusy}
           />
         </div>
 
@@ -254,6 +321,7 @@ export default function LawyerBankAccountsPage() {
               type="checkbox"
               checked={isDefault}
               onChange={(e) => setIsDefault(e.target.checked)}
+              disabled={actionBusy}
               className="rounded"
             />
             设为默认
@@ -262,7 +330,10 @@ export default function LawyerBankAccountsPage() {
           <Button
             icon={Plus}
             isLoading={createMutation.isPending}
+            loadingText="添加中..."
+            disabled={actionBusy}
             onClick={() => {
+              if (actionBusy || createMutation.isPending) return;
               const bn = bankName.trim();
               const an = accountNo.trim();
               const ah = accountHolder.trim();

@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Eye, Save } from 'lucide-react'
+import { ArrowLeft, Eye, Save, RefreshCw } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import api from '../api/client'
-import { Button, Card, Input, Loading } from '../components/ui'
+import { Button, Card, Input, ListSkeleton } from '../components/ui'
 import MarkdownContent from '../components/MarkdownContent'
 import PageHeader from '../components/PageHeader'
 import RichTextEditor from '../components/RichTextEditor'
@@ -43,6 +43,9 @@ export default function EditPostPage() {
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [preview, setPreview] = useState(false)
 
+  const [dirty, setDirty] = useState(false)
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null)
+
   const postCategories = useMemo(() => ['法律咨询', '经验分享', '案例讨论', '政策解读', '其他'], [])
 
   const postQueryKey = queryKeys.forumPost(postId)
@@ -72,7 +75,35 @@ export default function EditPostPage() {
     setContent(data.content || '')
     setImages(Array.isArray(data.images) ? data.images : [])
     setAttachments(Array.isArray(data.attachments) ? data.attachments : [])
+    const t = new Date(data.updated_at || data.created_at).getTime()
+    setLastSavedAt(Number.isNaN(t) ? null : t)
+    setDirty(false)
   }, [postQuery.data])
+
+  const handleTitleChange = (v: string) => {
+    setTitle(v)
+    setDirty(true)
+  }
+
+  const handleCategoryChange = (v: string) => {
+    setCategory(v)
+    setDirty(true)
+  }
+
+  const handleContentChange = (v: string) => {
+    setContent(v)
+    setDirty(true)
+  }
+
+  const handleImagesChange = (v: string[]) => {
+    setImages(v)
+    setDirty(true)
+  }
+
+  const handleAttachmentsChange = (v: Attachment[]) => {
+    setAttachments(v)
+    setDirty(true)
+  }
 
   const updateMutation = useAppMutation<{ id: number }, void>({
     mutationFn: async () => {
@@ -88,6 +119,8 @@ export default function EditPostPage() {
     errorMessageFallback: '保存失败，请稍后重试',
     onSuccess: async () => {
       if (!postId) return
+      setDirty(false)
+      setLastSavedAt(Date.now())
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: postQueryKey }),
         queryClient.invalidateQueries({ queryKey: queryKeys.forumPostsRoot() }),
@@ -99,6 +132,15 @@ export default function EditPostPage() {
       toast.error(getApiErrorMessage(err, '保存失败，请稍后重试'))
     },
   })
+
+  const actionBusy = updateMutation.isPending
+
+  const saveStatusText = useMemo(() => {
+    if (updateMutation.isPending) return '保存中...'
+    if (dirty) return '未保存'
+    if (lastSavedAt) return `已保存 ${new Date(lastSavedAt).toLocaleTimeString()}`
+    return '已保存'
+  }, [dirty, lastSavedAt, updateMutation.isPending])
 
   const handleSave = () => {
     if (!isAuthenticated) {
@@ -114,12 +156,20 @@ export default function EditPostPage() {
       toast.error('请填写内容')
       return
     }
-    if (updateMutation.isPending) return
+    if (!dirty) {
+      toast.info('内容未修改')
+      return
+    }
+    if (actionBusy) return
     updateMutation.mutate()
   }
 
   if (postQuery.isLoading && !postQuery.data) {
-    return <Loading text="加载中..." tone={actualTheme} />
+    return (
+      <div className="space-y-8">
+        <ListSkeleton count={4} />
+      </div>
+    )
   }
 
   if (!postQuery.data) {
@@ -137,6 +187,10 @@ export default function EditPostPage() {
     <div className="space-y-8">
       <Link
         to={`/forum/post/${postId}`}
+        onClick={(e) => {
+          if (actionBusy) e.preventDefault()
+        }}
+        aria-disabled={actionBusy}
         className="inline-flex items-center gap-2 text-slate-600 hover:text-slate-900 transition-colors dark:text-white/60 dark:hover:text-white"
       >
         <ArrowLeft className="h-4 w-4" />
@@ -151,14 +205,37 @@ export default function EditPostPage() {
         layout="mdCenter"
         right={
           <div className="flex flex-wrap gap-3">
+            <div className="flex items-center text-xs text-slate-500 px-2 dark:text-white/45">
+              {saveStatusText}
+            </div>
             <Button
               variant={preview ? 'secondary' : 'outline'}
               icon={Eye}
-              onClick={() => setPreview((p) => !p)}
+              onClick={() => {
+                if (actionBusy) return
+                setPreview((p) => !p)
+              }}
+              disabled={actionBusy}
             >
               {preview ? '编辑' : '预览'}
             </Button>
-            <Button icon={Save} onClick={handleSave} isLoading={updateMutation.isPending}>
+            <Button
+              variant="outline"
+              icon={RefreshCw}
+              onClick={() => postQuery.refetch()}
+              isLoading={postQuery.isFetching}
+              loadingText="刷新中..."
+              disabled={postQuery.isFetching || actionBusy}
+            >
+              刷新
+            </Button>
+            <Button
+              icon={Save}
+              onClick={handleSave}
+              isLoading={updateMutation.isPending}
+              loadingText="保存中..."
+              disabled={updateMutation.isPending || !dirty}
+            >
               保存
             </Button>
           </div>
@@ -166,19 +243,21 @@ export default function EditPostPage() {
       />
 
       <Card variant="surface" padding="lg">
-        <div className="space-y-5">
+        <div className={`space-y-5 ${actionBusy ? 'opacity-60 pointer-events-none' : ''}`}>
           <Input
             label="标题"
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            onChange={(e) => handleTitleChange(e.target.value)}
             placeholder="请用一句话描述你的问题/观点"
+            disabled={actionBusy}
           />
 
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">分类</label>
             <select
               value={category}
-              onChange={(e) => setCategory(e.target.value)}
+              onChange={(e) => handleCategoryChange(e.target.value)}
+              disabled={actionBusy}
               className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none transition hover:border-slate-300 focus-visible:border-amber-500/50 focus-visible:ring-2 focus-visible:ring-amber-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white dark:hover:border-white/20 dark:focus-visible:ring-offset-slate-900"
             >
               {postCategories.map((cat) => (
@@ -198,11 +277,11 @@ export default function EditPostPage() {
               <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">内容</label>
               <RichTextEditor
                 value={content}
-                onChange={setContent}
+                onChange={handleContentChange}
                 images={images}
-                onImagesChange={setImages}
+                onImagesChange={handleImagesChange}
                 attachments={attachments}
-                onAttachmentsChange={setAttachments}
+                onAttachmentsChange={handleAttachmentsChange}
                 placeholder="请输入内容，支持 Markdown、表情、图片和附件链接..."
                 minHeight="260px"
               />

@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, MessageSquare } from 'lucide-react'
-import { useQuery } from '@tanstack/react-query'
+import { ArrowLeft, MessageSquare, RefreshCw, Trash2 } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import api from '../api/client'
 import PageHeader from '../components/PageHeader'
-import { Badge, Button, Card, Chip, EmptyState, Loading, Pagination } from '../components/ui'
+import { Badge, Button, Card, Chip, EmptyState, ListSkeleton, Pagination } from '../components/ui'
 import { useAuth } from '../contexts/AuthContext'
 import { useTheme } from '../contexts/ThemeContext'
 import { useToast } from '../hooks'
@@ -53,6 +53,7 @@ export default function MyCommentsPage() {
   const { isAuthenticated } = useAuth()
   const { actualTheme } = useTheme()
   const toast = useToast()
+  const queryClient = useQueryClient()
 
   const [urlParams, setUrlParams] = useSearchParams()
   const didInitFromUrlRef = useRef(false)
@@ -60,6 +61,8 @@ export default function MyCommentsPage() {
   const [page, setPage] = useState(1)
   const pageSize = 20
   const [status, setStatus] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all')
+
+  const [pendingDelete, setPendingDelete] = useState<Record<number, boolean>>({})
 
   useEffect(() => {
     if (didInitFromUrlRef.current) return
@@ -124,6 +127,44 @@ export default function MyCommentsPage() {
     toast.error(getApiErrorMessage(commentsQuery.error))
   }, [commentsQuery.error, toast])
 
+  const deleteMutation = useMutation({
+    mutationFn: async (commentId: number) => {
+      const res = await api.delete(`/forum/comments/${commentId}`)
+      return res.data as { message?: string }
+    },
+    onMutate: async (commentId) => {
+      setPendingDelete((prev) => ({ ...prev, [commentId]: true }))
+      await queryClient.cancelQueries({ queryKey })
+
+      const previous = queryClient.getQueryData<MyCommentsListResponse>(queryKey)
+      queryClient.setQueryData<MyCommentsListResponse>(queryKey, (old) => {
+        if (!old) return old as any
+        const nextItems = (old.items ?? []).filter((it) => it.id !== commentId)
+        const nextTotal = Math.max(0, Number(old.total || 0) - 1)
+        return { ...old, items: nextItems, total: nextTotal }
+      })
+
+      return { previous }
+    },
+    onSuccess: (data, commentId) => {
+      setPendingDelete((prev) => {
+        const next = { ...prev }
+        delete next[commentId]
+        return next
+      })
+      toast.success(data?.message ?? '已删除')
+    },
+    onError: (err, commentId, ctx) => {
+      setPendingDelete((prev) => {
+        const next = { ...prev }
+        delete next[commentId]
+        return next
+      })
+      if (ctx?.previous) queryClient.setQueryData(queryKey, ctx.previous)
+      toast.error(getApiErrorMessage(err))
+    },
+  })
+
   if (!isAuthenticated) {
     return (
       <div className="space-y-10">
@@ -154,6 +195,12 @@ export default function MyCommentsPage() {
   const total = commentsQuery.data?.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
+  const handleDelete = (commentId: number) => {
+    if (pendingDelete[commentId]) return
+    if (deleteMutation.isPending) return
+    deleteMutation.mutate(commentId)
+  }
+
   return (
     <div className="space-y-8">
       <Link
@@ -170,6 +217,20 @@ export default function MyCommentsPage() {
         description="查看你发布的评论与审核状态"
         tone={actualTheme}
         layout="mdCenter"
+        right={
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              icon={RefreshCw}
+              isLoading={commentsQuery.isFetching}
+              loadingText="刷新中..."
+              onClick={() => commentsQuery.refetch()}
+              disabled={commentsQuery.isFetching}
+            >
+              刷新
+            </Button>
+          </div>
+        }
       />
 
       <div className="flex flex-wrap gap-3">
@@ -195,7 +256,7 @@ export default function MyCommentsPage() {
       </div>
 
       {commentsQuery.isLoading && items.length === 0 ? (
-        <Loading text="加载中..." tone={actualTheme} />
+        <ListSkeleton count={4} />
       ) : items.length === 0 ? (
         <EmptyState
           icon={MessageSquare}
@@ -225,13 +286,28 @@ export default function MyCommentsPage() {
                       </p>
                     </div>
 
-                    <Badge
-                      variant={statusUi.variant}
-                      size="sm"
-                      title={c.review_reason || undefined}
-                    >
-                      {statusUi.text}
-                    </Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge
+                        variant={statusUi.variant}
+                        size="sm"
+                        title={c.review_reason || undefined}
+                      >
+                        {statusUi.text}
+                      </Badge>
+
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="p-2 hover:text-red-600 dark:hover:text-red-300"
+                        title="删除评论"
+                        isLoading={Boolean(pendingDelete[c.id])}
+                        loadingText="删除中..."
+                        onClick={() => handleDelete(c.id)}
+                        disabled={Boolean(pendingDelete[c.id])}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </div>
 
                   <Link to={link} className="block mt-3">

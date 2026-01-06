@@ -7,8 +7,9 @@ import {
   Button,
   Card,
   EmptyState,
-  Loading,
+  ListSkeleton,
   Pagination,
+  Skeleton,
 } from "../components/ui";
 import api from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
@@ -87,6 +88,7 @@ export default function LawyerIncomePage() {
     enabled: isAuthenticated,
     retry: 1,
     refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
   });
 
   const listQuery = useQuery({
@@ -190,7 +192,40 @@ export default function LawyerIncomePage() {
   }
 
   if (walletQuery.isLoading && !walletQuery.data) {
-    return <Loading text="加载中..." tone={actualTheme} />;
+    return (
+      <div className="space-y-10">
+        <PageHeader
+          eyebrow="律师"
+          title="我的收入"
+          description="查看收入与结算状态"
+          layout="mdStart"
+          tone={actualTheme}
+          right={<Skeleton width="90px" height="36px" />}
+        />
+
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+          {Array.from({ length: 5 }).map((_, idx) => (
+            <div
+              key={idx}
+              className="rounded-2xl border border-slate-200/70 bg-white p-4 dark:border-white/10 dark:bg-white/[0.02]"
+            >
+              <Skeleton width="72px" height="12px" />
+              <div className="mt-2">
+                <Skeleton width="90px" height="20px" />
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <Card variant="surface" padding="lg">
+          <div className="flex items-center justify-between gap-2 mb-4">
+            <Skeleton width="120px" height="18px" />
+            <Skeleton width="72px" height="32px" />
+          </div>
+          <ListSkeleton count={3} />
+        </Card>
+      </div>
+    );
   }
 
   const wallet = walletQuery.data;
@@ -211,6 +246,8 @@ export default function LawyerIncomePage() {
               walletQuery.refetch();
               listQuery.refetch();
             }}
+            isLoading={walletQuery.isFetching || listQuery.isFetching}
+            loadingText="刷新中..."
             disabled={walletQuery.isFetching || listQuery.isFetching}
           >
             刷新
@@ -277,6 +314,7 @@ export default function LawyerIncomePage() {
             icon={Download}
             onClick={exportIncomeRecords}
             isLoading={exporting}
+            loadingText="导出中..."
           >
             导出
           </Button>
@@ -326,7 +364,7 @@ export default function LawyerIncomePage() {
         </div>
 
         {listQuery.isLoading && items.length === 0 ? (
-          <Loading text="加载中..." tone={actualTheme} />
+          <ListSkeleton count={3} />
         ) : items.length === 0 ? (
           <EmptyState
             icon={FileText}

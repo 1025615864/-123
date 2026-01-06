@@ -8,7 +8,8 @@ import {
   Card,
   EmptyState,
   Input,
-  Loading,
+  ListSkeleton,
+  Skeleton,
 } from "../components/ui";
 import api from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
@@ -62,6 +63,7 @@ export default function LawyerWithdrawPage() {
     enabled: isAuthenticated,
     retry: 1,
     refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
   });
 
   const bankQuery = useQuery({
@@ -73,6 +75,7 @@ export default function LawyerWithdrawPage() {
     enabled: isAuthenticated,
     retry: 1,
     refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
   });
 
   useEffect(() => {
@@ -115,6 +118,8 @@ export default function LawyerWithdrawPage() {
     },
   });
 
+  const actionBusy = createWithdrawMutation.isPending;
+
   if (!isAuthenticated) {
     return (
       <div className="space-y-10">
@@ -136,7 +141,34 @@ export default function LawyerWithdrawPage() {
   }
 
   if (walletQuery.isLoading && !walletQuery.data) {
-    return <Loading text="加载中..." tone={actualTheme} />;
+    return (
+      <div className="space-y-10">
+        <PageHeader
+          eyebrow="律师"
+          title="申请提现"
+          description="提交提现申请并等待管理员审核"
+          layout="mdStart"
+          tone={actualTheme}
+          right={<Skeleton width="90px" height="36px" />}
+        />
+
+        <Card variant="surface" padding="lg">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-2">
+              <CreditCard className="h-4 w-4 text-slate-400 dark:text-white/40" />
+              <div className="text-sm text-slate-700 dark:text-white/70">
+                可提现金额
+              </div>
+            </div>
+            <Skeleton width="90px" height="20px" />
+          </div>
+        </Card>
+
+        <Card variant="surface" padding="lg">
+          <ListSkeleton count={2} />
+        </Card>
+      </div>
+    );
   }
 
   const wallet = walletQuery.data;
@@ -155,10 +187,13 @@ export default function LawyerWithdrawPage() {
             variant="outline"
             icon={RefreshCw}
             onClick={() => {
+              if (actionBusy) return;
               walletQuery.refetch();
               bankQuery.refetch();
             }}
-            disabled={walletQuery.isFetching || bankQuery.isFetching}
+            isLoading={walletQuery.isFetching || bankQuery.isFetching}
+            loadingText="刷新中..."
+            disabled={walletQuery.isFetching || bankQuery.isFetching || actionBusy}
           >
             刷新
           </Button>
@@ -186,15 +221,17 @@ export default function LawyerWithdrawPage() {
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
             placeholder="例如：100"
+            disabled={actionBusy}
           />
 
           <div>
             <label className="block text-sm font-medium text-slate-700 dark:text-white/70 mb-2">
               收款账户
             </label>
-            {bankQuery.isLoading ? (
-              <div className="text-sm text-slate-500 dark:text-white/50">
-                加载中...
+            {bankQuery.isLoading && accounts.length === 0 ? (
+              <div className="space-y-2">
+                <Skeleton width="80%" height="16px" />
+                <Skeleton width="60%" height="16px" />
               </div>
             ) : accounts.length === 0 ? (
               <EmptyState
@@ -208,6 +245,7 @@ export default function LawyerWithdrawPage() {
                     onClick={() =>
                       (window.location.href = "/lawyer/bank-accounts")
                     }
+                    disabled={actionBusy}
                   >
                     去绑定
                   </Button>
@@ -217,6 +255,7 @@ export default function LawyerWithdrawPage() {
               <select
                 value={accountId ?? ""}
                 onChange={(e) => setAccountId(Number(e.target.value))}
+                disabled={actionBusy}
                 className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none transition hover:border-slate-300 focus-visible:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white dark:hover:border-white/20 dark:focus-visible:ring-offset-slate-900"
               >
                 {accounts.map((a) => (
@@ -243,7 +282,9 @@ export default function LawyerWithdrawPage() {
             <Button
               icon={Send}
               isLoading={createWithdrawMutation.isPending}
+              loadingText="提交中..."
               onClick={() => {
+                if (createWithdrawMutation.isPending) return;
                 const v = Number(String(amount || "").trim());
                 if (!v || Number.isNaN(v) || v <= 0) {
                   toast.error("请输入正确金额");
@@ -258,7 +299,7 @@ export default function LawyerWithdrawPage() {
                   bank_account_id: accountId,
                 });
               }}
-              disabled={accounts.length === 0}
+              disabled={accounts.length === 0 || actionBusy}
             >
               确认提现
             </Button>

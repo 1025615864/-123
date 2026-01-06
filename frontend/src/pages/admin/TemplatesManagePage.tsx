@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
-import { Plus, Edit, Trash2, MessageSquare, Briefcase, Heart, Car, FileText, HelpCircle } from 'lucide-react'
-import { Card, Input, Button, Badge, Modal, Textarea, Loading } from '../../components/ui'
+import { Plus, Edit, Trash2, MessageSquare, Briefcase, Heart, Car, FileText, HelpCircle, RotateCcw } from 'lucide-react'
+import { Card, Input, Button, Badge, Modal, Textarea, ListSkeleton } from '../../components/ui'
 import { useQuery } from '@tanstack/react-query'
 import api from '../../api/client'
 import { useAppMutation } from '../../hooks'
@@ -44,6 +44,7 @@ export default function TemplatesManagePage() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
   const [editingItem, setEditingItem] = useState<ConsultationTemplate | null>(null)
+  const [activeDeleteId, setActiveDeleteId] = useState<number | null>(null)
 
   const [formData, setFormData] = useState({
     name: '',
@@ -103,6 +104,12 @@ export default function TemplatesManagePage() {
     },
     errorMessageFallback: '操作失败，请稍后重试',
     invalidateQueryKeys: [templatesQueryKey as any],
+    onMutate: async (id) => {
+      setActiveDeleteId(id)
+    },
+    onSettled: (_data, _err, id) => {
+      setActiveDeleteId((prev) => (prev === id ? null : prev))
+    },
   })
 
   const handleCreate = async () => {
@@ -200,14 +207,26 @@ export default function TemplatesManagePage() {
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white">咨询模板管理</h1>
           <p className="text-slate-600 mt-1 dark:text-white/50">管理AI咨询的预设问题模板</p>
         </div>
-        <Button icon={Plus} onClick={() => setShowCreateModal(true)}>
-          添加模板
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            icon={RotateCcw}
+            isLoading={templatesQuery.isFetching}
+            loadingText="刷新中..."
+            disabled={templatesQuery.isFetching}
+            onClick={() => templatesQuery.refetch()}
+          >
+            刷新
+          </Button>
+          <Button icon={Plus} onClick={() => setShowCreateModal(true)}>
+            添加模板
+          </Button>
+        </div>
       </div>
 
       {/* 模板列表 */}
-      {loading ? (
-        <Loading text="加载中..." tone={actualTheme} />
+      {loading && templates.length === 0 ? (
+        <ListSkeleton count={6} />
       ) : loadError ? (
         <div className="flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
           <div>{loadError}</div>
@@ -253,9 +272,12 @@ export default function TemplatesManagePage() {
                 <Button 
                   variant="ghost" 
                   size="sm" 
-                  className="p-2 text-red-400 hover:text-red-300"
+                  className={`${deleteMutation.isPending && activeDeleteId === template.id ? 'px-3 py-2' : 'p-2'} text-red-400 hover:text-red-300`}
                   onClick={() => handleDelete(template.id)}
                   title="删除"
+                  isLoading={deleteMutation.isPending && activeDeleteId === template.id}
+                  loadingText="删除中..."
+                  disabled={deleteMutation.isPending}
                 >
                   <Trash2 className="h-4 w-4" />
                 </Button>
@@ -279,7 +301,11 @@ export default function TemplatesManagePage() {
       {/* 创建弹窗 */}
       <Modal
         isOpen={showCreateModal}
-        onClose={() => { setShowCreateModal(false); resetForm() }}
+        onClose={() => {
+          if (createMutation.isPending) return
+          setShowCreateModal(false)
+          resetForm()
+        }}
         title="添加咨询模板"
         description="创建AI咨询的预设问题模板"
       >
@@ -290,7 +316,11 @@ export default function TemplatesManagePage() {
           removeQuestion={removeQuestion}
           updateQuestion={updateQuestion}
           onSubmit={handleCreate}
-          onCancel={() => { setShowCreateModal(false); resetForm() }}
+          onCancel={() => {
+            if (createMutation.isPending) return
+            setShowCreateModal(false)
+            resetForm()
+          }}
           submitLabel="添加"
           submitLoading={createMutation.isPending}
         />
@@ -299,7 +329,12 @@ export default function TemplatesManagePage() {
       {/* 编辑弹窗 */}
       <Modal
         isOpen={showEditModal}
-        onClose={() => { setShowEditModal(false); setEditingItem(null); resetForm() }}
+        onClose={() => {
+          if (editMutation.isPending) return
+          setShowEditModal(false)
+          setEditingItem(null)
+          resetForm()
+        }}
         title="编辑咨询模板"
         description="修改咨询模板"
       >
@@ -310,7 +345,12 @@ export default function TemplatesManagePage() {
           removeQuestion={removeQuestion}
           updateQuestion={updateQuestion}
           onSubmit={handleEdit}
-          onCancel={() => { setShowEditModal(false); setEditingItem(null); resetForm() }}
+          onCancel={() => {
+            if (editMutation.isPending) return
+            setShowEditModal(false)
+            setEditingItem(null)
+            resetForm()
+          }}
           submitLabel="保存"
           submitLoading={editMutation.isPending}
         />
@@ -360,6 +400,7 @@ function TemplateForm({
         value={formData.name}
         onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
         placeholder="如：劳动仲裁咨询"
+        disabled={submitLoading}
       />
 
       <Textarea
@@ -368,6 +409,7 @@ function TemplateForm({
         onChange={(e) => setFormData(prev => ({ ...prev, description: e.target.value }))}
         placeholder="简要描述此模板的用途..."
         rows={2}
+        disabled={submitLoading}
       />
 
       <div className="grid grid-cols-2 gap-4">
@@ -376,6 +418,7 @@ function TemplateForm({
           <select
             value={formData.category}
             onChange={(e) => setFormData(prev => ({ ...prev, category: e.target.value }))}
+            disabled={submitLoading}
             className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
           >
             {CATEGORIES.map(c => (
@@ -388,6 +431,7 @@ function TemplateForm({
           <select
             value={formData.icon}
             onChange={(e) => setFormData(prev => ({ ...prev, icon: e.target.value }))}
+            disabled={submitLoading}
             className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
           >
             {ICONS.map(i => (
@@ -400,7 +444,7 @@ function TemplateForm({
       <div>
         <div className="flex items-center justify-between mb-2">
           <label className="text-sm font-medium text-slate-700 dark:text-white/70">预设问题</label>
-          <Button variant="ghost" size="sm" onClick={addQuestion}>+ 添加问题</Button>
+          <Button variant="ghost" size="sm" onClick={addQuestion} disabled={submitLoading}>+ 添加问题</Button>
         </div>
         <div className="space-y-3">
           {formData.questions.map((q, index) => (
@@ -412,6 +456,7 @@ function TemplateForm({
                     value={q.question}
                     onChange={(e) => updateQuestion(index, 'question', e.target.value)}
                     placeholder="输入问题内容..."
+                    disabled={submitLoading}
                   />
                 </div>
                 {formData.questions.length > 1 && (
@@ -420,6 +465,7 @@ function TemplateForm({
                     size="sm" 
                     className="p-2 text-red-400"
                     onClick={() => removeQuestion(index)}
+                    disabled={submitLoading}
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>
@@ -430,6 +476,7 @@ function TemplateForm({
                 onChange={(e) => updateQuestion(index, 'hint', e.target.value)}
                 placeholder="提示信息（可选）..."
                 className="ml-6"
+                disabled={submitLoading}
               />
             </div>
           ))}
@@ -443,6 +490,7 @@ function TemplateForm({
             id="template_is_active"
             checked={formData.is_active}
             onChange={(e) => setFormData(prev => ({ ...prev, is_active: e.target.checked }))}
+            disabled={submitLoading}
             className="rounded"
           />
           <label htmlFor="template_is_active" className="text-sm text-slate-700 dark:text-white/70">启用</label>
@@ -454,14 +502,15 @@ function TemplateForm({
             min="0"
             value={formData.sort_order}
             onChange={(e) => setFormData(prev => ({ ...prev, sort_order: parseInt(e.target.value) || 0 }))}
+            disabled={submitLoading}
             className="w-20 px-3 py-1 rounded-lg border border-slate-200/70 bg-white text-slate-900 outline-none dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
           />
         </div>
       </div>
 
       <div className="flex justify-end gap-3 pt-4 border-t border-slate-200/70 dark:border-white/10">
-        <Button variant="outline" onClick={onCancel}>取消</Button>
-        <Button onClick={onSubmit} isLoading={submitLoading}>{submitLabel}</Button>
+        <Button variant="outline" onClick={onCancel} disabled={submitLoading}>取消</Button>
+        <Button onClick={onSubmit} isLoading={submitLoading} loadingText={`${submitLabel}中...`}>{submitLabel}</Button>
       </div>
     </div>
   )

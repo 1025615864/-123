@@ -1,10 +1,10 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { HelpCircle, ChevronDown, ChevronUp, ArrowRight } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Card, Button, EmptyState, Loading } from '../components/ui'
+import { Card, Button, EmptyState, Input, ListSkeleton } from '../components/ui'
 import PageHeader from '../components/PageHeader'
 import api from '../api/client'
 import { queryKeys } from '../queryKeys'
@@ -24,6 +24,11 @@ interface FaqPublicResponse {
 export default function FaqPage() {
   const { actualTheme } = useTheme()
   const [expanded, setExpanded] = useState<number | null>(null)
+  const [keyword, setKeyword] = useState('')
+
+  useEffect(() => {
+    setExpanded(null)
+  }, [keyword])
 
   const faqQuery = useQuery({
     queryKey: queryKeys.publicFaq(),
@@ -46,6 +51,16 @@ export default function FaqPage() {
       }))
       .filter((it) => it.question && it.answer)
   }, [faqQuery.data])
+
+  const filteredItems = useMemo(() => {
+    const kw = String(keyword || '').trim().toLowerCase()
+    if (!kw) return items
+    return items.filter((it) => {
+      const q = String(it.question || '').toLowerCase()
+      const a = String(it.answer || '').toLowerCase()
+      return q.includes(kw) || a.includes(kw)
+    })
+  }, [items, keyword])
 
   const updatedAtText = useMemo(() => {
     const raw = String(faqQuery.data?.updated_at || '').trim()
@@ -74,7 +89,7 @@ export default function FaqPage() {
       />
 
       {faqQuery.isLoading ? (
-        <Loading text="加载中..." tone={actualTheme} />
+        <ListSkeleton count={4} />
       ) : errorText ? (
         <div className="flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
           <div>{errorText}</div>
@@ -99,14 +114,58 @@ export default function FaqPage() {
                   {updatedAtText ? `更新时间：${updatedAtText}` : '更新时间：—'}
                 </div>
               </div>
-              <Button variant="outline" onClick={() => faqQuery.refetch()} isLoading={faqQuery.isFetching}>
-                刷新
+              <div className="flex items-center gap-2">
+                <Button variant="outline" onClick={() => faqQuery.refetch()} isLoading={faqQuery.isFetching}>
+                  刷新
+                </Button>
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-col sm:flex-row gap-3">
+              <div className="flex-1">
+                <Input
+                  value={keyword}
+                  onChange={(e) => setKeyword(e.target.value)}
+                  placeholder="搜索问题/答案关键词..."
+                  className="py-2.5"
+                />
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setKeyword('')
+                  setExpanded(null)
+                }}
+                disabled={!keyword.trim()}
+              >
+                清空
               </Button>
             </div>
           </Card>
 
-          <div className="space-y-3">
-            {items.map((faq, idx) => (
+          {filteredItems.length === 0 ? (
+            <EmptyState
+              icon={HelpCircle}
+              title="未找到匹配的 FAQ"
+              description="试试更换关键词，或清空筛选后查看全部"
+              tone={actualTheme}
+              action={
+                <div className="mt-6">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setKeyword('')
+                      setExpanded(null)
+                    }}
+                  >
+                    清空筛选
+                  </Button>
+                </div>
+              }
+            />
+          ) : (
+            <div className="space-y-3">
+              {filteredItems.map((faq, idx) => (
               <div
                 key={`${idx}-${faq.question}`}
                 className="rounded-xl border border-slate-200 overflow-hidden dark:border-white/10"
@@ -178,8 +237,9 @@ export default function FaqPage() {
                   </div>
                 )}
               </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

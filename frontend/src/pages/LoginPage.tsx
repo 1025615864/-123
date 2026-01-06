@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Eye, EyeOff, Lock, ShieldCheck, User } from 'lucide-react'
 import { useToast } from '../hooks'
@@ -11,6 +11,9 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [errors, setErrors] = useState<{ username?: string; password?: string; form?: string }>({})
+  const usernameRef = useRef<HTMLInputElement>(null)
+  const passwordRef = useRef<HTMLInputElement>(null)
   const { login } = useAuth()
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -18,6 +21,24 @@ export default function LoginPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    const nextErrors: { username?: string; password?: string; form?: string } = {}
+    if (!String(username || '').trim()) {
+      nextErrors.username = '请输入用户名'
+    }
+    if (!String(password || '').trim()) {
+      nextErrors.password = '请输入密码'
+    }
+    if (Object.keys(nextErrors).length > 0) {
+      setErrors(nextErrors)
+      if (nextErrors.username) {
+        usernameRef.current?.focus()
+      } else if (nextErrors.password) {
+        passwordRef.current?.focus()
+      }
+      return
+    }
+
+    setErrors({})
     setLoading(true)
 
     try {
@@ -37,7 +58,9 @@ export default function LoginPage() {
 
       navigate(redirectTo, { replace: true })
     } catch (err: any) {
-      toast.error(getApiErrorMessage(err, '登录失败，请稍后重试'))
+      const message = getApiErrorMessage(err, '登录失败，请稍后重试')
+      setErrors({ form: message })
+      toast.error(message)
     } finally {
       setLoading(false)
     }
@@ -91,12 +114,17 @@ export default function LoginPage() {
                 icon={User}
                 type="text"
                 value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                onChange={(e) => {
+                  setUsername(e.target.value)
+                  setErrors((prev) => ({ ...prev, username: undefined, form: undefined }))
+                }}
                 placeholder="请输入用户名"
                 autoComplete="username"
                 disabled={loading}
                 required
                 className="py-3.5"
+                error={errors.username}
+                ref={usernameRef}
               />
 
               <Input
@@ -104,12 +132,17 @@ export default function LoginPage() {
                 icon={Lock}
                 type={showPassword ? 'text' : 'password'}
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => {
+                  setPassword(e.target.value)
+                  setErrors((prev) => ({ ...prev, password: undefined, form: undefined }))
+                }}
                 placeholder="请输入密码"
                 autoComplete="current-password"
                 disabled={loading}
                 required
                 className="py-3.5"
+                error={errors.password}
+                ref={passwordRef}
                 right={
                   <button
                     type="button"
@@ -126,6 +159,10 @@ export default function LoginPage() {
                   </button>
                 }
               />
+
+              {errors.form ? (
+                <p className="text-sm text-red-400">{errors.form}</p>
+              ) : null}
 
               <Button
                 type="submit"

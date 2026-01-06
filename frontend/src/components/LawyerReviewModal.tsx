@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Star } from "lucide-react";
 import api from "../api/client";
-import { useAppMutation, useToast } from "../hooks";
-import { getApiErrorMessage } from "../utils";
+import { useAppMutation } from "../hooks";
 import { Button, Modal, Textarea } from "./ui";
 
 export interface LawyerReviewModalProps {
@@ -30,8 +29,6 @@ export default function LawyerReviewModal({
   title,
   onSuccess,
 }: LawyerReviewModalProps) {
-  const toast = useToast();
-
   const [rating, setRating] = useState<number>(5);
   const [content, setContent] = useState<string>("");
 
@@ -70,15 +67,15 @@ export default function LawyerReviewModal({
     },
   });
 
-  useEffect(() => {
-    if (!submitMutation.error) return;
-    toast.error(getApiErrorMessage(submitMutation.error, "评价提交失败，请稍后重试"));
-  }, [submitMutation.error, toast]);
+  const submitting = submitMutation.isPending;
 
   return (
     <Modal
       isOpen={isOpen}
-      onClose={onClose}
+      onClose={() => {
+        if (submitting) return;
+        onClose();
+      }}
       title={title || "提交评价"}
       description="评分与文字评价将用于展示律师服务质量"
       size="md"
@@ -99,7 +96,11 @@ export default function LawyerReviewModal({
                       ? "text-amber-600 dark:text-amber-400"
                       : "text-slate-300 hover:text-slate-500 dark:text-white/20 dark:hover:text-white/40"
                   }`}
-                  onClick={() => setRating(v)}
+                  onClick={() => {
+                    if (submitting) return;
+                    setRating(v);
+                  }}
+                  disabled={submitting}
                   aria-label={`评分 ${v} 星`}
                 >
                   <Star className={`h-6 w-6 ${active ? "fill-current" : ""}`} />
@@ -116,18 +117,27 @@ export default function LawyerReviewModal({
           rows={4}
           value={content}
           onChange={(e) => setContent(e.target.value)}
+          disabled={submitting}
         />
 
         <div className="flex items-center justify-end gap-3">
-          <Button variant="outline" onClick={onClose} disabled={submitMutation.isPending}>
+          <Button
+            variant="outline"
+            onClick={() => {
+              if (submitting) return;
+              onClose();
+            }}
+            disabled={submitting}
+          >
             取消
           </Button>
           <Button
             variant="primary"
-            isLoading={submitMutation.isPending}
-            disabled={!canSubmit || submitMutation.isPending}
+            isLoading={submitting}
+            loadingText="提交中..."
+            disabled={!canSubmit || submitting}
             onClick={() => {
-              if (!canSubmit || submitMutation.isPending) return;
+              if (!canSubmit || submitting) return;
               submitMutation.mutate();
             }}
           >

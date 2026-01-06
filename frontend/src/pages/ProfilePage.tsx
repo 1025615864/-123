@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   User,
+  Loader2,
   Mail,
   Phone,
   Camera,
@@ -19,6 +20,7 @@ import {
   Bell,
   CheckCircle,
   AlertCircle,
+  RefreshCw,
   ExternalLink,
   Edit,
   Trash2,
@@ -33,12 +35,13 @@ import {
   Button,
   Input,
   Modal,
-  Loading,
   EmptyState,
   FadeInImage,
   Pagination,
   Textarea,
   Badge,
+  ListSkeleton,
+  Skeleton,
 } from "../components/ui";
 import PageHeader from "../components/PageHeader";
 import { useTheme } from "../contexts/ThemeContext";
@@ -62,6 +65,19 @@ export default function ProfilePage() {
     };
   };
 
+  type UserQuotaDailyResponse = {
+    day: string;
+    ai_chat_limit: number;
+    ai_chat_used: number;
+    ai_chat_remaining: number;
+    document_generate_limit: number;
+    document_generate_used: number;
+    document_generate_remaining: number;
+    ai_chat_pack_remaining: number;
+    document_generate_pack_remaining: number;
+    is_vip_active: boolean;
+  };
+
   const pricingQuery = useQuery({
     queryKey: ["payment-pricing"],
     queryFn: async () => {
@@ -72,6 +88,23 @@ export default function ProfilePage() {
     refetchOnWindowFocus: false,
     placeholderData: (prev) => prev,
   });
+
+  const quotasQuery = useQuery({
+    queryKey: queryKeys.userMeQuotas(),
+    queryFn: async () => {
+      const res = await api.get("/user/me/quotas");
+      return res.data as UserQuotaDailyResponse;
+    },
+    enabled: Boolean(user),
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  });
+
+  useEffect(() => {
+    if (!quotasQuery.error) return;
+    toast.error(getApiErrorMessage(quotasQuery.error, "配额加载失败"));
+  }, [quotasQuery.error, toast]);
 
   const vipPlan = pricingQuery.data?.vip;
   const vipDays = Number(vipPlan?.days || 30);
@@ -206,7 +239,7 @@ export default function ProfilePage() {
 
   const handleBuyPack = (related_type: PackRelatedType) => {
     if (!user) return;
-    if (buyPackMutation.isPending) return;
+    if (buyVipMutation.isPending || buyPackMutation.isPending) return;
 
     setPackRelatedType(related_type);
     setShowPackModal(true);
@@ -214,7 +247,7 @@ export default function ProfilePage() {
 
   const handleConfirmBuyPack = (opt: PricingPackItem) => {
     if (!user) return;
-    if (buyPackMutation.isPending) return;
+    if (buyVipMutation.isPending || buyPackMutation.isPending) return;
 
     const label =
       packRelatedType === "document_generate" ? "文书生成" : "AI 咨询";
@@ -869,9 +902,19 @@ export default function ProfilePage() {
             {/* 统计数据 - 美化 */}
             <div className="grid grid-cols-3 gap-4 mt-8 pt-6 border-t border-slate-200/70 dark:border-white/5">
               {statsLoading ? (
-                <div className="col-span-3">
-                  <Loading text="加载中..." tone={actualTheme} />
-                </div>
+                Array.from({ length: 3 }).map((_, idx) => (
+                  <div key={idx} className="text-center">
+                    <div className="w-10 h-10 mx-auto mb-2 rounded-xl bg-slate-900/5 flex items-center justify-center dark:bg-white/5">
+                      <Skeleton width="20px" height="20px" />
+                    </div>
+                    <div className="flex justify-center">
+                      <Skeleton width="56px" height="20px" />
+                    </div>
+                    <div className="mt-2 flex justify-center">
+                      <Skeleton width="64px" height="12px" />
+                    </div>
+                  </div>
+                ))
               ) : statsError ? (
                 <div className="col-span-3 flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
                   <div>{statsError}</div>
@@ -902,6 +945,55 @@ export default function ProfilePage() {
             <h4 className="text-sm font-medium text-slate-600 mb-4 dark:text-white/60">
               账户状态
             </h4>
+
+            <div className="mb-4 rounded-xl border border-slate-200/70 bg-slate-900/5 px-3 py-3 dark:border-white/10 dark:bg-white/[0.03]">
+              <div className="flex items-center justify-between gap-2">
+                <div className="text-xs font-semibold text-slate-600 dark:text-white/60">
+                  今日配额
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  icon={RefreshCw}
+                  isLoading={quotasQuery.isFetching}
+                  loadingText="刷新中..."
+                  onClick={() => quotasQuery.refetch()}
+                  disabled={quotasQuery.isFetching}
+                >
+                  刷新配额
+                </Button>
+              </div>
+
+              <div className="mt-2 space-y-2 text-xs text-slate-600 dark:text-white/60">
+                <div className="flex items-center justify-between gap-2">
+                  <span>AI 咨询</span>
+                  <span className="font-medium text-slate-800 dark:text-white">
+                    {quotasQuery.data
+                      ? `${Number(quotasQuery.data.ai_chat_remaining || 0)}/${Number(
+                          quotasQuery.data.ai_chat_limit || 0
+                        )} · 次数包 ${Number(
+                          quotasQuery.data.ai_chat_pack_remaining || 0
+                        )}`
+                      : "—"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span>文书生成</span>
+                  <span className="font-medium text-slate-800 dark:text-white">
+                    {quotasQuery.data
+                      ? `${Number(
+                          quotasQuery.data.document_generate_remaining || 0
+                        )}/${Number(
+                          quotasQuery.data.document_generate_limit || 0
+                        )} · 次数包 ${Number(
+                          quotasQuery.data.document_generate_pack_remaining || 0
+                        )}`
+                      : "—"}
+                  </span>
+                </div>
+              </div>
+            </div>
+
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -1020,11 +1112,15 @@ export default function ProfilePage() {
                   <button
                     type="button"
                     onClick={handleBuyVip}
-                    disabled={buyVipMutation.isPending}
+                    disabled={buyVipMutation.isPending || buyPackMutation.isPending}
                     className="text-amber-600 text-xs hover:text-amber-700 flex items-center gap-1 dark:text-amber-400 dark:hover:text-amber-300 disabled:opacity-50"
                   >
-                    {isVipActive ? "续费" : "开通"}
-                    <ExternalLink className="h-3 w-3" />
+                    {buyVipMutation.isPending ? "处理中..." : isVipActive ? "续费" : "开通"}
+                    {buyVipMutation.isPending ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <ExternalLink className="h-3 w-3" />
+                    )}
                   </button>
                 </div>
               </div>
@@ -1039,11 +1135,15 @@ export default function ProfilePage() {
                 <button
                   type="button"
                   onClick={() => handleBuyPack("ai_chat")}
-                  disabled={buyPackMutation.isPending}
+                  disabled={buyVipMutation.isPending || buyPackMutation.isPending}
                   className="text-amber-600 text-xs hover:text-amber-700 flex items-center gap-1 dark:text-amber-400 dark:hover:text-amber-300 disabled:opacity-50"
                 >
-                  购买
-                  <ExternalLink className="h-3 w-3" />
+                  {buyPackMutation.isPending ? "处理中..." : "购买"}
+                  {buyPackMutation.isPending ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <ExternalLink className="h-3 w-3" />
+                  )}
                 </button>
               </div>
 
@@ -1057,11 +1157,15 @@ export default function ProfilePage() {
                 <button
                   type="button"
                   onClick={() => handleBuyPack("document_generate")}
-                  disabled={buyPackMutation.isPending}
+                  disabled={buyVipMutation.isPending || buyPackMutation.isPending}
                   className="text-amber-600 text-xs hover:text-amber-700 flex items-center gap-1 dark:text-amber-400 dark:hover:text-amber-300 disabled:opacity-50"
                 >
-                  购买
-                  <ExternalLink className="h-3 w-3" />
+                  {buyPackMutation.isPending ? "处理中..." : "购买"}
+                  {buyPackMutation.isPending ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <ExternalLink className="h-3 w-3" />
+                  )}
                 </button>
               </div>
 
@@ -1162,6 +1266,7 @@ export default function ProfilePage() {
                   }
                   placeholder="设置您的昵称"
                   className="py-3"
+                  disabled={updateProfileMutation.isPending}
                 />
                 <Input
                   label="手机号"
@@ -1172,6 +1277,7 @@ export default function ProfilePage() {
                   }
                   placeholder="绑定手机号"
                   className="py-3"
+                  disabled={updateProfileMutation.isPending}
                 />
               </div>
 
@@ -1180,7 +1286,9 @@ export default function ProfilePage() {
                   type="submit"
                   icon={Save}
                   isLoading={updateProfileMutation.isPending}
+                  loadingText="保存中..."
                   className="px-8"
+                  disabled={updateProfileMutation.isPending}
                 >
                   保存修改
                 </Button>
@@ -1250,7 +1358,7 @@ export default function ProfilePage() {
             </div>
 
             {myPostsLoading ? (
-              <Loading text="加载中..." tone={actualTheme} />
+              <ListSkeleton count={3} />
             ) : myPostsError ? (
               <div className="flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
                 <div>{myPostsError}</div>
@@ -1401,7 +1509,7 @@ export default function ProfilePage() {
             </div>
 
             {favoritesLoading ? (
-              <Loading text="加载中..." tone={actualTheme} />
+              <ListSkeleton count={3} />
             ) : favoritesError ? (
               <div className="flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
                 <div>{favoritesError}</div>
@@ -1476,7 +1584,10 @@ export default function ProfilePage() {
 
       <Modal
         isOpen={showEditPostModal}
-        onClose={closeEditPost}
+        onClose={() => {
+          if (updateMyPostMutation.isPending) return;
+          closeEditPost();
+        }}
         title="编辑帖子"
         description="修改帖子标题、分类和内容"
         size="lg"
@@ -1490,6 +1601,7 @@ export default function ProfilePage() {
             }
             placeholder="请输入标题"
             className="py-3"
+            disabled={updateMyPostMutation.isPending}
           />
 
           <div>
@@ -1504,6 +1616,7 @@ export default function ProfilePage() {
                   category: e.target.value,
                 }))
               }
+              disabled={updateMyPostMutation.isPending}
               className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none transition hover:border-slate-300 focus-visible:border-amber-500/50 focus-visible:ring-2 focus-visible:ring-amber-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white dark:hover:border-white/20 dark:focus-visible:ring-offset-slate-900"
             >
               {postCategories.map((c) => (
@@ -1522,6 +1635,7 @@ export default function ProfilePage() {
             }
             placeholder="请输入内容"
             className="min-h-[220px]"
+            disabled={updateMyPostMutation.isPending}
           />
 
           <div className="flex gap-3 pt-2">
@@ -1537,6 +1651,8 @@ export default function ProfilePage() {
             <Button
               type="submit"
               isLoading={updateMyPostMutation.isPending}
+              loadingText="保存中..."
+              disabled={updateMyPostMutation.isPending}
               className="flex-1"
             >
               保存
@@ -1599,6 +1715,7 @@ export default function ProfilePage() {
       <Modal
         isOpen={showPasswordModal}
         onClose={() => {
+          if (changePasswordMutation.isPending) return;
           setShowPasswordModal(false);
           setPasswordForm({
             old_password: "",
@@ -1626,6 +1743,7 @@ export default function ProfilePage() {
                     old_password: e.target.value,
                   })
                 }
+                disabled={changePasswordMutation.isPending}
                 className="w-full pl-10 pr-10 py-3 bg-white border border-slate-200/70 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:border-amber-600/50 dark:bg-[#0f0a1e]/60 dark:border-white/10 dark:text-white dark:placeholder-white/30 dark:focus:border-amber-500/50"
                 placeholder="请输入当前密码"
                 required
@@ -1659,6 +1777,7 @@ export default function ProfilePage() {
                     new_password: e.target.value,
                   })
                 }
+                disabled={changePasswordMutation.isPending}
                 className="w-full pl-10 pr-10 py-3 bg-white border border-slate-200/70 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:border-amber-600/50 dark:bg-[#0f0a1e]/60 dark:border-white/10 dark:text-white dark:placeholder-white/30 dark:focus:border-amber-500/50"
                 placeholder="请输入新密码（至少6位）"
                 required
@@ -1693,6 +1812,7 @@ export default function ProfilePage() {
                     confirm_password: e.target.value,
                   })
                 }
+                disabled={changePasswordMutation.isPending}
                 className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200/70 rounded-xl text-slate-900 placeholder-slate-400 focus:outline-none focus:border-amber-600/50 dark:bg-[#0f0a1e]/60 dark:border-white/10 dark:text-white dark:placeholder-white/30 dark:focus:border-amber-500/50"
                 placeholder="请再次输入新密码"
                 required
@@ -1705,6 +1825,7 @@ export default function ProfilePage() {
               type="button"
               variant="secondary"
               onClick={() => {
+                if (changePasswordMutation.isPending) return;
                 setShowPasswordModal(false);
                 setPasswordForm({
                   old_password: "",
@@ -1713,13 +1834,16 @@ export default function ProfilePage() {
                 });
               }}
               className="flex-1"
+              disabled={changePasswordMutation.isPending}
             >
               取消
             </Button>
             <Button
               type="submit"
               isLoading={changePasswordMutation.isPending}
+              loadingText="修改中..."
               className="flex-1"
+              disabled={changePasswordMutation.isPending}
             >
               确认修改
             </Button>

@@ -9,8 +9,10 @@ import {
   TrendingUp,
   Bell,
   Layers,
+  Bookmark,
+  RefreshCw,
 } from "lucide-react";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Card,
   Input,
@@ -20,6 +22,7 @@ import {
   EmptyState,
   Pagination,
   NewsCardSkeleton,
+  ListSkeleton,
   FadeInImage,
   LinkButton,
   VirtualWindowList,
@@ -77,6 +80,7 @@ export default function NewsPage() {
   const { actualTheme } = useTheme();
   const { isAuthenticated } = useAuth();
   const toast = useToast();
+  const queryClient = useQueryClient();
   const { prefetch } = usePrefetchLimiter();
   const location = useLocation();
   const navigate = useNavigate();
@@ -349,8 +353,13 @@ export default function NewsPage() {
       ? isAuthenticated
       : true);
 
+  const infiniteQueryKey = useMemo(
+    () => ["news-infinite", infiniteBaseKey] as const,
+    [infiniteBaseKey]
+  );
+
   const newsInfiniteQuery = useInfiniteQuery({
-    queryKey: ["news-infinite", infiniteBaseKey] as const,
+    queryKey: infiniteQueryKey,
     initialPageParam: 1,
     queryFn: async ({ pageParam }) => {
       const params = new URLSearchParams();
@@ -419,8 +428,8 @@ export default function NewsPage() {
     refetchOnWindowFocus: false,
   });
 
-  const newsQuery = useQuery({
-    queryKey:
+  const listQueryKey = useMemo(
+    () =>
       mode === "recommended"
         ? queryKeys.newsRecommendedList(
             page,
@@ -475,6 +484,21 @@ export default function NewsPage() {
             from.trim(),
             to.trim()
           ),
+    [
+      category,
+      debouncedKeyword,
+      from,
+      mode,
+      page,
+      pageSize,
+      riskLevel,
+      sourceSite,
+      to,
+    ]
+  );
+
+  const newsQuery = useQuery({
+    queryKey: listQueryKey,
     queryFn: async () => {
       const params = new URLSearchParams();
       params.set("page", String(page));
@@ -543,6 +567,10 @@ export default function NewsPage() {
     (isMobile ? newsInfiniteQuery.isLoading : newsQuery.isLoading) &&
     news.length === 0;
 
+  const listRefreshing = isMobile
+    ? newsInfiniteQuery.isFetching && !newsInfiniteQuery.isFetchingNextPage
+    : newsQuery.isFetching;
+
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   const loadMoreSentinelRef = useRef<HTMLDivElement | null>(null);
@@ -593,7 +621,172 @@ export default function NewsPage() {
     return out;
   }, [columns, news]);
 
+  const [pendingFavoriteIds, setPendingFavoriteIds] = useState<number[]>([]);
+
+  const toggleFavorite = async (item: NewsListItem) => {
+    if (!isAuthenticated) {
+      toast.info("登录后可收藏");
+      return;
+    }
+    if (!item || typeof item.id !== "number") return;
+    if (pendingFavoriteIds.includes(item.id)) return;
+
+    setPendingFavoriteIds((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]));
+
+    const isFavMode = mode === "favorites";
+
+    const detailKey = queryKeys.newsDetail(String(item.id));
+
+    let previousActive: unknown = undefined;
+    let previousDetail: unknown = undefined;
+
+    const applyToggleToItems = (items: NewsListItem[]) => {
+      let removed = 0;
+      const nextItems = items
+        .map((n) => {
+          if (n.id !== item.id) return n;
+          const nextFavorited = !n.is_favorited;
+          const nextCount = Math.max(
+            0,
+            Number(n.favorite_count || 0) + (nextFavorited ? 1 : -1)
+          );
+          const next = { ...n, is_favorited: nextFavorited, favorite_count: nextCount };
+          if (isFavMode && !next.is_favorited) {
+            removed += 1;
+          }
+          return next;
+        })
+        .filter((n) => (isFavMode ? n.is_favorited : true));
+      return { nextItems, removed };
+    };
+
+    const applyResponseToItems = (
+      items: NewsListItem[],
+      favorited: boolean,
+      favoriteCount: number
+    ) => {
+      let removed = 0;
+      const nextItems = items
+        .map((n) => {
+          if (n.id !== item.id) return n;
+          const next = {
+            ...n,
+            is_favorited: favorited,
+            favorite_count: favoriteCount,
+          };
+          if (isFavMode && !next.is_favorited) {
+            removed += 1;
+          }
+          return next;
+        })
+        .filter((n) => (isFavMode ? n.is_favorited : true));
+      return { nextItems, removed };
+    };
+
+    try {
+      const activeKey = isMobile ? infiniteQueryKey : listQueryKey;
+      await queryClient.cancelQueries({ queryKey: activeKey });
+      previousActive = queryClient.getQueryData(activeKey);
+      previousDetail = queryClient.getQueryData(detailKey);
+
+      queryClient.setQueryData(detailKey, (old: any) => {
+        if (!old) return old;
+        const nextFavorited = !old.is_favorited;
+        const nextCount = Math.max(
+          0,
+          Number(old.favorite_count || 0) + (nextFavorited ? 1 : -1)
+        );
+        return {
+          ...old,
+          is_favorited: nextFavorited,
+          favorite_count: nextCount,
+        };
+      });
+
+      if (isMobile) {
+        queryClient.setQueryData(infiniteQueryKey, (old: any) => {
+          if (!old || !Array.isArray(old.pages)) return old;
+          let removedTotal = 0;
+          const nextPages = old.pages.map((p: any) => {
+            const items = Array.isArray(p?.items) ? (p.items as NewsListItem[]) : [];
+            const result = applyToggleToItems(items);
+            removedTotal += result.removed;
+            return { ...p, items: result.nextItems };
+          });
+          if (removedTotal > 0 && nextPages.length > 0 && typeof nextPages[0]?.total === "number") {
+            nextPages[0] = {
+              ...nextPages[0],
+              total: Math.max(0, Number(nextPages[0].total || 0) - removedTotal),
+            };
+          }
+          return { ...old, pages: nextPages };
+        });
+      } else {
+        queryClient.setQueryData(listQueryKey, (old: any) => {
+          if (!old || !Array.isArray(old.items)) return old;
+          const result = applyToggleToItems(old.items as NewsListItem[]);
+          const nextTotal =
+            typeof old.total === "number"
+              ? Math.max(0, Number(old.total || 0) - result.removed)
+              : old.total;
+          return { ...old, items: result.nextItems, total: nextTotal };
+        });
+      }
+
+      const res = await api.post(`/news/${item.id}/favorite`);
+      const payload = res.data as { favorited: boolean; favorite_count: number; message?: string };
+
+      const favorited = !!payload.favorited;
+      const favoriteCount = Number(payload.favorite_count || 0);
+
+      if (isMobile) {
+        queryClient.setQueryData(infiniteQueryKey, (old: any) => {
+          if (!old || !Array.isArray(old.pages)) return old;
+          let removedTotal = 0;
+          const nextPages = old.pages.map((p: any) => {
+            const items = Array.isArray(p?.items) ? (p.items as NewsListItem[]) : [];
+            const result = applyResponseToItems(items, favorited, favoriteCount);
+            removedTotal += result.removed;
+            return { ...p, items: result.nextItems };
+          });
+          if (removedTotal > 0 && nextPages.length > 0 && typeof nextPages[0]?.total === "number") {
+            nextPages[0] = {
+              ...nextPages[0],
+              total: Math.max(0, Number(nextPages[0].total || 0) - removedTotal),
+            };
+          }
+          return { ...old, pages: nextPages };
+        });
+      } else {
+        queryClient.setQueryData(listQueryKey, (old: any) => {
+          if (!old || !Array.isArray(old.items)) return old;
+          const result = applyResponseToItems(old.items as NewsListItem[], favorited, favoriteCount);
+          const nextTotal =
+            typeof old.total === "number"
+              ? Math.max(0, Number(old.total || 0) - result.removed)
+              : old.total;
+          return { ...old, items: result.nextItems, total: nextTotal };
+        });
+      }
+
+      queryClient.setQueryData(detailKey, (old: any) => {
+        if (!old) return old;
+        return { ...old, is_favorited: favorited, favorite_count: favoriteCount };
+      });
+
+      toast.success(payload?.message || (payload?.favorited ? "收藏成功" : "取消收藏"));
+    } catch (e) {
+      const activeKey = isMobile ? infiniteQueryKey : listQueryKey;
+      queryClient.setQueryData(activeKey, previousActive);
+      queryClient.setQueryData(detailKey, previousDetail);
+      toast.error(getApiErrorMessage(e, "操作失败"));
+    } finally {
+      setPendingFavoriteIds((prev) => prev.filter((id) => id !== item.id));
+    }
+  };
+
   const renderNewsCard = (item: NewsListItem) => {
+    const favLoading = pendingFavoriteIds.includes(item.id);
     return (
       <Link
         key={item.id}
@@ -665,6 +858,36 @@ export default function NewsPage() {
               {item.summary}
             </p>
 
+            <div className="mt-4 flex items-center justify-between gap-3">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  void toggleFavorite(item);
+                }}
+                disabled={!isAuthenticated || favLoading}
+                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
+                  item.is_favorited
+                    ? "border-amber-300 bg-amber-500/10 text-amber-700 dark:border-amber-500/30 dark:text-amber-300"
+                    : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:bg-white/[0.02] dark:text-white/60 dark:hover:bg-white/[0.05]"
+                }`}
+                title={item.is_favorited ? "取消收藏" : "收藏"}
+              >
+                {favLoading ? (
+                  <span className="h-3.5 w-3.5 rounded-full border-2 border-current border-t-transparent animate-spin" />
+                ) : (
+                  <Bookmark className={`h-4 w-4 ${item.is_favorited ? "fill-amber-400" : ""}`} />
+                )}
+                <span>{item.is_favorited ? "已收藏" : "收藏"}</span>
+                <span className="text-slate-400 dark:text-white/40">{Number(item.favorite_count || 0)}</span>
+              </button>
+
+              <div className="text-xs text-slate-500 dark:text-white/55">
+                {mode === "favorites" ? "收藏夹" : ""}
+              </div>
+            </div>
+
             <div className="flex items-center justify-between text-xs text-slate-500 pt-4 mt-4 border-t border-slate-200/70 dark:text-white/55 dark:border-white/10">
               <span className="flex items-center gap-2">
                 <Calendar className="h-4 w-4 text-amber-600 dark:text-amber-400" />
@@ -701,6 +924,26 @@ export default function NewsPage() {
                   className="py-3 rounded-full"
                 />
               </div>
+              <Button
+                variant="outline"
+                className="rounded-full px-6 py-3 text-sm transition-all hover:shadow-sm"
+                icon={RefreshCw}
+                isLoading={listRefreshing}
+                loadingText="刷新中..."
+                disabled={
+                  listRefreshing ||
+                  (isMobile && newsInfiniteQuery.isFetchingNextPage)
+                }
+                onClick={() => {
+                  if (isMobile) {
+                    void newsInfiniteQuery.refetch();
+                    return;
+                  }
+                  void newsQuery.refetch();
+                }}
+              >
+                刷新
+              </Button>
               <LinkButton
                 to="/news/topics"
                 variant="outline"
@@ -879,9 +1122,7 @@ export default function NewsPage() {
 
           <div className="mt-4">
             {hotNewsQuery.isLoading ? (
-              <div className="text-sm text-slate-600 dark:text-white/45">
-                加载中...
-              </div>
+              <ListSkeleton count={4} />
             ) : (hotNewsQuery.data ?? []).length === 0 ? (
               <div className="text-sm text-slate-600 dark:text-white/45">
                 暂无热门新闻
@@ -996,8 +1237,10 @@ export default function NewsPage() {
                 size="sm"
                 disabled={newsInfiniteQuery.isFetchingNextPage}
                 onClick={() => newsInfiniteQuery.fetchNextPage()}
+                isLoading={newsInfiniteQuery.isFetchingNextPage}
+                loadingText="加载更多中..."
               >
-                {newsInfiniteQuery.isFetchingNextPage ? "加载中..." : "加载更多"}
+                加载更多
               </Button>
               <div className="text-xs text-slate-500 dark:text-white/55">
                 已加载 {news.length} / {total}

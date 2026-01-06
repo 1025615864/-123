@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, Eye, RotateCcw, Search, Trash2 } from 'lucide-react'
+import { ArrowLeft, Eye, RotateCcw, Search, Trash2, RefreshCw } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import api from '../api/client'
 import PageHeader from '../components/PageHeader'
-import { Button, Card, EmptyState, Input, Loading, Modal, ModalActions, Pagination } from '../components/ui'
+import { Button, Card, EmptyState, Input, ListSkeleton, Modal, ModalActions, Pagination } from '../components/ui'
 import { useAuth } from '../contexts/AuthContext'
 import { useTheme } from '../contexts/ThemeContext'
 import { useAppMutation, useToast } from '../hooks'
@@ -238,14 +238,16 @@ export default function RecycleBinPage() {
   const total = postsQuery.data?.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / pageSize))
   const currentPageIds = useMemo(() => items.map((p) => p.id), [items])
+
+  const actionBusy =
+    restoreMutation.isPending ||
+    purgeMutation.isPending ||
+    batchRestoreMutation.isPending ||
+    batchPurgeMutation.isPending
   const isAllCurrentPageSelected = useMemo(
     () => currentPageIds.length > 0 && currentPageIds.every((id) => selectedIds.has(id)),
     [currentPageIds, selectedIds]
   )
-
-  if (postsQuery.isLoading && items.length === 0) {
-    return <Loading text="加载中..." tone={actualTheme} />
-  }
 
   return (
     <div className="space-y-10">
@@ -272,6 +274,7 @@ export default function RecycleBinPage() {
                 onChange={(e) => setKeyword(e.target.value)}
                 placeholder="搜索回收站..."
                 className="py-2.5"
+                disabled={actionBusy}
               />
             </div>
             <div className="flex items-center text-sm text-slate-600 px-2 dark:text-white/60">
@@ -279,7 +282,21 @@ export default function RecycleBinPage() {
             </div>
             <Button
               variant="outline"
+              icon={RefreshCw}
+              isLoading={postsQuery.isFetching}
+              loadingText="刷新中..."
               onClick={() => {
+                if (actionBusy) return
+                postsQuery.refetch()
+              }}
+              disabled={postsQuery.isFetching || actionBusy}
+            >
+              刷新
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (actionBusy) return
                 if (currentPageIds.length === 0) return
                 setSelectedIds((prev) => {
                   const next = new Set(prev)
@@ -291,27 +308,32 @@ export default function RecycleBinPage() {
                   return next
                 })
               }}
-              disabled={currentPageIds.length === 0}
+              disabled={currentPageIds.length === 0 || actionBusy}
             >
               {isAllCurrentPageSelected ? '取消本页' : '全选本页'}
             </Button>
             <Button
               variant="outline"
-              onClick={() => setSelectedIds(new Set())}
-              disabled={selectedIds.size === 0}
+              onClick={() => {
+                if (actionBusy) return
+                setSelectedIds(new Set())
+              }}
+              disabled={selectedIds.size === 0 || actionBusy}
             >
               清空选择
             </Button>
             <Button
               variant="outline"
               icon={RotateCcw}
-              onClick={() => setConfirmBatchRestore(true)}
+              onClick={() => {
+                if (actionBusy) return
+                setConfirmBatchRestore(true)
+              }}
+              isLoading={batchRestoreMutation.isPending}
+              loadingText="恢复中..."
               disabled={
                 selectedIds.size === 0 ||
-                restoreMutation.isPending ||
-                purgeMutation.isPending ||
-                batchRestoreMutation.isPending ||
-                batchPurgeMutation.isPending
+                actionBusy
               }
             >
               批量恢复
@@ -319,25 +341,38 @@ export default function RecycleBinPage() {
             <Button
               variant="danger"
               icon={Trash2}
-              onClick={() => setConfirmBatchPurge(true)}
+              onClick={() => {
+                if (actionBusy) return
+                setConfirmBatchPurge(true)
+              }}
+              isLoading={batchPurgeMutation.isPending}
+              loadingText="删除中..."
               disabled={
                 selectedIds.size === 0 ||
-                restoreMutation.isPending ||
-                purgeMutation.isPending ||
-                batchRestoreMutation.isPending ||
-                batchPurgeMutation.isPending
+                actionBusy
               }
             >
               批量永久删除
             </Button>
-            <Button variant="outline" onClick={() => navigate('/forum')}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (actionBusy) return
+                navigate('/forum')
+              }}
+              disabled={actionBusy}
+            >
               返回列表
             </Button>
           </div>
         }
       />
 
-      {items.length === 0 ? (
+      {postsQuery.isLoading && items.length === 0 ? (
+        <ListSkeleton count={4} />
+      ) : null}
+
+      {!postsQuery.isLoading && items.length === 0 ? (
         <EmptyState
           icon={Trash2}
           title="回收站为空"
@@ -358,6 +393,7 @@ export default function RecycleBinPage() {
                         type="checkbox"
                         checked={checked}
                         onChange={() => {
+                          if (actionBusy) return
                           setSelectedIds((prev) => {
                             const next = new Set(prev)
                             if (next.has(post.id)) next.delete(post.id)
@@ -365,6 +401,7 @@ export default function RecycleBinPage() {
                             return next
                           })
                         }}
+                        disabled={actionBusy}
                       />
                       选择
                     </label>
@@ -381,7 +418,7 @@ export default function RecycleBinPage() {
                       variant="outline"
                       icon={Eye}
                       onClick={() => navigate(`/forum/post/${post.id}?deleted=1`)}
-                      disabled={restoreMutation.isPending || purgeMutation.isPending}
+                      disabled={actionBusy}
                     >
                       查看
                     </Button>
@@ -389,7 +426,7 @@ export default function RecycleBinPage() {
                       variant="outline"
                       icon={RotateCcw}
                       onClick={() => setConfirmRestore(post)}
-                      disabled={restoreMutation.isPending || purgeMutation.isPending}
+                      disabled={actionBusy}
                     >
                       恢复
                     </Button>
@@ -397,7 +434,7 @@ export default function RecycleBinPage() {
                       variant="danger"
                       icon={Trash2}
                       onClick={() => setConfirmPurge(post)}
-                      disabled={restoreMutation.isPending || purgeMutation.isPending}
+                      disabled={actionBusy}
                     >
                       永久删除
                     </Button>
@@ -407,19 +444,37 @@ export default function RecycleBinPage() {
             )
           })}
 
-          <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} className="pt-4" />
+          <Pagination
+            currentPage={page}
+            totalPages={totalPages}
+            onPageChange={(p) => {
+              if (actionBusy) return
+              setPage(p)
+            }}
+            className="pt-4"
+          />
         </div>
       )}
 
       <Modal
         isOpen={!!confirmRestore}
-        onClose={() => setConfirmRestore(null)}
+        onClose={() => {
+          if (restoreMutation.isPending) return
+          setConfirmRestore(null)
+        }}
         title="恢复帖子"
         description="恢复后帖子将重新出现在论坛列表中"
         size="sm"
       >
         <ModalActions>
-          <Button variant="ghost" onClick={() => setConfirmRestore(null)}>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              if (restoreMutation.isPending) return
+              setConfirmRestore(null)
+            }}
+            disabled={restoreMutation.isPending}
+          >
             取消
           </Button>
           <Button
@@ -430,6 +485,8 @@ export default function RecycleBinPage() {
               restoreMutation.mutate(confirmRestore.id)
             }}
             isLoading={restoreMutation.isPending}
+            loadingText="恢复中..."
+            disabled={restoreMutation.isPending}
           >
             恢复
           </Button>
@@ -438,13 +495,23 @@ export default function RecycleBinPage() {
 
       <Modal
         isOpen={!!confirmPurge}
-        onClose={() => setConfirmPurge(null)}
+        onClose={() => {
+          if (purgeMutation.isPending) return
+          setConfirmPurge(null)
+        }}
         title="永久删除"
         description="永久删除后将无法恢复，且会清理相关点赞/收藏/评论数据"
         size="sm"
       >
         <ModalActions>
-          <Button variant="ghost" onClick={() => setConfirmPurge(null)}>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              if (purgeMutation.isPending) return
+              setConfirmPurge(null)
+            }}
+            disabled={purgeMutation.isPending}
+          >
             取消
           </Button>
           <Button
@@ -456,6 +523,8 @@ export default function RecycleBinPage() {
               purgeMutation.mutate(confirmPurge.id)
             }}
             isLoading={purgeMutation.isPending}
+            loadingText="删除中..."
+            disabled={purgeMutation.isPending}
           >
             确认永久删除
           </Button>
@@ -464,13 +533,23 @@ export default function RecycleBinPage() {
 
       <Modal
         isOpen={confirmBatchRestore}
-        onClose={() => setConfirmBatchRestore(false)}
+        onClose={() => {
+          if (batchRestoreMutation.isPending) return
+          setConfirmBatchRestore(false)
+        }}
         title="批量恢复"
         description={`将恢复已选择的 ${selectedIds.size} 条帖子`}
         size="sm"
       >
         <ModalActions>
-          <Button variant="ghost" onClick={() => setConfirmBatchRestore(false)}>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              if (batchRestoreMutation.isPending) return
+              setConfirmBatchRestore(false)
+            }}
+            disabled={batchRestoreMutation.isPending}
+          >
             取消
           </Button>
           <Button
@@ -480,7 +559,8 @@ export default function RecycleBinPage() {
               batchRestoreMutation.mutate({ ids: Array.from(selectedIds) })
             }}
             isLoading={batchRestoreMutation.isPending}
-            disabled={selectedIds.size === 0}
+            loadingText="恢复中..."
+            disabled={selectedIds.size === 0 || actionBusy}
           >
             确认恢复
           </Button>
@@ -489,13 +569,23 @@ export default function RecycleBinPage() {
 
       <Modal
         isOpen={confirmBatchPurge}
-        onClose={() => setConfirmBatchPurge(false)}
+        onClose={() => {
+          if (batchPurgeMutation.isPending) return
+          setConfirmBatchPurge(false)
+        }}
         title="批量永久删除"
         description={`将永久删除已选择的 ${selectedIds.size} 条帖子（不可恢复）`}
         size="sm"
       >
         <ModalActions>
-          <Button variant="ghost" onClick={() => setConfirmBatchPurge(false)}>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              if (batchPurgeMutation.isPending) return
+              setConfirmBatchPurge(false)
+            }}
+            disabled={batchPurgeMutation.isPending}
+          >
             取消
           </Button>
           <Button
@@ -506,7 +596,8 @@ export default function RecycleBinPage() {
               batchPurgeMutation.mutate({ ids: Array.from(selectedIds) })
             }}
             isLoading={batchPurgeMutation.isPending}
-            disabled={selectedIds.size === 0}
+            loadingText="删除中..."
+            disabled={selectedIds.size === 0 || actionBusy}
           >
             确认永久删除
           </Button>

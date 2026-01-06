@@ -1,73 +1,73 @@
-import { useEffect, useMemo } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, Share2, User, Bot } from 'lucide-react'
-import { Card, Button, Loading, EmptyState } from '../components/ui'
-import PageHeader from '../components/PageHeader'
-import api from '../api/client'
-import { queryKeys } from '../queryKeys'
-import { useTheme } from '../contexts/ThemeContext'
-import { getApiErrorMessage } from '../utils'
+import { useEffect, useMemo } from "react";
+import { Link, useParams } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { ArrowRight, Share2, User, Bot, RotateCcw } from "lucide-react";
+import { Card, Button, EmptyState, Skeleton } from "../components/ui";
+import PageHeader from "../components/PageHeader";
+import api from "../api/client";
+import { queryKeys } from "../queryKeys";
+import { useTheme } from "../contexts/ThemeContext";
+import { getApiErrorMessage } from "../utils";
 
 interface SharedMessage {
-  role: string
-  content: string
-  references: string | null
-  created_at: string
+  role: string;
+  content: string;
+  references: string | null;
+  created_at: string;
 }
 
 interface SharedConsultationResponse {
-  session_id: string
-  title: string | null
-  created_at: string
-  messages: SharedMessage[]
+  session_id: string;
+  title: string | null;
+  created_at: string;
+  messages: SharedMessage[];
 }
 
 export default function SharePage() {
-  const { actualTheme } = useTheme()
-  const params = useParams()
-  const token = String(params.token || '').trim()
+  const { actualTheme } = useTheme();
+  const params = useParams();
+  const token = String(params.token || "").trim();
 
   const sharedQuery = useQuery({
     queryKey: queryKeys.sharedConsultation(token),
     queryFn: async () => {
-      const res = await api.get(`/ai/share/${encodeURIComponent(token)}`)
-      return res.data as SharedConsultationResponse
+      const res = await api.get(`/ai/share/${encodeURIComponent(token)}`);
+      return res.data as SharedConsultationResponse;
     },
     enabled: Boolean(token),
     retry: 1,
     refetchOnWindowFocus: false,
     placeholderData: (prev) => prev,
-  })
+  });
 
   useEffect(() => {
-    if (!sharedQuery.error) return
-  }, [sharedQuery.error])
+    if (!sharedQuery.error) return;
+  }, [sharedQuery.error]);
 
-  const data = sharedQuery.data ?? null
+  const data = sharedQuery.data ?? null;
 
   const pageTitle = useMemo(() => {
-    const t = String(data?.title || '').trim()
-    return t || '分享的对话'
-  }, [data?.title])
+    const t = String(data?.title || "").trim();
+    return t || "分享的对话";
+  }, [data?.title]);
 
   const createdAtText = useMemo(() => {
-    const raw = String(data?.created_at || '').trim()
-    if (!raw) return ''
-    const ts = new Date(raw).getTime()
-    if (Number.isNaN(ts)) return raw
-    return new Date(ts).toLocaleString('zh-CN')
-  }, [data?.created_at])
+    const raw = String(data?.created_at || "").trim();
+    if (!raw) return "";
+    const ts = new Date(raw).getTime();
+    if (Number.isNaN(ts)) return raw;
+    return new Date(ts).toLocaleString("zh-CN");
+  }, [data?.created_at]);
 
   const handleCopyLink = async () => {
-    const url = `${window.location.origin}/share/${token}`
+    const url = `${window.location.origin}/share/${token}`;
     try {
-      await navigator.clipboard.writeText(url)
-      window.alert('已复制分享链接')
+      await navigator.clipboard.writeText(url);
+      window.alert("已复制分享链接");
     } catch {
-      window.prompt('复制分享链接', url)
+      window.prompt("复制分享链接", url);
     }
-  }
+  };
 
   if (!token) {
     return (
@@ -82,14 +82,54 @@ export default function SharePage() {
           </Link>
         }
       />
-    )
+    );
   }
 
   if (sharedQuery.isLoading && !data) {
-    return <Loading text="加载中..." tone={actualTheme} />
+    return (
+      <div className="space-y-10">
+        <PageHeader
+          eyebrow="分享"
+          title="分享的对话"
+          tone={actualTheme}
+          right={
+            <Button
+              variant="outline"
+              icon={RotateCcw}
+              isLoading
+              loadingText="刷新中..."
+              disabled
+            >
+              刷新
+            </Button>
+          }
+        />
+
+        <div className="space-y-4">
+          {Array.from({ length: 3 }).map((_, idx) => (
+            <Card key={idx} variant="surface" padding="lg">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-center gap-2">
+                  <Skeleton variant="circular" width="32px" height="32px" />
+                  <Skeleton width="72px" height="14px" />
+                </div>
+                <Skeleton width="96px" height="12px" />
+              </div>
+              <div className="mt-3 space-y-2">
+                <Skeleton width="100%" height="14px" />
+                <Skeleton width="92%" height="14px" />
+                <Skeleton width="80%" height="14px" />
+              </div>
+            </Card>
+          ))}
+        </div>
+      </div>
+    );
   }
 
-  const errText = sharedQuery.isError ? getApiErrorMessage(sharedQuery.error, '加载分享内容失败') : null
+  const errText = sharedQuery.isError
+    ? getApiErrorMessage(sharedQuery.error, "加载分享内容失败")
+    : null;
 
   if (errText) {
     return (
@@ -104,7 +144,7 @@ export default function SharePage() {
           </Button>
         }
       />
-    )
+    );
   }
 
   if (!data) {
@@ -115,25 +155,40 @@ export default function SharePage() {
         description="分享内容为空"
         tone={actualTheme}
       />
-    )
+    );
   }
 
-  const messages = Array.isArray(data.messages) ? data.messages : []
+  const messages = Array.isArray(data.messages) ? data.messages : [];
 
   return (
     <div className="space-y-10">
       <PageHeader
         eyebrow="分享"
         title={pageTitle}
-        description={createdAtText ? `创建时间：${createdAtText}` : '只读分享内容'}
+        description={
+          createdAtText ? `创建时间：${createdAtText}` : "只读分享内容"
+        }
         tone={actualTheme}
         right={
           <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => sharedQuery.refetch()}
+              icon={RotateCcw}
+              isLoading={sharedQuery.isFetching}
+              loadingText="刷新中..."
+              disabled={sharedQuery.isFetching}
+            >
+              刷新
+            </Button>
             <Button variant="outline" onClick={handleCopyLink} icon={Share2}>
               复制链接
             </Button>
             <Link to="/chat">
-              <Button icon={ArrowRight} className="bg-emerald-600 hover:bg-emerald-700 text-white focus-visible:ring-emerald-500/25">
+              <Button
+                icon={ArrowRight}
+                className="bg-emerald-600 hover:bg-emerald-700 text-white focus-visible:ring-emerald-500/25"
+              >
                 去咨询
               </Button>
             </Link>
@@ -151,19 +206,23 @@ export default function SharePage() {
       ) : (
         <div className="space-y-4">
           {messages.map((m, idx) => {
-            const role = String(m.role || '').trim()
-            const isUser = role === 'user'
-            const Icon = isUser ? User : Bot
-            const label = isUser ? '用户' : 'AI'
-            const atRaw = String(m.created_at || '').trim()
-            const atText = atRaw ? new Date(atRaw).toLocaleString('zh-CN') : ''
+            const role = String(m.role || "").trim();
+            const isUser = role === "user";
+            const Icon = isUser ? User : Bot;
+            const label = isUser ? "用户" : "AI";
+            const atRaw = String(m.created_at || "").trim();
+            const atText = atRaw ? new Date(atRaw).toLocaleString("zh-CN") : "";
 
             return (
               <Card
                 key={`${idx}-${role}`}
                 variant="surface"
                 padding="lg"
-                className={isUser ? 'border border-blue-500/10' : 'border border-amber-500/10'}
+                className={
+                  isUser
+                    ? "border border-blue-500/10"
+                    : "border border-amber-500/10"
+                }
               >
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex items-center gap-2 text-sm font-medium text-slate-900 dark:text-white">
@@ -172,16 +231,18 @@ export default function SharePage() {
                     </span>
                     <span>{label}</span>
                   </div>
-                  <div className="text-xs text-slate-500 dark:text-white/40">{atText}</div>
+                  <div className="text-xs text-slate-500 dark:text-white/40">
+                    {atText}
+                  </div>
                 </div>
                 <div className="mt-3 text-sm text-slate-700 whitespace-pre-wrap leading-relaxed dark:text-white/70">
-                  {String(m.content || '')}
+                  {String(m.content || "")}
                 </div>
               </Card>
-            )
+            );
           })}
         </div>
       )}
     </div>
-  )
+  );
 }

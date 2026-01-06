@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Calendar, CheckCircle2, FileText, Handshake, MessageSquareText, XCircle } from 'lucide-react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { CheckCircle2, FileText, Handshake, MessageSquareText, RotateCcw, XCircle } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
-import { Badge, Button, Card, EmptyState, Loading, Pagination } from '../components/ui'
+import { Badge, Button, Card, EmptyState, ListSkeleton, Pagination, Skeleton } from '../components/ui'
 import api from '../api/client'
 import LawyerConsultationMessagesModal from '../components/LawyerConsultationMessagesModal'
 import { useAuth } from '../contexts/AuthContext'
@@ -66,6 +66,7 @@ export default function LawyerDashboardPage() {
   const { isAuthenticated } = useAuth()
   const { actualTheme } = useTheme()
   const toast = useToast()
+  const queryClient = useQueryClient()
 
   const [messagesOpen, setMessagesOpen] = useState(false)
   const [messagesConsultationId, setMessagesConsultationId] = useState<number | null>(null)
@@ -74,8 +75,10 @@ export default function LawyerDashboardPage() {
   const [page, setPage] = useState(1)
   const pageSize = 20
 
+  const queryKey = ['lawyer-consultations', { page, pageSize }] as const
+
   const listQuery = useQuery({
-    queryKey: ['lawyer-consultations', { page, pageSize }] as const,
+    queryKey,
     queryFn: async () => {
       const res = await api.get('/lawfirm/lawyer/consultations', {
         params: { page, page_size: pageSize },
@@ -102,35 +105,94 @@ export default function LawyerDashboardPage() {
     toast.error(getApiErrorMessage(listQuery.error, '加载失败，请稍后重试'))
   }, [listQuery.error, toast])
 
-  const acceptMutation = useAppMutation<unknown, number>({
+  const [activeActionId, setActiveActionId] = useState<number | null>(null)
+
+  const acceptMutation = useAppMutation<unknown, number, { previous?: ConsultationListResponse }>({
     mutationFn: async (id) => {
       await api.post(`/lawfirm/lawyer/consultations/${id}/accept`)
     },
     successMessage: '已接单',
     errorMessageFallback: '接单失败，请稍后重试',
-    onSuccess: async () => {
+    onMutate: async (id) => {
+      setActiveActionId(id)
+      const previous = queryClient.getQueryData<ConsultationListResponse>(queryKey)
+      queryClient.setQueryData<ConsultationListResponse>(queryKey, (old) => {
+        if (!old) return old
+        return {
+          ...old,
+          items: (old.items ?? []).map((c) => (c.id === id ? { ...c, status: 'confirmed' } : c)),
+        }
+      })
+      return { previous }
+    },
+    onError: (err, _id, ctx) => {
+      if (ctx?.previous) {
+        queryClient.setQueryData(queryKey, ctx.previous)
+      }
+      return err as any
+    },
+    onSettled: async () => {
+      setActiveActionId(null)
       await listQuery.refetch()
     },
   })
 
-  const rejectMutation = useAppMutation<unknown, number>({
+  const rejectMutation = useAppMutation<unknown, number, { previous?: ConsultationListResponse }>({
     mutationFn: async (id) => {
       await api.post(`/lawfirm/lawyer/consultations/${id}/reject`)
     },
     successMessage: '已拒单',
     errorMessageFallback: '拒单失败，请稍后重试',
-    onSuccess: async () => {
+    onMutate: async (id) => {
+      setActiveActionId(id)
+      const previous = queryClient.getQueryData<ConsultationListResponse>(queryKey)
+      queryClient.setQueryData<ConsultationListResponse>(queryKey, (old) => {
+        if (!old) return old
+        return {
+          ...old,
+          items: (old.items ?? []).map((c) => (c.id === id ? { ...c, status: 'cancelled' } : c)),
+        }
+      })
+      return { previous }
+    },
+    onError: (err, _id, ctx) => {
+      if (ctx?.previous) {
+        queryClient.setQueryData(queryKey, ctx.previous)
+      }
+      return err as any
+    },
+    onSettled: async () => {
+      setActiveActionId(null)
       await listQuery.refetch()
     },
   })
 
-  const completeMutation = useAppMutation<unknown, number>({
+  const completeMutation = useAppMutation<unknown, number, { previous?: ConsultationListResponse }>({
     mutationFn: async (id) => {
       await api.post(`/lawfirm/lawyer/consultations/${id}/complete`)
     },
     successMessage: '已标记完成',
     errorMessageFallback: '操作失败，请稍后重试',
-    onSuccess: async () => {
+    onMutate: async (id) => {
+      setActiveActionId(id)
+      const previous = queryClient.getQueryData<ConsultationListResponse>(queryKey)
+      queryClient.setQueryData<ConsultationListResponse>(queryKey, (old) => {
+        if (!old) return old
+        return {
+          ...old,
+          items: (old.items ?? []).map((c) => (c.id === id ? { ...c, status: 'completed' } : c)),
+        }
+      })
+      return { previous }
+    },
+    onError: (err, _id, ctx) => {
+      if (ctx?.previous) {
+        queryClient.setQueryData(queryKey, ctx.previous)
+      }
+      return err as any
+    },
+    onSettled: async () => {
+      setActiveActionId(null)
       await listQuery.refetch()
     },
   })
@@ -138,6 +200,8 @@ export default function LawyerDashboardPage() {
   const items = listQuery.data?.items ?? []
   const total = listQuery.data?.total ?? 0
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / pageSize)), [total])
+
+  const actionBusy = acceptMutation.isPending || rejectMutation.isPending || completeMutation.isPending
 
   if (!isAuthenticated) {
     return (
@@ -181,7 +245,28 @@ export default function LawyerDashboardPage() {
   }
 
   if (listQuery.isLoading && items.length === 0) {
-    return <Loading text="加载中..." tone={actualTheme} />
+    return (
+      <div className="space-y-10">
+        <PageHeader
+          eyebrow="律师"
+          title="律师工作台"
+          description="处理用户预约：接单 / 拒单 / 标记完成"
+          layout="mdStart"
+          tone={actualTheme}
+          right={
+            <div className="flex items-center gap-2">
+              <Skeleton width="64px" height="36px" />
+              <Skeleton width="64px" height="36px" />
+              <Skeleton width="72px" height="36px" />
+            </div>
+          }
+        />
+
+        <Card variant="surface" padding="lg">
+          <ListSkeleton count={3} />
+        </Card>
+      </div>
+    )
   }
 
   return (
@@ -193,23 +278,30 @@ export default function LawyerDashboardPage() {
         layout="mdStart"
         tone={actualTheme}
         right={
-          <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => (window.location.href = '/lawyer/income')}>
-              收入
-            </Button>
-            <Button variant="outline" onClick={() => (window.location.href = '/lawyer/withdraw')}>
-              提现
-            </Button>
-            <Button variant="outline" onClick={() => listQuery.refetch()} disabled={listQuery.isFetching}>
-              刷新
-            </Button>
-          </div>
+          <Button
+            variant="outline"
+            icon={RotateCcw}
+            isLoading={listQuery.isFetching}
+            loadingText="刷新中..."
+            onClick={() => {
+              if (actionBusy) return
+              listQuery.refetch()
+            }}
+            disabled={listQuery.isFetching || actionBusy}
+          >
+            刷新
+          </Button>
         }
       />
 
       <Card variant="surface" padding="lg">
         {items.length === 0 ? (
-          <EmptyState icon={Calendar} title="暂无预约" description="当前没有待处理的咨询预约" tone={actualTheme} />
+          <EmptyState
+            icon={Handshake}
+            title="暂无预约"
+            description="暂时没有用户预约需要处理"
+            tone={actualTheme}
+          />
         ) : (
           <div className="space-y-4">
             {items.map((c) => {
@@ -221,6 +313,16 @@ export default function LawyerDashboardPage() {
               const orderNo = String(c.payment_order_no || '').trim()
               const payStatus = String(c.payment_status || '').trim().toLowerCase()
               const paid = !orderNo || payStatus === 'paid'
+
+              const isActive = activeActionId === c.id
+              const rowBusy = actionBusy && isActive
+              const disableOther = actionBusy && !isActive
+              const acceptLoading = acceptMutation.isPending && isActive
+              const rejectLoading = rejectMutation.isPending && isActive
+              const completeLoading = completeMutation.isPending && isActive
+              const acceptDisabled = !paid || (rowBusy && !acceptLoading) || disableOther
+              const rejectDisabled = (rowBusy && !rejectLoading) || disableOther
+              const completeDisabled = (rowBusy && !completeLoading) || disableOther
 
               return (
                 <Card key={c.id} variant="surface" padding="md" className="border border-slate-200/70 dark:border-white/10">
@@ -258,7 +360,9 @@ export default function LawyerDashboardPage() {
                         variant="outline"
                         size="sm"
                         icon={MessageSquareText}
+                        disabled={actionBusy || disableOther}
                         onClick={() => {
+                          if (actionBusy) return
                           setMessagesConsultationId(c.id)
                           setMessagesTitle(`沟通：${c.subject}`)
                           setMessagesOpen(true)
@@ -272,8 +376,9 @@ export default function LawyerDashboardPage() {
                             variant="primary"
                             size="sm"
                             icon={Handshake}
-                            isLoading={acceptMutation.isPending}
-                            disabled={!paid}
+                            isLoading={acceptLoading}
+                            loadingText="接单中..."
+                            disabled={acceptDisabled}
                             onClick={() => {
                               if (!confirm('确定接单吗？')) return
                               acceptMutation.mutate(c.id)
@@ -285,7 +390,9 @@ export default function LawyerDashboardPage() {
                             variant="danger"
                             size="sm"
                             icon={XCircle}
-                            isLoading={rejectMutation.isPending}
+                            isLoading={rejectLoading}
+                            loadingText="拒单中..."
+                            disabled={rejectDisabled}
                             onClick={() => {
                               if (!confirm('确定拒单吗？')) return
                               rejectMutation.mutate(c.id)
@@ -301,7 +408,9 @@ export default function LawyerDashboardPage() {
                           variant="secondary"
                           size="sm"
                           icon={CheckCircle2}
-                          isLoading={completeMutation.isPending}
+                          isLoading={completeLoading}
+                          loadingText="处理中..."
+                          disabled={completeDisabled}
                           onClick={() => {
                             if (!confirm('确定标记完成吗？')) return
                             completeMutation.mutate(c.id)
@@ -315,7 +424,9 @@ export default function LawyerDashboardPage() {
                         variant="outline"
                         size="sm"
                         icon={FileText}
+                        disabled={actionBusy || disableOther}
                         onClick={() => {
+                          if (actionBusy) return
                           alert(`咨询ID: ${c.id}`)
                         }}
                       >
@@ -328,7 +439,14 @@ export default function LawyerDashboardPage() {
             })}
 
             <div className="pt-4">
-              <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
+              <Pagination
+                currentPage={page}
+                totalPages={totalPages}
+                onPageChange={(p) => {
+                  if (actionBusy) return
+                  setPage(p)
+                }}
+              />
             </div>
           </div>
         )}

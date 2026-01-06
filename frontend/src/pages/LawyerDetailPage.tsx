@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, BadgeCheck, Star, UserRound } from "lucide-react";
+import { ArrowLeft, BadgeCheck, RotateCcw, Star, UserRound } from "lucide-react";
 import PageHeader from "../components/PageHeader";
 import api from "../api/client";
 import { useTheme } from "../contexts/ThemeContext";
 import { useToast } from "../hooks";
 import { getApiErrorMessage } from "../utils";
-import { Badge, Button, Card, EmptyState, Loading, Pagination } from "../components/ui";
+import { Badge, Button, Card, EmptyState, ListSkeleton, Pagination, Skeleton } from "../components/ui";
 import LawyerBookingModal from "../components/LawyerBookingModal";
 
 type LawyerDetail = {
@@ -76,6 +76,7 @@ export default function LawyerDetailPage() {
     },
     retry: 1,
     refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
   });
 
   const reviewsQuery = useQuery<ReviewListResponse>({
@@ -118,7 +119,48 @@ export default function LawyerDetailPage() {
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / pageSize)), [total, pageSize]);
 
   if (detailQuery.isLoading && !lawyer) {
-    return <Loading text="加载中..." tone={actualTheme} />;
+    return (
+      <div className="space-y-10">
+        <div className="flex items-center gap-2 text-slate-600 dark:text-white/60">
+          <ArrowLeft className="h-4 w-4 opacity-40" />
+          <Skeleton width="80px" height="16px" />
+        </div>
+
+        <div className="rounded-2xl border border-slate-200/70 bg-white p-6 dark:border-white/10 dark:bg-white/[0.02]">
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-3 w-full">
+              <Skeleton width="240px" height="26px" />
+              <Skeleton width="60%" height="16px" />
+              <Skeleton width="52%" height="16px" />
+            </div>
+            <div className="space-y-2 text-right">
+              <Skeleton width="90px" height="24px" />
+              <Skeleton width="72px" height="14px" />
+            </div>
+          </div>
+        </div>
+
+        <div className="grid lg:grid-cols-3 gap-8">
+          <div className="lg:col-span-2 space-y-6">
+            <div className="rounded-2xl border border-slate-200/70 bg-white p-6 dark:border-white/10 dark:bg-white/[0.02]">
+              <div className="space-y-4">
+                <Skeleton width="140px" height="18px" />
+                <ListSkeleton count={3} />
+              </div>
+            </div>
+          </div>
+          <div className="lg:col-span-1">
+            <div className="rounded-2xl border border-slate-200/70 bg-white p-6 dark:border-white/10 dark:bg-white/[0.02]">
+              <div className="space-y-3">
+                <Skeleton width="120px" height="18px" />
+                <Skeleton width="90%" height="14px" />
+                <Skeleton width="100%" height="40px" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   if (!lawyer) {
@@ -143,6 +185,12 @@ export default function LawyerDetailPage() {
   const rating = Number(lawyer.rating || 0);
   const reviewCount = Number(lawyer.review_count || 0);
 
+  const handleRefreshAll = () => {
+    void Promise.all([detailQuery.refetch(), reviewsQuery.refetch()]);
+  };
+
+  const isRefreshingAll = detailQuery.isFetching || reviewsQuery.isFetching;
+
   return (
     <div className="space-y-10">
       <Link
@@ -160,13 +208,25 @@ export default function LawyerDetailPage() {
         layout="mdStart"
         tone={actualTheme}
         right={
-          <Button
-            variant="primary"
-            onClick={() => setBookingOpen(true)}
-            disabled={bookingOpen}
-          >
-            预约咨询
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              icon={RotateCcw}
+              isLoading={isRefreshingAll}
+              loadingText="刷新中..."
+              onClick={handleRefreshAll}
+              disabled={isRefreshingAll}
+            >
+              刷新
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => setBookingOpen(true)}
+              disabled={bookingOpen}
+            >
+              预约咨询
+            </Button>
+          </div>
         }
       />
 
@@ -223,13 +283,20 @@ export default function LawyerDetailPage() {
                   平均评分：{Number(reviewsData.average_rating ?? 0).toFixed(1)}
                 </div>
               </div>
-              <Button variant="outline" onClick={() => reviewsQuery.refetch()} disabled={reviewsQuery.isFetching}>
+              <Button
+                variant="outline"
+                icon={RotateCcw}
+                onClick={() => reviewsQuery.refetch()}
+                disabled={reviewsQuery.isFetching}
+                isLoading={reviewsQuery.isFetching}
+                loadingText="刷新中..."
+              >
                 刷新
               </Button>
             </div>
 
             {reviewsQuery.isLoading && reviewItems.length === 0 ? (
-              <Loading text="加载中..." />
+              <ListSkeleton count={3} />
             ) : reviewItems.length === 0 ? (
               <EmptyState
                 icon={Star}

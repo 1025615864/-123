@@ -7,9 +7,10 @@ import {
   Button,
   Card,
   EmptyState,
-  Loading,
   Modal,
   Pagination,
+  ListSkeleton,
+  Skeleton,
 } from "../components/ui";
 import api from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
@@ -145,7 +146,22 @@ export default function LawyerWithdrawalsPage() {
   }
 
   if (listQuery.isLoading && items.length === 0) {
-    return <Loading text="加载中..." tone={actualTheme} />;
+    return (
+      <div className="space-y-10">
+        <PageHeader
+          eyebrow="律师"
+          title="提现记录"
+          description="查看提现申请与审核状态"
+          layout="mdStart"
+          tone={actualTheme}
+          right={<Skeleton width="90px" height="36px" />}
+        />
+
+        <Card variant="surface" padding="lg">
+          <ListSkeleton count={3} />
+        </Card>
+      </div>
+    );
   }
 
   return (
@@ -161,6 +177,8 @@ export default function LawyerWithdrawalsPage() {
             variant="outline"
             icon={RefreshCw}
             onClick={() => listQuery.refetch()}
+            isLoading={listQuery.isFetching}
+            loadingText="刷新中..."
             disabled={listQuery.isFetching}
           >
             刷新
@@ -238,7 +256,15 @@ export default function LawyerWithdrawalsPage() {
         size="lg"
       >
         {!detail ? (
-          <Loading text="加载中..." tone={actualTheme} />
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <Skeleton width="90px" height="18px" />
+              <Skeleton width="72px" height="22px" />
+            </div>
+            <Skeleton width="100%" height="14px" />
+            <Skeleton width="92%" height="14px" />
+            <Skeleton width="86%" height="14px" />
+          </div>
         ) : (
           <div className="space-y-3">
             <Card variant="surface" padding="md">

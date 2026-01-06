@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { MapPin, Phone, Star, Users, Search, Building2, BadgeCheck, Calendar } from 'lucide-react'
+import { MapPin, Phone, Star, Users, Search, Building2, BadgeCheck, Calendar, RotateCcw } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
-import { Loading, Card, Input, Badge, EmptyState, Button, LinkButton } from '../components/ui'
+import { Card, Input, Badge, EmptyState, Button, LinkButton, Skeleton } from '../components/ui'
 import PageHeader from '../components/PageHeader'
 import api from '../api/client'
 import { usePrefetchLimiter, useToast } from '../hooks'
@@ -67,12 +67,10 @@ export default function LawFirmPage() {
     }
   }
 
-  if (firmsQuery.isLoading && (firmsQuery.data ?? []).length === 0) {
-    return <Loading text="加载中..." tone={actualTheme} />
-  }
-
   const firms = firmsQuery.data ?? []
   const loadError = firmsQuery.isError ? getApiErrorMessage(firmsQuery.error, '律所列表加载失败，请稍后重试') : null
+
+  const isRefreshing = firmsQuery.isFetching
 
   const prefetchFirmDetail = (firmId: number) => {
     const id = String(firmId)
@@ -109,7 +107,18 @@ export default function LawFirmPage() {
           tone={actualTheme}
           right={
             <div className="w-full md:w-auto space-y-3">
-              <div className="flex justify-end">
+              <div className="flex justify-end gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  icon={RotateCcw}
+                  isLoading={isRefreshing}
+                  loadingText="刷新中..."
+                  disabled={isRefreshing}
+                  onClick={() => firmsQuery.refetch()}
+                >
+                  刷新
+                </Button>
                 <LinkButton to="/orders?tab=consultations" variant="outline" size="sm" icon={Calendar}>
                   我的预约
                 </LinkButton>
@@ -137,7 +146,14 @@ export default function LawFirmPage() {
                       className="py-2.5"
                     />
                   </div>
-                  <Button onClick={handleSearch} icon={Search} className="px-6 py-2.5">
+                  <Button
+                    onClick={handleSearch}
+                    icon={Search}
+                    className="px-6 py-2.5"
+                    isLoading={isRefreshing}
+                    loadingText="搜索中..."
+                    disabled={isRefreshing}
+                  >
                     搜索
                   </Button>
                 </div>
@@ -148,7 +164,39 @@ export default function LawFirmPage() {
       </Card>
 
       <div className="grid md:grid-cols-2 gap-8">
-        {loadError ? (
+        {firmsQuery.isLoading && firms.length === 0 ? (
+          Array.from({ length: 6 }).map((_, idx) => (
+            <Card
+              key={idx}
+              variant="surface"
+              padding="none"
+              className="p-6"
+            >
+              <div className="space-y-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0 flex-1 space-y-2">
+                    <Skeleton width="65%" height="18px" />
+                    <Skeleton width="92%" height="14px" />
+                  </div>
+                  <Skeleton width="64px" height="20px" />
+                </div>
+
+                <div className="space-y-2">
+                  <Skeleton width="88%" height="14px" />
+                  <Skeleton width="72%" height="14px" />
+                </div>
+
+                <div className="flex items-center justify-between gap-4 mt-6 pt-5 border-t border-slate-200/70 dark:border-white/10">
+                  <div className="flex items-center gap-4 flex-wrap">
+                    <Skeleton width="160px" height="28px" />
+                    <Skeleton width="110px" height="28px" />
+                  </div>
+                  <Skeleton width="110px" height="40px" />
+                </div>
+              </div>
+            </Card>
+          ))
+        ) : loadError ? (
           <EmptyState
             icon={Building2}
             title="加载失败"

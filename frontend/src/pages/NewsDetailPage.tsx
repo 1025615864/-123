@@ -7,6 +7,7 @@ import {
   Share2,
   Bookmark,
   MessageSquare,
+  RefreshCw,
   Send,
   Trash2,
   User as UserIcon,
@@ -14,17 +15,17 @@ import {
 import {
   Card,
   Button,
-  Loading,
   Badge,
   FadeInImage,
   Textarea,
   Pagination,
+  Skeleton,
+  ListSkeleton,
 } from "../components/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import api from "../api/client";
 import { useToast } from "../hooks";
 import { useAuth } from "../contexts/AuthContext";
-import { useTheme } from "../contexts/ThemeContext";
 import { getApiErrorMessage } from "../utils";
 import { queryKeys } from "../queryKeys";
 import MarkdownContent from "../components/MarkdownContent";
@@ -191,7 +192,6 @@ function upsertLinkRel(rel: string, href: string): () => void {
 export default function NewsDetailPage() {
   const { newsId } = useParams<{ newsId: string }>();
   const { isAuthenticated, user } = useAuth();
-  const { actualTheme } = useTheme();
   const toast = useToast();
 
   const queryClient = useQueryClient();
@@ -263,6 +263,7 @@ export default function NewsDetailPage() {
   const [commentDraft, setCommentDraft] = useState("");
   const [commentPage, setCommentPage] = useState(1);
   const commentPageSize = 20;
+  const [pendingDeleteCommentIds, setPendingDeleteCommentIds] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
     setCommentPage(1);
@@ -301,6 +302,52 @@ export default function NewsDetailPage() {
       const res = await api.post(`/news/${newsId}/comments`, { content });
       return res.data as NewsComment;
     },
+    onMutate: async (content: string) => {
+      if (!newsId) return { previous: undefined, previousCount: undefined };
+      await queryClient.cancelQueries({ queryKey: queryKeys.newsCommentsRoot(newsId) });
+
+      const key = queryKeys.newsComments(newsId, commentPage, commentPageSize);
+      const previous = queryClient.getQueryData<NewsCommentListResponse>(key);
+
+      const authorName =
+        (user as any)?.nickname ||
+        (user as any)?.username ||
+        (user as any)?.email ||
+        (user ? `用户${user.id}` : "匿名用户");
+
+      const temp: NewsComment = {
+        id: -Math.trunc(Date.now()),
+        news_id: Number(newsId),
+        user_id: Number(user?.id ?? 0),
+        content: String(content ?? ""),
+        review_status: "pending",
+        review_reason: null,
+        created_at: new Date().toISOString(),
+        author: user
+          ? {
+              id: Number(user.id),
+              username: String((user as any)?.username ?? authorName),
+              nickname: (user as any)?.nickname,
+              avatar: (user as any)?.avatar,
+            }
+          : undefined,
+      };
+
+      queryClient.setQueryData<NewsCommentListResponse>(key, (old) => {
+        if (!old) {
+          return {
+            items: [temp],
+            total: 1,
+            page: commentPage,
+            page_size: commentPageSize,
+          };
+        }
+        const nextItems = [temp, ...(old.items ?? [])];
+        return { ...old, items: nextItems, total: Number(old.total || 0) + 1 };
+      });
+
+      return { previous, key };
+    },
     onSuccess: async (created) => {
       setCommentDraft("");
       await queryClient.invalidateQueries({
@@ -309,7 +356,13 @@ export default function NewsDetailPage() {
       const status = String(created?.review_status ?? "").toLowerCase();
       toast.success(status === "pending" ? "评论已提交，等待审核" : "评论已发布");
     },
-    onError: (err) => {
+    onError: (err, _vars, ctx) => {
+      if (ctx && typeof ctx === "object") {
+        const anyCtx = ctx as any;
+        if (anyCtx.key && anyCtx.previous) {
+          queryClient.setQueryData(anyCtx.key, anyCtx.previous);
+        }
+      }
       toast.error(getApiErrorMessage(err, "评论失败"));
     },
   });
@@ -319,14 +372,48 @@ export default function NewsDetailPage() {
       const res = await api.delete(`/news/comments/${commentId}`);
       return res.data;
     },
+    onMutate: async (commentId: number) => {
+      if (!newsId) return { previous: undefined, key: undefined };
+      setPendingDeleteCommentIds((prev) => ({ ...prev, [commentId]: true }));
+      await queryClient.cancelQueries({ queryKey: queryKeys.newsCommentsRoot(newsId) });
+      const key = queryKeys.newsComments(newsId, commentPage, commentPageSize);
+      const previous = queryClient.getQueryData<NewsCommentListResponse>(key);
+
+      queryClient.setQueryData<NewsCommentListResponse>(key, (old) => {
+        if (!old) return old as any;
+        const nextItems = (old.items ?? []).filter((c) => c.id !== commentId);
+        const nextTotal = Math.max(0, Number(old.total || 0) - 1);
+        return { ...old, items: nextItems, total: nextTotal };
+      });
+
+      return { previous, key };
+    },
     onSuccess: async () => {
       await queryClient.invalidateQueries({
         queryKey: queryKeys.newsCommentsRoot(newsId),
       });
       toast.success("已删除");
     },
-    onError: (err) => {
+    onError: (err, _vars, ctx) => {
+      setPendingDeleteCommentIds((prev) => {
+        const next = { ...prev };
+        if (_vars != null) delete next[Number(_vars)];
+        return next;
+      });
+      if (ctx && typeof ctx === "object") {
+        const anyCtx = ctx as any;
+        if (anyCtx.key && anyCtx.previous) {
+          queryClient.setQueryData(anyCtx.key, anyCtx.previous);
+        }
+      }
       toast.error(getApiErrorMessage(err, "删除失败"));
+    },
+    onSettled: (_data, _err, commentId) => {
+      setPendingDeleteCommentIds((prev) => {
+        const next = { ...prev };
+        delete next[commentId];
+        return next;
+      });
     },
   });
 
@@ -515,8 +602,63 @@ export default function NewsDetailPage() {
     bookmarkMutation.mutate();
   };
 
+  const refreshingAll = newsQuery.isFetching || commentsQuery.isFetching || relatedQuery.isFetching;
+  const handleRefreshAll = () => {
+    if (!newsId) return;
+    if (refreshingAll) return;
+    void Promise.all([
+      newsQuery.refetch(),
+      commentsQuery.refetch(),
+      relatedQuery.refetch(),
+    ]);
+  };
+
   if (newsQuery.isLoading) {
-    return <Loading text="加载中..." tone={actualTheme} />;
+    return (
+      <div className="max-w-3xl mx-auto space-y-8">
+        <div className="flex items-center gap-2 text-slate-600 dark:text-white/60">
+          <Skeleton width="120px" height="16px" />
+        </div>
+
+        <div className="aspect-video rounded-2xl overflow-hidden bg-slate-900/5 dark:bg-white/5">
+          <Skeleton variant="rectangular" height="100%" animation="wave" />
+        </div>
+
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
+            <Skeleton width="64px" height="22px" />
+            <Skeleton width="120px" height="14px" />
+          </div>
+          <Skeleton width="90%" height="34px" />
+          <Skeleton width="55%" height="34px" />
+          <div className="flex flex-wrap items-center gap-4">
+            <Skeleton width="120px" height="14px" />
+            <Skeleton width="120px" height="14px" />
+            <Skeleton width="120px" height="14px" />
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200/70 bg-white p-6 dark:border-white/10 dark:bg-white/[0.02]">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <Skeleton width="100px" height="18px" />
+            <Skeleton width="60px" height="22px" />
+          </div>
+          <div className="space-y-2">
+            <Skeleton width="100%" height="16px" />
+            <Skeleton width="92%" height="16px" />
+            <Skeleton width="86%" height="16px" />
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200/70 bg-white p-6 dark:border-white/10 dark:bg-white/[0.02]">
+          <div className="flex items-center justify-between mb-4">
+            <Skeleton width="120px" height="18px" />
+            <Skeleton width="80px" height="28px" />
+          </div>
+          <ListSkeleton count={3} />
+        </div>
+      </div>
+    );
   }
 
   if (!news) {
@@ -542,13 +684,27 @@ export default function NewsDetailPage() {
   return (
     <div className="max-w-3xl mx-auto space-y-8">
       {/* 返回按钮 */}
-      <Link
-        to="/news"
-        className="inline-flex items-center gap-2 text-slate-600 hover:text-slate-900 transition-colors dark:text-white/60 dark:hover:text-white"
-      >
-        <ArrowLeft className="h-4 w-4" />
-        返回新闻列表
-      </Link>
+      <div className="flex items-center justify-between gap-3">
+        <Link
+          to="/news"
+          className="inline-flex items-center gap-2 text-slate-600 hover:text-slate-900 transition-colors dark:text-white/60 dark:hover:text-white"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          返回新闻列表
+        </Link>
+
+        <Button
+          variant="outline"
+          size="sm"
+          icon={RefreshCw}
+          isLoading={refreshingAll}
+          loadingText="刷新中..."
+          onClick={handleRefreshAll}
+          disabled={refreshingAll}
+        >
+          刷新
+        </Button>
+      </div>
 
       {/* 新闻内容 */}
       <article>
@@ -730,6 +886,8 @@ export default function NewsDetailPage() {
             variant={bookmarked ? "primary" : "outline"}
             onClick={handleBookmark}
             icon={Bookmark}
+            isLoading={bookmarkMutation.isPending}
+            loadingText={bookmarked ? "收藏中..." : "取消中..."}
             className="flex-1 sm:flex-none"
           >
             {bookmarked ? "已收藏" : "收藏"}
@@ -755,6 +913,18 @@ export default function NewsDetailPage() {
                 ({commentsTotal})
               </span>
             </h2>
+
+            <Button
+              variant="outline"
+              size="sm"
+              icon={RefreshCw}
+              isLoading={commentsQuery.isFetching}
+              loadingText="刷新中..."
+              onClick={() => commentsQuery.refetch()}
+              disabled={commentsQuery.isFetching}
+            >
+              刷新
+            </Button>
           </div>
 
           <div className="space-y-3">
@@ -784,6 +954,8 @@ export default function NewsDetailPage() {
                   submitCommentMutation.mutate(content);
                 }}
                 disabled={!isAuthenticated || submitCommentMutation.isPending}
+                isLoading={submitCommentMutation.isPending}
+                loadingText="发布中..."
               >
                 发布评论
               </Button>
@@ -792,9 +964,7 @@ export default function NewsDetailPage() {
 
           <div className="mt-6 space-y-4">
             {commentsQuery.isLoading ? (
-              <p className="text-sm text-slate-600 dark:text-white/50">
-                加载中...
-              </p>
+              <ListSkeleton count={3} />
             ) : comments.length === 0 ? (
               <p className="text-sm text-slate-600 dark:text-white/50">
                 暂无评论
@@ -806,6 +976,9 @@ export default function NewsDetailPage() {
                     (c.author?.nickname ?? "").trim() ||
                     (c.author?.username ?? "").trim() ||
                     `用户${c.user_id}`;
+                  const reviewStatus = String(c.review_status ?? "").toLowerCase();
+                  const canDelete = canDeleteComment(c) && Number(c.id) > 0;
+                  const deleting = Boolean(pendingDeleteCommentIds[c.id]);
                   return (
                     <div
                       key={c.id}
@@ -818,6 +991,20 @@ export default function NewsDetailPage() {
                             <span className="font-medium text-slate-900 dark:text-white">
                               {name}
                             </span>
+                            {reviewStatus === "pending" ? (
+                              <Badge variant="warning" size="sm">
+                                审核中
+                              </Badge>
+                            ) : null}
+                            {reviewStatus === "rejected" ? (
+                              <Badge
+                                variant="danger"
+                                size="sm"
+                                title={c.review_reason || undefined}
+                              >
+                                已驳回
+                              </Badge>
+                            ) : null}
                             <span className="text-slate-400 dark:text-white/30">
                               ·
                             </span>
@@ -830,17 +1017,20 @@ export default function NewsDetailPage() {
                           </div>
                         </div>
 
-                        {canDeleteComment(c) ? (
+                        {canDelete ? (
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="p-2"
+                            className={deleting ? "px-3 py-2" : "p-2"}
                             icon={Trash2}
                             onClick={() => {
-                              if (deleteCommentMutation.isPending) return;
+                              if (deleting) return;
                               deleteCommentMutation.mutate(c.id);
                             }}
                             title="删除"
+                            isLoading={deleting}
+                            loadingText="删除中..."
+                            disabled={deleting}
                           />
                         ) : null}
                       </div>
@@ -876,9 +1066,7 @@ export default function NewsDetailPage() {
             </div>
 
             {relatedQuery.isLoading ? (
-              <p className="text-sm text-slate-600 dark:text-white/50">
-                加载中...
-              </p>
+              <ListSkeleton count={3} />
             ) : relatedItems.length === 0 ? (
               <p className="text-sm text-slate-600 dark:text-white/50">
                 暂无相关推荐

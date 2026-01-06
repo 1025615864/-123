@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Bell, Send, Users, Clock, MessageSquare } from 'lucide-react'
-import { Card, Input, Button, Modal, Textarea } from '../../components/ui'
+import { Bell, Send, Users, Clock, MessageSquare, RotateCcw } from 'lucide-react'
+import { Card, Input, Button, Modal, Textarea, ListSkeleton } from '../../components/ui'
 import api from '../../api/client'
 import { useAppMutation, useToast } from '../../hooks'
 import { getApiErrorMessage } from '../../utils'
@@ -59,7 +59,11 @@ export default function NotificationsPage() {
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white">通知管理</h1>
           <p className="text-slate-600 mt-1 dark:text-white/50">发布和管理系统通知</p>
         </div>
-        <Button icon={Send} onClick={() => setShowCreateModal(true)}>
+        <Button
+          icon={Send}
+          onClick={() => setShowCreateModal(true)}
+          disabled={sendMutation.isPending}
+        >
           发布通知
         </Button>
       </div>
@@ -103,10 +107,23 @@ export default function NotificationsPage() {
 
       {/* 通知历史列表 */}
       <Card variant="surface" padding="md">
-        <h2 className="text-lg font-semibold text-slate-900 mb-4 dark:text-white">发送历史</h2>
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <h2 className="text-lg font-semibold text-slate-900 dark:text-white">发送历史</h2>
+          <Button
+            variant="outline"
+            size="sm"
+            icon={RotateCcw}
+            onClick={() => listQuery.refetch()}
+            isLoading={listQuery.isFetching}
+            loadingText="刷新中..."
+            disabled={listQuery.isFetching}
+          >
+            刷新
+          </Button>
+        </div>
         
         {listQuery.isLoading ? (
-          <div className="text-center py-8 text-slate-500 dark:text-white/50">加载中...</div>
+          <ListSkeleton count={4} />
         ) : notifications.length === 0 ? (
           <div className="text-center py-8 text-slate-500 dark:text-white/50">
             <Bell className="h-12 w-12 mx-auto mb-2 opacity-50" />
@@ -150,7 +167,10 @@ export default function NotificationsPage() {
       {/* 发布通知弹窗 */}
       <Modal
         isOpen={showCreateModal}
-        onClose={() => setShowCreateModal(false)}
+        onClose={() => {
+          if (sendMutation.isPending) return
+          setShowCreateModal(false)
+        }}
         title="发布系统通知"
       >
         <div className="space-y-4">
@@ -162,6 +182,7 @@ export default function NotificationsPage() {
               value={newNotification.title}
               onChange={(e) => setNewNotification({ ...newNotification, title: e.target.value })}
               placeholder="请输入通知标题"
+              disabled={sendMutation.isPending}
             />
           </div>
           <div>
@@ -173,6 +194,7 @@ export default function NotificationsPage() {
               onChange={(e) => setNewNotification({ ...newNotification, content: e.target.value })}
               placeholder="请输入通知内容"
               rows={4}
+              disabled={sendMutation.isPending}
             />
           </div>
           <div>
@@ -183,6 +205,7 @@ export default function NotificationsPage() {
               value={newNotification.link}
               onChange={(e) => setNewNotification({ ...newNotification, link: e.target.value })}
               placeholder="https://baixinghelper.cn/page"
+              disabled={sendMutation.isPending}
             />
           </div>
           <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3">
@@ -201,9 +224,15 @@ export default function NotificationsPage() {
             <Button
               icon={Send}
               onClick={handleSend}
-              disabled={sendMutation.isPending || !newNotification.title || !newNotification.content}
+              isLoading={sendMutation.isPending}
+              loadingText="发送中..."
+              disabled={
+                sendMutation.isPending ||
+                !newNotification.title ||
+                !newNotification.content
+              }
             >
-              {sendMutation.isPending ? '发送中...' : '发送通知'}
+              发送通知
             </Button>
           </div>
         </div>

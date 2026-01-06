@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Save, Key, Globe, Bell, Shield, HelpCircle, Sparkles, CreditCard } from "lucide-react";
-import { Card, Input, Button, Textarea } from "../../components/ui";
+import { Save, Key, Globe, Bell, Shield, HelpCircle, Sparkles, CreditCard, RotateCcw } from "lucide-react";
+import { Card, Input, Button, Textarea, ListSkeleton } from "../../components/ui";
 import { useQuery } from "@tanstack/react-query";
 import api from "../../api/client";
 import { useAppMutation, useToast } from "../../hooks";
@@ -819,6 +819,8 @@ export default function SettingsPage() {
                 size="sm"
                 onClick={() => faqPublicQuery.refetch()}
                 isLoading={faqPublicQuery.isFetching}
+                loadingText="刷新中..."
+                icon={RotateCcw}
               >
                 刷新
               </Button>
@@ -826,6 +828,7 @@ export default function SettingsPage() {
                 size="sm"
                 onClick={() => generateFaqMutation.mutate()}
                 isLoading={generateFaqMutation.isPending}
+                loadingText="生成中..."
               >
                 生成
               </Button>
@@ -833,7 +836,7 @@ export default function SettingsPage() {
           </div>
 
           {faqPublicQuery.isLoading ? (
-            <p className="text-sm text-slate-600 dark:text-white/40">加载中...</p>
+            <ListSkeleton count={3} />
           ) : faqPublicQuery.isError ? (
             <p className="text-sm text-red-600 dark:text-red-300">{getApiErrorMessage(faqPublicQuery.error)}</p>
           ) : (

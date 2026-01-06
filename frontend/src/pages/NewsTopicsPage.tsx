@@ -1,8 +1,8 @@
 import { useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Layers, ArrowRight } from "lucide-react";
+import { Layers, ArrowRight, RefreshCw } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { Card, Loading, EmptyState, Badge, FadeInImage } from "../components/ui";
+import { Card, Button, EmptyState, Badge, FadeInImage, ListSkeleton } from "../components/ui";
 import PageHeader from "../components/PageHeader";
 import api from "../api/client";
 import { useToast } from "../hooks";
@@ -104,11 +104,24 @@ export default function NewsTopicsPage() {
           description="聚合热点政策、典型案例与专题解读"
           layout="mdCenter"
           tone={actualTheme}
+          right={
+            <Button
+              variant="outline"
+              size="sm"
+              icon={RefreshCw}
+              isLoading={topicsQuery.isFetching}
+              loadingText="刷新中..."
+              onClick={() => topicsQuery.refetch()}
+              disabled={topicsQuery.isFetching}
+            >
+              刷新
+            </Button>
+          }
         />
       </Card>
 
-      {topicsQuery.isLoading ? (
-        <Loading />
+      {topicsQuery.isLoading && topics.length === 0 ? (
+        <ListSkeleton count={6} />
       ) : topics.length === 0 ? (
         <EmptyState
           icon={Layers}

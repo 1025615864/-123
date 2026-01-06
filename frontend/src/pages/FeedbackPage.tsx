@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { MessageSquare, Plus, Send } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { MessageSquare, Plus, Send, RefreshCw } from "lucide-react";
 import PageHeader from "../components/PageHeader";
 import {
   Badge,
   Button,
   Card,
   EmptyState,
-  Loading,
+  ListSkeleton,
   Modal,
   Pagination,
   Textarea,
@@ -61,6 +61,7 @@ export default function FeedbackPage() {
   const { isAuthenticated } = useAuth();
   const { actualTheme } = useTheme();
   const toast = useToast();
+  const queryClient = useQueryClient();
 
   const [page, setPage] = useState(1);
   const pageSize = 10;
@@ -109,12 +110,84 @@ export default function FeedbackPage() {
     successMessage: "提交成功",
     errorMessageFallback: "提交失败，请稍后重试",
     invalidateQueryKeys: [queryKeys.feedbackTicketsRoot()],
-    onSuccess: () => {
+    onMutate: async (payload) => {
+      if (page !== 1)
+        return {
+          previous: undefined as unknown,
+          applied: false,
+          tempId: undefined as unknown,
+          queryKey: queryKeys.feedbackTickets(page, pageSize),
+        };
+
+      const queryKey = queryKeys.feedbackTickets(1, pageSize);
+      await queryClient.cancelQueries({ queryKey });
+      const previous = queryClient.getQueryData<FeedbackTicketListResponse>(
+        queryKey
+      );
+
+      const tempId = -Math.trunc(Date.now());
+      const nowIso = new Date().toISOString();
+      const optimistic: FeedbackTicketItem = {
+        id: tempId,
+        user_id: 0,
+        subject: String(payload.subject ?? ""),
+        content: String(payload.content ?? ""),
+        status: "open",
+        admin_reply: null,
+        admin_id: null,
+        created_at: nowIso,
+        updated_at: nowIso,
+      };
+
+      queryClient.setQueryData<FeedbackTicketListResponse>(queryKey, (old) => {
+        if (!old) return old as any;
+        const nextItems = [optimistic, ...(old.items ?? [])].slice(0, pageSize);
+        return {
+          ...old,
+          items: nextItems,
+          total: Math.max(0, Number(old.total || 0) + 1),
+        };
+      });
+
+      return { previous, tempId, applied: true, queryKey };
+    },
+    onSuccess: (data, _payload, ctx) => {
       setCreateOpen(false);
       setSubject("");
       setContent("");
+      if (page !== 1) {
+        setPage(1);
+      }
+
+      const anyCtx = ctx as any;
+      if (anyCtx?.applied && anyCtx?.queryKey) {
+        const targetKey = anyCtx.queryKey as any;
+        const tempId = Number(anyCtx.tempId);
+        queryClient.setQueryData<FeedbackTicketListResponse>(targetKey, (old) => {
+          if (!old) return old as any;
+          const items = Array.isArray(old.items) ? old.items : [];
+          const idx = items.findIndex((it) => it.id === tempId);
+
+          if (idx >= 0) {
+            const nextItems = [...items];
+            nextItems[idx] = data;
+            return { ...old, items: nextItems };
+          }
+
+          return { ...old, items: [data, ...items].slice(0, pageSize) };
+        });
+      }
+    },
+    onError: (err, _payload, ctx) => {
+      const anyCtx = ctx as any;
+      if (anyCtx?.previous && anyCtx?.queryKey) {
+        queryClient.setQueryData(anyCtx.queryKey, anyCtx.previous);
+      }
+      return err as any;
     },
   });
+
+  const actionBusy = createMutation.isPending;
 
   const items = listQuery.data?.items ?? [];
   const total = listQuery.data?.total ?? 0;
@@ -143,10 +216,6 @@ export default function FeedbackPage() {
     );
   }
 
-  if (listQuery.isLoading && items.length === 0) {
-    return <Loading text="加载中..." tone={actualTheme} />;
-  }
-
   return (
     <div className="space-y-10">
       <PageHeader
@@ -156,14 +225,35 @@ export default function FeedbackPage() {
         layout="mdStart"
         tone={actualTheme}
         right={
-          <Button icon={Plus} onClick={() => setCreateOpen(true)}>
-            新建工单
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              icon={RefreshCw}
+              isLoading={listQuery.isFetching}
+              loadingText="刷新中..."
+              onClick={() => listQuery.refetch()}
+              disabled={listQuery.isFetching || actionBusy}
+            >
+              刷新
+            </Button>
+            <Button
+              icon={Plus}
+              onClick={() => {
+                if (actionBusy) return;
+                setCreateOpen(true);
+              }}
+              disabled={actionBusy}
+            >
+              新建工单
+            </Button>
+          </div>
         }
       />
 
       <Card variant="surface" padding="lg">
-        {items.length === 0 ? (
+        {listQuery.isLoading && items.length === 0 ? (
+          <ListSkeleton count={4} />
+        ) : items.length === 0 ? (
           <EmptyState
             icon={MessageSquare}
             title="暂无工单"
@@ -220,7 +310,10 @@ export default function FeedbackPage() {
               <Pagination
                 currentPage={page}
                 totalPages={totalPages}
-                onPageChange={setPage}
+                onPageChange={(p) => {
+                  if (actionBusy) return;
+                  setPage(p);
+                }}
               />
             </div>
           </div>
@@ -229,7 +322,10 @@ export default function FeedbackPage() {
 
       <Modal
         isOpen={createOpen}
-        onClose={() => setCreateOpen(false)}
+        onClose={() => {
+          if (createMutation.isPending) return;
+          setCreateOpen(false);
+        }}
         title="新建反馈工单"
         description="请尽量描述清楚问题与复现步骤"
         size="lg"
@@ -240,6 +336,7 @@ export default function FeedbackPage() {
             value={subject}
             onChange={(e) => setSubject(e.target.value)}
             placeholder="例如：支付页面打不开"
+            disabled={createMutation.isPending}
           />
           <Textarea
             label="内容"
@@ -247,15 +344,26 @@ export default function FeedbackPage() {
             onChange={(e) => setContent(e.target.value)}
             placeholder="请描述问题现象、复现步骤、期望结果等"
             rows={8}
+            disabled={createMutation.isPending}
           />
           <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={() => setCreateOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (createMutation.isPending) return;
+                setCreateOpen(false);
+              }}
+              disabled={createMutation.isPending}
+            >
               取消
             </Button>
             <Button
               icon={Send}
               isLoading={createMutation.isPending}
+              loadingText="提交中..."
+              disabled={createMutation.isPending}
               onClick={() => {
+                if (createMutation.isPending) return;
                 const s = subject.trim();
                 const c = content.trim();
                 if (!s) {

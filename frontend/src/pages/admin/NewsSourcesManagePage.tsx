@@ -11,7 +11,7 @@ import {
   Modal,
   ModalActions,
   Input,
-  Loading,
+  ListSkeleton,
 } from "../../components/ui";
 
 interface NewsSource {
@@ -94,6 +94,9 @@ export default function NewsSourcesManagePage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editing, setEditing] = useState<NewsSource | null>(null);
+  const [activeAction, setActiveAction] = useState<
+    { id: number; kind: "run" | "toggle" | "delete" } | null
+  >(null);
 
   const emptyForm: CreateOrUpdateForm = {
     name: "",
@@ -203,6 +206,14 @@ export default function NewsSourcesManagePage() {
     successMessage: "已删除来源",
     errorMessageFallback: "删除失败",
     invalidateQueryKeys: [sourcesQueryKey as any],
+    onMutate: async (id) => {
+      setActiveAction({ id, kind: "delete" });
+    },
+    onSettled: (_data, _err, id) => {
+      setActiveAction((prev) =>
+        prev && prev.id === id && prev.kind === "delete" ? null : prev
+      );
+    },
   });
 
   const toggleEnabledMutation = useAppMutation<
@@ -217,6 +228,14 @@ export default function NewsSourcesManagePage() {
     },
     errorMessageFallback: "操作失败",
     invalidateQueryKeys: [sourcesQueryKey as any],
+    onMutate: async (payload) => {
+      setActiveAction({ id: payload.id, kind: "toggle" });
+    },
+    onSettled: (_data, _err, payload) => {
+      setActiveAction((prev) =>
+        prev && prev.id === payload?.id && prev.kind === "toggle" ? null : prev
+      );
+    },
     onSuccess: (res) => {
       toast.success(res.is_enabled ? "已启用" : "已停用");
     },
@@ -232,6 +251,14 @@ export default function NewsSourcesManagePage() {
     },
     errorMessageFallback: "触发采集失败",
     invalidateQueryKeys: [sourcesQueryKey as any],
+    onMutate: async (id) => {
+      setActiveAction({ id, kind: "run" });
+    },
+    onSettled: (_data, _err, id) => {
+      setActiveAction((prev) =>
+        prev && prev.id === id && prev.kind === "run" ? null : prev
+      );
+    },
     onSuccess: (data) => {
       const fetched = Number(data?.fetched ?? 0);
       const inserted = Number(data?.inserted ?? 0);
@@ -268,7 +295,8 @@ export default function NewsSourcesManagePage() {
     sourcesQuery.isFetching ||
     deleteMutation.isPending ||
     toggleEnabledMutation.isPending ||
-    runOnceMutation.isPending;
+    runOnceMutation.isPending ||
+    saving;
 
   return (
     <div className="space-y-6">
@@ -284,24 +312,31 @@ export default function NewsSourcesManagePage() {
         <div className="flex items-center gap-2">
           <Button
             variant="outline"
+            icon={RefreshCw}
             onClick={() => sourcesQuery.refetch()}
+            isLoading={sourcesQuery.isFetching}
+            loadingText="刷新中..."
             disabled={busy}
           >
-            <RefreshCw
-              className={`h-4 w-4 mr-2 ${busy ? "animate-spin" : ""}`}
-            />
             刷新
           </Button>
-          <Button icon={Plus} onClick={openCreate}>
+          <Button
+            icon={Plus}
+            onClick={() => {
+              if (busy) return;
+              openCreate();
+            }}
+            disabled={busy}
+          >
             新增来源
           </Button>
         </div>
       </div>
 
       <Card variant="surface" padding="none">
-        {sourcesQuery.isLoading ? (
+        {sourcesQuery.isLoading && sources.length === 0 ? (
           <div className="p-6">
-            <Loading />
+            <ListSkeleton count={6} />
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -396,13 +431,40 @@ export default function NewsSourcesManagePage() {
                     </td>
                     <td className="py-3 px-4">
                       <div className="flex justify-end gap-2">
+                        {(() => {
+                          const isActive = activeAction?.id === s.id;
+                          const actionBusy =
+                            deleteMutation.isPending ||
+                            toggleEnabledMutation.isPending ||
+                            runOnceMutation.isPending ||
+                            saving;
+                          const disableOther = actionBusy && !isActive;
+                          const runLoading =
+                            runOnceMutation.isPending &&
+                            isActive &&
+                            activeAction?.kind === "run";
+                          const toggleLoading =
+                            toggleEnabledMutation.isPending &&
+                            isActive &&
+                            activeAction?.kind === "toggle";
+                          const deleteLoading =
+                            deleteMutation.isPending &&
+                            isActive &&
+                            activeAction?.kind === "delete";
+
+                          return (
+                            <>
                         <Button
                           variant="outline"
                           size="sm"
                           icon={Play}
-                          isLoading={runOnceMutation.isPending}
-                          onClick={() => runOnceMutation.mutate(s.id)}
-                          disabled={runOnceMutation.isPending}
+                          isLoading={runLoading}
+                          loadingText="采集中..."
+                          onClick={() => {
+                            if (actionBusy) return;
+                            runOnceMutation.mutate(s.id);
+                          }}
+                          disabled={disableOther || runLoading}
                         >
                           采集
                         </Button>
@@ -410,13 +472,15 @@ export default function NewsSourcesManagePage() {
                           variant="outline"
                           size="sm"
                           icon={Power}
+                          isLoading={toggleLoading}
+                          loadingText="处理中..."
                           onClick={() =>
                             toggleEnabledMutation.mutate({
                               id: s.id,
                               is_enabled: !s.is_enabled,
                             })
                           }
-                          disabled={toggleEnabledMutation.isPending}
+                          disabled={disableOther || toggleLoading}
                         >
                           {s.is_enabled ? "停用" : "启用"}
                         </Button>
@@ -425,6 +489,7 @@ export default function NewsSourcesManagePage() {
                           size="sm"
                           icon={Edit}
                           onClick={() => openEdit(s)}
+                          disabled={actionBusy}
                         >
                           编辑
                         </Button>
@@ -432,6 +497,8 @@ export default function NewsSourcesManagePage() {
                           variant="danger"
                           size="sm"
                           icon={Trash2}
+                          isLoading={deleteLoading}
+                          loadingText="删除中..."
                           onClick={() => {
                             if (
                               window.confirm(
@@ -441,10 +508,13 @@ export default function NewsSourcesManagePage() {
                               deleteMutation.mutate(s.id);
                             }
                           }}
-                          disabled={deleteMutation.isPending}
+                          disabled={disableOther || deleteLoading}
                         >
                           删除
                         </Button>
+                            </>
+                          );
+                        })()}
                       </div>
                     </td>
                   </tr>
@@ -469,7 +539,10 @@ export default function NewsSourcesManagePage() {
       {/* 创建 */}
       <Modal
         isOpen={createOpen}
-        onClose={closeModals}
+        onClose={() => {
+          if (saving) return;
+          closeModals();
+        }}
         title="新增 RSS 来源"
         size="lg"
       >
@@ -479,12 +552,14 @@ export default function NewsSourcesManagePage() {
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
             placeholder="例如：司法部政策发布"
+            disabled={saving}
           />
           <Input
             label="Feed URL"
             value={form.feed_url}
             onChange={(e) => setForm({ ...form, feed_url: e.target.value })}
             placeholder="https://baixinghelper.cn/rss.xml"
+            disabled={saving}
           />
           <div className="grid grid-cols-2 gap-3">
             <Input
@@ -492,12 +567,14 @@ export default function NewsSourcesManagePage() {
               value={form.site}
               onChange={(e) => setForm({ ...form, site: e.target.value })}
               placeholder="例如：gov.cn"
+              disabled={saving}
             />
             <Input
               label="分类（可选）"
               value={form.category}
               onChange={(e) => setForm({ ...form, category: e.target.value })}
               placeholder="例如：法律动态"
+              disabled={saving}
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -508,6 +585,7 @@ export default function NewsSourcesManagePage() {
                 setForm({ ...form, fetch_timeout_seconds: e.target.value })
               }
               placeholder="例如：10"
+              disabled={saving}
             />
             <Input
               label="每次最大条数（可选）"
@@ -516,6 +594,7 @@ export default function NewsSourcesManagePage() {
                 setForm({ ...form, max_items_per_feed: e.target.value })
               }
               placeholder="例如：50"
+              disabled={saving}
             />
           </div>
 
@@ -527,8 +606,12 @@ export default function NewsSourcesManagePage() {
               </p>
             </div>
             <button
-              onClick={() => setForm({ ...form, is_enabled: !form.is_enabled })}
-              className={`w-12 h-6 rounded-full transition-colors ${
+              onClick={() => {
+                if (saving) return;
+                setForm({ ...form, is_enabled: !form.is_enabled });
+              }}
+              disabled={saving}
+              className={`w-12 h-6 rounded-full transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
                 form.is_enabled
                   ? "bg-amber-500"
                   : "bg-slate-200 dark:bg-white/20"
@@ -543,12 +626,21 @@ export default function NewsSourcesManagePage() {
           </div>
 
           <ModalActions>
-            <Button variant="ghost" onClick={closeModals}>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                if (saving) return;
+                closeModals();
+              }}
+              disabled={saving}
+            >
               取消
             </Button>
             <Button
               onClick={handleSubmitCreate}
               isLoading={createMutation.isPending}
+              loadingText="创建中..."
+              disabled={saving}
             >
               创建
             </Button>
@@ -559,7 +651,10 @@ export default function NewsSourcesManagePage() {
       {/* 编辑 */}
       <Modal
         isOpen={editOpen}
-        onClose={closeModals}
+        onClose={() => {
+          if (saving) return;
+          closeModals();
+        }}
         title={`编辑来源${editing ? `：${editing.name}` : ""}`}
         size="lg"
       >
@@ -568,22 +663,26 @@ export default function NewsSourcesManagePage() {
             label="名称"
             value={form.name}
             onChange={(e) => setForm({ ...form, name: e.target.value })}
+            disabled={saving}
           />
           <Input
             label="Feed URL"
             value={form.feed_url}
             onChange={(e) => setForm({ ...form, feed_url: e.target.value })}
+            disabled={saving}
           />
           <div className="grid grid-cols-2 gap-3">
             <Input
               label="站点（可选）"
               value={form.site}
               onChange={(e) => setForm({ ...form, site: e.target.value })}
+              disabled={saving}
             />
             <Input
               label="分类（可选）"
               value={form.category}
               onChange={(e) => setForm({ ...form, category: e.target.value })}
+              disabled={saving}
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -593,6 +692,7 @@ export default function NewsSourcesManagePage() {
               onChange={(e) =>
                 setForm({ ...form, fetch_timeout_seconds: e.target.value })
               }
+              disabled={saving}
             />
             <Input
               label="每次最大条数（可选）"
@@ -600,6 +700,7 @@ export default function NewsSourcesManagePage() {
               onChange={(e) =>
                 setForm({ ...form, max_items_per_feed: e.target.value })
               }
+              disabled={saving}
             />
           </div>
 
@@ -611,8 +712,12 @@ export default function NewsSourcesManagePage() {
               </p>
             </div>
             <button
-              onClick={() => setForm({ ...form, is_enabled: !form.is_enabled })}
-              className={`w-12 h-6 rounded-full transition-colors ${
+              onClick={() => {
+                if (saving) return;
+                setForm({ ...form, is_enabled: !form.is_enabled })
+              }}
+              disabled={saving}
+              className={`w-12 h-6 rounded-full transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
                 form.is_enabled
                   ? "bg-amber-500"
                   : "bg-slate-200 dark:bg-white/20"
@@ -643,12 +748,21 @@ export default function NewsSourcesManagePage() {
           ) : null}
 
           <ModalActions>
-            <Button variant="ghost" onClick={closeModals}>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                if (saving) return;
+                closeModals();
+              }}
+              disabled={saving}
+            >
               取消
             </Button>
             <Button
               onClick={handleSubmitEdit}
               isLoading={updateMutation.isPending}
+              loadingText="保存中..."
+              disabled={saving}
             >
               保存
             </Button>
