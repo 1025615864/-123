@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useParams,
   Link,
@@ -8,6 +8,7 @@ import {
 import {
   ArrowLeft,
   Clock,
+  Loader2,
   ThumbsUp,
   MessageSquare,
   Send,
@@ -34,19 +35,24 @@ import {
   RotateCcw,
   Trash2,
 } from "lucide-react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+  type InfiniteData,
+} from "@tanstack/react-query";
 import api from "../api/client";
 import { useAppMutation, useToast } from "../hooks";
 import { useAuth } from "../contexts/AuthContext";
-import { useTheme } from "../contexts/ThemeContext";
 import {
   Card,
   Button,
-  Loading,
   Badge,
   FadeInImage,
   Modal,
   ModalActions,
+  Skeleton,
+  ListSkeleton,
 } from "../components/ui";
 import MarkdownContent from "../components/MarkdownContent";
 import RichTextEditor from "../components/RichTextEditor";
@@ -118,6 +124,8 @@ interface Comment {
   is_liked: boolean;
   replies: Comment[];
 }
+
+type CommentListResponse = { items: Comment[]; total: number };
 
 interface ReactionCount {
   emoji: string;
@@ -251,7 +259,6 @@ function ImageGallery({ images }: { images: string[] }) {
 export default function PostDetailPage() {
   const { postId } = useParams<{ postId: string }>();
   const { isAuthenticated, user } = useAuth();
-  const { actualTheme } = useTheme();
   const toast = useToast();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -261,7 +268,6 @@ export default function PostDetailPage() {
   const commentIdParam = searchParams.get("commentId");
 
   const [postDetail, setPostDetail] = useState<PostDetail | null>(null);
-  const [comments, setComments] = useState<Comment[]>([]);
   const [newComment, setNewComment] = useState("");
   const [newCommentImages, setNewCommentImages] = useState<string[]>([]);
   const [replyTo, setReplyTo] = useState<{ id: number; name: string } | null>(
@@ -278,18 +284,23 @@ export default function PostDetailPage() {
   const [confirmRestorePost, setConfirmRestorePost] = useState(false);
   const [confirmPurgePost, setConfirmPurgePost] = useState(false);
 
+  const [pendingCommentLikes, setPendingCommentLikes] = useState<Record<number, boolean>>({});
+  const [pendingCommentDeletes, setPendingCommentDeletes] = useState<Record<number, boolean>>({});
+
+  const commentPageSize = 20;
+
   const postQueryKey = queryKeys.forumPost(postId);
   const commentsQueryKey = [
     ...queryKeys.forumPostComments(postId),
     {
       include_unapproved: isAuthenticated ? 1 : 0,
       viewer: isAuthenticated ? user?.id ?? null : null,
+      page_size: commentPageSize,
     },
   ] as const;
 
   useEffect(() => {
     setPostDetail(null);
-    setComments([]);
     commentJumpHintShownRef.current = false;
     setHighlightedCommentId(null);
     if (highlightTimerRef.current) {
@@ -366,6 +377,66 @@ export default function PostDetailPage() {
     });
   };
 
+  const findComment = (items: Comment[], targetId: number): Comment | null => {
+    for (const c of items) {
+      if (c.id === targetId) return c;
+      if (c.replies && c.replies.length > 0) {
+        const found = findComment(c.replies, targetId);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+
+  const removeCommentById = (
+    items: Comment[],
+    targetId: number
+  ): { nextItems: Comment[]; removed: number } => {
+    let removed = 0;
+
+    const walk = (list: Comment[]): Comment[] => {
+      const next: Comment[] = [];
+      for (const c of list) {
+        if (c.id === targetId) {
+          removed += 1;
+          continue;
+        }
+        let nextItem = c;
+        if (Array.isArray(c.replies) && c.replies.length > 0) {
+          const nextReplies = walk(c.replies);
+          if (nextReplies.length !== c.replies.length) {
+            nextItem = { ...c, replies: nextReplies };
+          }
+        }
+        next.push(nextItem);
+      }
+      return next;
+    };
+
+    return { nextItems: walk(items), removed };
+  };
+
+  const insertTempComment = (
+    items: Comment[],
+    temp: Comment,
+    parentId: number | null
+  ): Comment[] => {
+    if (!parentId) {
+      return [temp, ...items];
+    }
+
+    return items.map((c) => {
+      if (c.id === parentId) {
+        const replies = Array.isArray(c.replies) ? c.replies : [];
+        return { ...c, replies: [temp, ...replies] };
+      }
+      if (c.replies && c.replies.length > 0) {
+        return { ...c, replies: insertTempComment(c.replies, temp, parentId) };
+      }
+      return c;
+    });
+  };
+
   const commentLikeMutation = useAppMutation<
     { liked: boolean; like_count: number },
     number
@@ -375,31 +446,227 @@ export default function PostDetailPage() {
       return res.data as { liked: boolean; like_count: number };
     },
     errorMessageFallback: "操作失败，请稍后重试",
+    onMutate: async (commentId) => {
+      setPendingCommentLikes((prev) => ({ ...prev, [commentId]: true }));
+      const previousCache = queryClient.getQueryData<
+        InfiniteData<CommentListResponse>
+      >(commentsQueryKey);
+
+      const source = previousCache?.pages
+        ? previousCache.pages.flatMap((p) => p.items ?? [])
+        : [];
+      const current = Array.isArray(source) ? findComment(source, commentId) : null;
+      if (!current) return { previousCache };
+
+      const nextLiked = !current.is_liked;
+      const nextCount = Math.max(
+        0,
+        Number(current.like_count || 0) + (nextLiked ? 1 : -1)
+      );
+
+      queryClient.setQueryData<InfiniteData<CommentListResponse>>(
+        commentsQueryKey,
+        (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            pages: old.pages.map((p) => ({
+              ...p,
+              items: updateCommentLike(
+                Array.isArray(p.items) ? p.items : [],
+                commentId,
+                nextLiked,
+                nextCount
+              ),
+            })),
+          };
+        }
+      );
+
+      return { previousCache };
+    },
     onSuccess: (result, commentId) => {
-      setComments((prev) =>
-        updateCommentLike(prev, commentId, result.liked, result.like_count)
+      queryClient.setQueryData<InfiniteData<CommentListResponse>>(
+        commentsQueryKey,
+        (old) => {
+          if (!old) return old;
+          return {
+            ...old,
+            pages: old.pages.map((p) => ({
+              ...p,
+              items: updateCommentLike(
+                Array.isArray(p.items) ? p.items : [],
+                commentId,
+                result.liked,
+                result.like_count
+              ),
+            })),
+          };
+        }
       );
-      queryClient.setQueryData<Comment[]>(commentsQueryKey, (old) =>
-        Array.isArray(old)
-          ? updateCommentLike(old, commentId, result.liked, result.like_count)
-          : old
-      );
+    },
+    onError: (err, _commentId, ctx) => {
+      if (ctx && typeof ctx === "object") {
+        const anyCtx = ctx as any;
+        if (anyCtx.previousCache !== undefined) {
+          queryClient.setQueryData(commentsQueryKey, anyCtx.previousCache);
+        }
+      }
+      return err as any;
+    },
+    onSettled: (_data, _err, commentId) => {
+      setPendingCommentLikes((prev) => {
+        const next = { ...prev };
+        delete next[commentId];
+        return next;
+      });
     },
   });
 
-  const commentsQuery = useQuery({
+  const deleteCommentMutation = useAppMutation<
+    { message?: string },
+    number,
+    {
+      previousCache?: InfiniteData<CommentListResponse>;
+      previousPostState?: PostDetail | null;
+      previousPostCache?: PostDetail | undefined;
+    }
+  >({
+    mutationFn: async (commentId: number) => {
+      const res = await api.delete(`/forum/comments/${commentId}`);
+      return res.data as { message?: string };
+    },
+    errorMessageFallback: "删除失败，请稍后重试",
+    onMutate: async (commentId) => {
+      setPendingCommentDeletes((prev) => ({ ...prev, [commentId]: true }));
+      await queryClient.cancelQueries({ queryKey: commentsQueryKey });
+
+      const previousCache = queryClient.getQueryData<
+        InfiniteData<CommentListResponse>
+      >(commentsQueryKey);
+      const previousPostState = postDetail;
+      const previousPostCache = postId
+        ? queryClient.getQueryData<PostDetail>(postQueryKey)
+        : undefined;
+
+      let removedTotal = 0;
+      queryClient.setQueryData<InfiniteData<CommentListResponse>>(
+        commentsQueryKey,
+        (old) => {
+          if (!old) return old;
+          const pages = Array.isArray(old.pages) ? old.pages : [];
+          if (pages.length === 0) return old;
+
+          removedTotal = 0;
+          const processed = pages.map((p) => {
+            const items = Array.isArray((p as any).items)
+              ? ((p as any).items as Comment[])
+              : [];
+            const result = removeCommentById(items, commentId);
+            removedTotal += result.removed;
+            return { p, result };
+          });
+
+          const nextPages = processed.map(({ p, result }, idx) => {
+            const nextPage: any = { ...p, items: result.nextItems };
+            if (idx === 0 && typeof (p as any).total === "number" && removedTotal > 0) {
+              nextPage.total = Math.max(0, Number((p as any).total || 0) - removedTotal);
+            }
+            return nextPage;
+          });
+
+          return { ...old, pages: nextPages };
+        }
+      );
+
+      if (removedTotal > 0) {
+        setPostDetail((prev) =>
+          prev
+            ? {
+                ...prev,
+                comment_count: Math.max(
+                  0,
+                  Number(prev.comment_count || 0) - removedTotal
+                ),
+              }
+            : prev
+        );
+        if (postId) {
+          queryClient.setQueryData<PostDetail>(postQueryKey, (old) =>
+            old
+              ? {
+                  ...old,
+                  comment_count: Math.max(
+                    0,
+                    Number(old.comment_count || 0) - removedTotal
+                  ),
+                }
+              : old
+          );
+        }
+      }
+
+      return { previousCache, previousPostState, previousPostCache };
+    },
+    onSuccess: async () => {
+      if (!postId) return;
+      toast.success("已删除");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: queryKeys.forumPostComments(postId) }),
+        queryClient.invalidateQueries({ queryKey: postQueryKey }),
+      ]);
+    },
+    onError: (err, commentId, ctx) => {
+      if (ctx && typeof ctx === "object") {
+        const anyCtx = ctx as any;
+        if (anyCtx.previousCache !== undefined) {
+          queryClient.setQueryData(commentsQueryKey, anyCtx.previousCache);
+        }
+        if (anyCtx.previousPostState !== undefined) {
+          setPostDetail(anyCtx.previousPostState ?? null);
+        }
+        if (postId && anyCtx.previousPostCache !== undefined) {
+          queryClient.setQueryData(postQueryKey, anyCtx.previousPostCache);
+        }
+      }
+      setPendingCommentDeletes((prev) => {
+        const next = { ...prev };
+        delete next[commentId];
+        return next;
+      });
+      return err as any;
+    },
+    onSettled: (_data, _err, commentId) => {
+      setPendingCommentDeletes((prev) => {
+        const next = { ...prev };
+        delete next[commentId];
+        return next;
+      });
+    },
+  });
+
+  const commentsQuery = useInfiniteQuery({
     queryKey: commentsQueryKey,
-    queryFn: async () => {
+    initialPageParam: 1,
+    queryFn: async ({ pageParam }) => {
       const params = new URLSearchParams();
+      params.set("page", String(pageParam));
+      params.set("page_size", String(commentPageSize));
       if (isAuthenticated) params.append("include_unapproved", "1");
 
-      const url = params.toString()
-        ? `/forum/posts/${postId}/comments?${params.toString()}`
-        : `/forum/posts/${postId}/comments`;
-
+      const url = `/forum/posts/${postId}/comments?${params.toString()}`;
       const res = await api.get(url);
       const items = res.data?.items ?? [];
-      return (Array.isArray(items) ? items : []) as Comment[];
+      const total = Number(res.data?.total ?? 0);
+      return {
+        items: (Array.isArray(items) ? items : []) as Comment[],
+        total: Number.isFinite(total) ? total : 0,
+      } as CommentListResponse;
+    },
+    getNextPageParam: (lastPage, pages) => {
+      const loaded = pages.reduce((sum, p) => sum + (p.items?.length ?? 0), 0);
+      if (loaded >= Number(lastPage?.total ?? 0)) return undefined;
+      return pages.length + 1;
     },
     enabled: !!postId && !isDeletedView && !!postDetail,
     retry: 1,
@@ -407,13 +674,38 @@ export default function PostDetailPage() {
     placeholderData: (prev) => prev,
   });
 
+  const comments = useMemo<Comment[]>(() => {
+    const pages = commentsQuery.data?.pages ?? [];
+    return pages.flatMap((p) => (Array.isArray(p.items) ? p.items : []));
+  }, [commentsQuery.data]);
+
+  const commentsTotal =
+    Number(commentsQuery.data?.pages?.[0]?.total ?? 0) || comments.length;
+
+  const handleRefreshComments = () => {
+    queryClient.setQueryData<InfiniteData<CommentListResponse>>(
+      commentsQueryKey,
+      (old) => {
+        if (!old) return old;
+        const firstPage = old.pages?.[0];
+        const firstParam = old.pageParams?.[0];
+        if (!firstPage) return old;
+        return {
+          ...old,
+          pages: [firstPage],
+          pageParams: [firstParam ?? 1],
+        };
+      }
+    );
+    void commentsQuery.refetch();
+  };
+
   useEffect(() => {
     if (!postQuery.error) return;
     const status = (postQuery.error as any)?.response?.status;
     const msg = getApiErrorMessage(postQuery.error);
     if (status === 403 || status === 404) {
       setPostDetail(null);
-      setComments([]);
       return;
     }
     toast.error(msg);
@@ -430,16 +722,6 @@ export default function PostDetailPage() {
     if (!postQuery.data) return;
     setPostDetail(postQuery.data);
   }, [postQuery.isSuccess, postQuery.data]);
-
-  useEffect(() => {
-    if (isDeletedView) {
-      setComments([]);
-      return;
-    }
-    if (!postDetail) return;
-    if (!commentsQuery.isSuccess) return;
-    setComments(commentsQuery.data ?? []);
-  }, [commentsQuery.isSuccess, commentsQuery.data, isDeletedView, postDetail]);
 
   useEffect(() => {
     if (isDeletedView) return;
@@ -485,14 +767,18 @@ export default function PostDetailPage() {
       const targetDomId = `comment-${targetId}`;
       const ok = scrollToEl(targetDomId);
       if (!ok) {
-        // Retry once in case of late render
+        if (commentsQuery.hasNextPage && !commentsQuery.isFetchingNextPage) {
+          commentsQuery.fetchNextPage();
+          return;
+        }
+
         window.setTimeout(() => {
           const ok2 = scrollToEl(targetDomId);
           if (!ok2 && !commentJumpHintShownRef.current) {
             commentJumpHintShownRef.current = true;
             toast.info("已打开帖子，但指定评论可能仍在审核、已被驳回或已删除");
           }
-        }, 400);
+        }, 500);
       }
       return;
     }
@@ -511,7 +797,17 @@ export default function PostDetailPage() {
         }, 400);
       }
     }
-  }, [commentIdParam, comments, isDeletedView, toast, commentsQuery.isFetched]);
+  }, [
+    commentIdParam,
+    comments,
+    commentsQuery.hasNextPage,
+    commentsQuery.isFetched,
+    commentsQuery.isFetchingNextPage,
+    isDeletedView,
+    postId,
+    postDetail,
+    toast,
+  ]);
 
   const restorePostMutation = useAppMutation<{ message?: string }, void>({
     mutationFn: async () => {
@@ -553,6 +849,32 @@ export default function PostDetailPage() {
       return res.data as { liked: boolean; like_count: number };
     },
     errorMessageFallback: "操作失败，请稍后重试",
+    onMutate: async () => {
+      const previousState = postDetail;
+      const previousCache = postId
+        ? queryClient.getQueryData<PostDetail>(postQueryKey)
+        : undefined;
+
+      const current = previousState ?? previousCache;
+      if (!current) return { previousState, previousCache };
+
+      const nextLiked = !current.is_liked;
+      const nextCount = Math.max(
+        0,
+        Number(current.like_count || 0) + (nextLiked ? 1 : -1)
+      );
+
+      setPostDetail((prev) =>
+        prev ? { ...prev, is_liked: nextLiked, like_count: nextCount } : prev
+      );
+      if (postId) {
+        queryClient.setQueryData<PostDetail>(postQueryKey, (old) =>
+          old ? { ...old, is_liked: nextLiked, like_count: nextCount } : old
+        );
+      }
+
+      return { previousState, previousCache };
+    },
     onSuccess: (result) => {
       setPostDetail((prev) =>
         prev
@@ -566,6 +888,18 @@ export default function PostDetailPage() {
           : old
       );
     },
+    onError: (err, _vars, ctx) => {
+      if (ctx && typeof ctx === "object") {
+        const anyCtx = ctx as any;
+        if (anyCtx.previousState !== undefined) {
+          setPostDetail(anyCtx.previousState ?? null);
+        }
+        if (postId && anyCtx.previousCache !== undefined) {
+          queryClient.setQueryData(postQueryKey, anyCtx.previousCache);
+        }
+      }
+      return err as any;
+    },
   });
 
   const favoriteMutation = useAppMutation<
@@ -577,6 +911,45 @@ export default function PostDetailPage() {
       return res.data as { favorited: boolean; favorite_count: number };
     },
     errorMessageFallback: "操作失败，请稍后重试",
+    onMutate: async () => {
+      const previousState = postDetail;
+      const previousCache = postId
+        ? queryClient.getQueryData<PostDetail>(postQueryKey)
+        : undefined;
+
+      const current = previousState ?? previousCache;
+      if (!current) return { previousState, previousCache };
+
+      const nextFavorited = !current.is_favorited;
+      const nextCount = Math.max(
+        0,
+        Number(current.favorite_count || 0) + (nextFavorited ? 1 : -1)
+      );
+
+      setPostDetail((prev) =>
+        prev
+          ? {
+              ...prev,
+              is_favorited: nextFavorited,
+              favorite_count: nextCount,
+            }
+          : prev
+      );
+
+      if (postId) {
+        queryClient.setQueryData<PostDetail>(postQueryKey, (old) =>
+          old
+            ? {
+                ...old,
+                is_favorited: nextFavorited,
+                favorite_count: nextCount,
+              }
+            : old
+        );
+      }
+
+      return { previousState, previousCache };
+    },
     onSuccess: (result) => {
       setPostDetail((prev) =>
         prev
@@ -597,6 +970,18 @@ export default function PostDetailPage() {
             }
           : old
       );
+    },
+    onError: (err, _vars, ctx) => {
+      if (ctx && typeof ctx === "object") {
+        const anyCtx = ctx as any;
+        if (anyCtx.previousState !== undefined) {
+          setPostDetail(anyCtx.previousState ?? null);
+        }
+        if (postId && anyCtx.previousCache !== undefined) {
+          queryClient.setQueryData(postQueryKey, anyCtx.previousCache);
+        }
+      }
+      return err as any;
     },
   });
 
@@ -629,6 +1014,82 @@ export default function PostDetailPage() {
       return res.data as { review_status?: string | null };
     },
     errorMessageFallback: "发表评论失败，请稍后重试",
+    onMutate: async (payload) => {
+      if (!postId || !user)
+        return {
+          previousCache: queryClient.getQueryData<InfiniteData<CommentListResponse>>(
+            commentsQueryKey
+          ),
+          previousPostState: postDetail,
+          previousPostCache: queryClient.getQueryData<PostDetail>(postQueryKey),
+        };
+
+      const previousCache = queryClient.getQueryData<InfiniteData<CommentListResponse>>(
+        commentsQueryKey
+      );
+      const previousPostState = postDetail;
+      const previousPostCache = queryClient.getQueryData<PostDetail>(postQueryKey);
+
+      const tempId = -Math.trunc(Date.now());
+      const nowIso = new Date().toISOString();
+      const temp: Comment = {
+        id: tempId,
+        content: payload.content,
+        post_id: Number(postId),
+        user_id: Number(user.id),
+        parent_id: payload.parent_id ?? null,
+        like_count: 0,
+        images: payload.images ?? [],
+        created_at: nowIso,
+        review_status: "pending",
+        review_reason: null,
+        reviewed_at: null,
+        author: {
+          id: Number(user.id),
+          username: String(user.username ?? ""),
+          nickname: (user as any)?.nickname,
+          avatar: (user as any)?.avatar,
+        },
+        is_liked: false,
+        replies: [],
+      };
+
+      const isTopLevel = payload.parent_id == null;
+      queryClient.setQueryData<InfiniteData<CommentListResponse>>(
+        commentsQueryKey,
+        (old) => {
+          if (!old) return old;
+          const pages = Array.isArray(old.pages) ? old.pages : [];
+          if (pages.length === 0) return old;
+          const nextPages = pages.map((p, idx) => {
+            const items = Array.isArray(p.items) ? p.items : [];
+            if (isTopLevel) {
+              if (idx !== 0) return p;
+              return {
+                ...p,
+                items: insertTempComment(items, temp, null),
+                total: Math.max(0, Number(p.total || 0) + 1),
+              };
+            }
+            return { ...p, items: insertTempComment(items, temp, payload.parent_id ?? null) };
+          });
+          return { ...old, pages: nextPages };
+        }
+      );
+
+      setPostDetail((prev) =>
+        prev
+          ? { ...prev, comment_count: Math.max(0, Number(prev.comment_count || 0) + 1) }
+          : prev
+      );
+      queryClient.setQueryData<PostDetail>(postQueryKey, (old) =>
+        old
+          ? { ...old, comment_count: Math.max(0, Number(old.comment_count || 0) + 1) }
+          : old
+      );
+
+      return { previousCache, previousPostState, previousPostCache };
+    },
     onSuccess: async (data) => {
       setNewComment("");
       setNewCommentImages([]);
@@ -636,7 +1097,7 @@ export default function PostDetailPage() {
       if (!postId) return;
 
       await Promise.all([
-        queryClient.invalidateQueries({ queryKey: commentsQueryKey }),
+        queryClient.invalidateQueries({ queryKey: queryKeys.forumPostComments(postId) }),
         queryClient.invalidateQueries({ queryKey: postQueryKey }),
       ]);
 
@@ -644,19 +1105,47 @@ export default function PostDetailPage() {
         toast.info("评论已提交审核，通过后将展示");
       }
     },
+    onError: (err, _payload, ctx) => {
+      if (ctx && typeof ctx === "object") {
+        const anyCtx = ctx as any;
+        if (anyCtx.previousCache !== undefined) {
+          queryClient.setQueryData(commentsQueryKey, anyCtx.previousCache);
+        }
+        if (anyCtx.previousPostState !== undefined) {
+          setPostDetail(anyCtx.previousPostState ?? null);
+        }
+        if (postId && anyCtx.previousPostCache !== undefined) {
+          queryClient.setQueryData(postQueryKey, anyCtx.previousPostCache);
+        }
+      }
+      return err as any;
+    },
   });
 
   const handleLike = async () => {
-    if (!isAuthenticated || !postId) return;
+    if (!isAuthenticated || !postId) {
+      toast.info("登录后可点赞");
+      return;
+    }
     if (likeMutation.isPending) return;
     likeMutation.mutate();
   };
 
   const handleFavorite = async () => {
-    if (!isAuthenticated || !postId) return;
+    if (!isAuthenticated || !postId) {
+      toast.info("登录后可收藏");
+      return;
+    }
     if (favoriteMutation.isPending) return;
     favoriteMutation.mutate();
   };
+
+  const postLikeLoading = likeMutation.isPending;
+  const postFavoriteLoading = favoriteMutation.isPending;
+  const postActionBusy = postLikeLoading || postFavoriteLoading;
+  const disablePostLike = !isAuthenticated || (postActionBusy && !postLikeLoading);
+  const disablePostFavorite =
+    !isAuthenticated || (postActionBusy && !postFavoriteLoading);
 
   const handleSubmitComment = async () => {
     if (!newComment.trim() || commentMutation.isPending) return;
@@ -666,6 +1155,12 @@ export default function PostDetailPage() {
       images: newCommentImages,
       parent_id: replyTo?.id ?? null,
     });
+  };
+
+  const canDeleteComment = (c: Comment): boolean => {
+    if (!user) return false;
+    if (["admin", "super_admin", "moderator"].includes(String((user as any).role))) return true;
+    return Number(user.id) === Number(c.user_id);
   };
 
   const renderComment = (comment: Comment, depth: number) => {
@@ -680,6 +1175,11 @@ export default function PostDetailPage() {
     const commentReviewStatus = comment.review_status || null;
     const canInteractWithComment =
       commentReviewStatus !== "pending" && commentReviewStatus !== "rejected";
+
+    const canReplyOrLike = isAuthenticated && canInteractWithComment;
+    const canDelete = isAuthenticated && canDeleteComment(comment) && comment.id > 0;
+    const likeLoading = Boolean(pendingCommentLikes[comment.id]);
+    const deleteLoading = Boolean(pendingCommentDeletes[comment.id]);
 
     const isHighlighted = highlightedCommentId === comment.id;
 
@@ -743,35 +1243,61 @@ export default function PostDetailPage() {
               </div>
             ) : null}
 
-            {isAuthenticated && canInteractWithComment ? (
+            {canReplyOrLike || canDelete ? (
               <div className="mt-2 flex items-center gap-4">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setReplyTo({ id: comment.id, name: authorName })
-                  }
-                  className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-900 dark:text-white/40 dark:hover:text-white"
-                >
-                  <Reply className="h-3.5 w-3.5" />
-                  回复
-                </button>
+                {canReplyOrLike ? (
+                  <button
+                    type="button"
+                    onClick={() => setReplyTo({ id: comment.id, name: authorName })}
+                    className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-900 dark:text-white/40 dark:hover:text-white"
+                  >
+                    <Reply className="h-3.5 w-3.5" />
+                    回复
+                  </button>
+                ) : null}
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!isAuthenticated) return;
-                    if (commentLikeMutation.isPending) return;
-                    commentLikeMutation.mutate(comment.id);
-                  }}
-                  className={`inline-flex items-center gap-1.5 text-xs transition-colors ${
-                    comment.is_liked
-                      ? "text-amber-700 dark:text-amber-400"
-                      : "text-slate-500 hover:text-slate-900 dark:text-white/40 dark:hover:text-white"
-                  }`}
-                >
-                  <ThumbsUp className="h-3.5 w-3.5" />
-                  {comment.like_count || 0}
-                </button>
+                {canReplyOrLike ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (likeLoading) return;
+                      commentLikeMutation.mutate(comment.id);
+                    }}
+                    disabled={likeLoading}
+                    className={`inline-flex items-center gap-1.5 text-xs transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
+                      comment.is_liked
+                        ? "text-amber-700 dark:text-amber-400"
+                        : "text-slate-500 hover:text-slate-900 dark:text-white/40 dark:hover:text-white"
+                    }`}
+                  >
+                    {likeLoading ? (
+                      <span className="h-3.5 w-3.5 rounded-full border-2 border-current border-t-transparent animate-spin" />
+                    ) : (
+                      <ThumbsUp className="h-3.5 w-3.5" />
+                    )}
+                    {comment.like_count || 0}
+                  </button>
+                ) : null}
+
+                {canDelete ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (deleteLoading) return;
+                      deleteCommentMutation.mutate(comment.id);
+                    }}
+                    disabled={deleteLoading}
+                    className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-red-600 dark:text-white/40 dark:hover:text-red-300 disabled:opacity-60 disabled:cursor-not-allowed"
+                    title="删除"
+                  >
+                    {deleteLoading ? (
+                      <span className="h-3.5 w-3.5 rounded-full border-2 border-current border-t-transparent animate-spin" />
+                    ) : (
+                      <Trash2 className="h-3.5 w-3.5" />
+                    )}
+                    删除
+                  </button>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -793,7 +1319,52 @@ export default function PostDetailPage() {
   };
 
   if (postQuery.isLoading && !postDetail && !postQuery.error) {
-    return <Loading text="加载中..." tone={actualTheme} />;
+    return (
+      <div className="space-y-8">
+        <div className="flex items-center gap-2 text-slate-600 dark:text-white/60">
+          <Skeleton width="120px" height="16px" />
+        </div>
+
+        <div className="rounded-2xl border border-slate-200/70 bg-white p-6 dark:border-white/10 dark:bg-white/[0.02]">
+          <div className="space-y-5">
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-3 w-full">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Skeleton width="64px" height="22px" />
+                  <Skeleton width="56px" height="22px" />
+                  <Skeleton width="72px" height="22px" />
+                </div>
+                <Skeleton width="70%" height="28px" />
+              </div>
+              <Skeleton width="42px" height="16px" />
+            </div>
+
+            <div className="flex items-center gap-3 pb-6 border-b border-slate-200/70 dark:border-white/5">
+              <Skeleton variant="circular" width="40px" height="40px" />
+              <div className="space-y-2 flex-1">
+                <Skeleton width="120px" height="14px" />
+                <Skeleton width="200px" height="12px" />
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <Skeleton width="100%" height="16px" />
+              <Skeleton width="92%" height="16px" />
+              <Skeleton width="86%" height="16px" />
+              <Skeleton width="78%" height="16px" />
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-slate-200/70 bg-white p-6 dark:border-white/10 dark:bg-white/[0.02]">
+          <div className="flex items-center justify-between mb-4">
+            <Skeleton width="120px" height="18px" />
+            <Skeleton width="80px" height="28px" />
+          </div>
+          <ListSkeleton count={3} />
+        </div>
+      </div>
+    );
   }
 
   if (isDeletedView && !isAuthenticated) {
@@ -1248,7 +1819,10 @@ export default function PostDetailPage() {
 
           <Modal
             isOpen={confirmRestorePost}
-            onClose={() => setConfirmRestorePost(false)}
+            onClose={() => {
+              if (restorePostMutation.isPending) return;
+              setConfirmRestorePost(false);
+            }}
             title="恢复帖子"
             description="恢复后帖子将重新出现在论坛列表中"
             size="sm"
@@ -1256,7 +1830,11 @@ export default function PostDetailPage() {
             <ModalActions>
               <Button
                 variant="ghost"
-                onClick={() => setConfirmRestorePost(false)}
+                onClick={() => {
+                  if (restorePostMutation.isPending) return;
+                  setConfirmRestorePost(false);
+                }}
+                disabled={restorePostMutation.isPending}
               >
                 取消
               </Button>
@@ -1267,6 +1845,8 @@ export default function PostDetailPage() {
                   restorePostMutation.mutate();
                 }}
                 isLoading={restorePostMutation.isPending}
+                loadingText="恢复中..."
+                disabled={restorePostMutation.isPending}
               >
                 确认恢复
               </Button>
@@ -1275,7 +1855,10 @@ export default function PostDetailPage() {
 
           <Modal
             isOpen={confirmPurgePost}
-            onClose={() => setConfirmPurgePost(false)}
+            onClose={() => {
+              if (purgePostMutation.isPending) return;
+              setConfirmPurgePost(false);
+            }}
             title="永久删除"
             description="永久删除后将无法恢复，且会清理相关点赞/收藏/评论数据"
             size="sm"
@@ -1283,7 +1866,11 @@ export default function PostDetailPage() {
             <ModalActions>
               <Button
                 variant="ghost"
-                onClick={() => setConfirmPurgePost(false)}
+                onClick={() => {
+                  if (purgePostMutation.isPending) return;
+                  setConfirmPurgePost(false);
+                }}
+                disabled={purgePostMutation.isPending}
               >
                 取消
               </Button>
@@ -1295,6 +1882,8 @@ export default function PostDetailPage() {
                   purgePostMutation.mutate();
                 }}
                 isLoading={purgePostMutation.isPending}
+                loadingText="删除中..."
+                disabled={purgePostMutation.isPending}
               >
                 确认永久删除
               </Button>
@@ -1303,7 +1892,10 @@ export default function PostDetailPage() {
 
           <Modal
             isOpen={confirmDeletePost}
-            onClose={() => setConfirmDeletePost(false)}
+            onClose={() => {
+              if (deletePostMutation.isPending) return;
+              setConfirmDeletePost(false);
+            }}
             title="删除帖子"
             description="删除后会进入回收站，可在回收站恢复或永久删除"
             size="sm"
@@ -1311,7 +1903,11 @@ export default function PostDetailPage() {
             <ModalActions>
               <Button
                 variant="ghost"
-                onClick={() => setConfirmDeletePost(false)}
+                onClick={() => {
+                  if (deletePostMutation.isPending) return;
+                  setConfirmDeletePost(false);
+                }}
+                disabled={deletePostMutation.isPending}
               >
                 取消
               </Button>
@@ -1323,6 +1919,8 @@ export default function PostDetailPage() {
                   deletePostMutation.mutate();
                 }}
                 isLoading={deletePostMutation.isPending}
+                loadingText="删除中..."
+                disabled={deletePostMutation.isPending}
               >
                 确认删除
               </Button>
@@ -1371,37 +1969,53 @@ export default function PostDetailPage() {
           {!isDeletedView ? (
             <div className="flex items-center gap-6 pt-6 border-t border-slate-200/70 dark:border-white/5">
               <button
-                onClick={handleLike}
-                disabled={!isAuthenticated}
+                onClick={() => {
+                  if (disablePostLike) return;
+                  void handleLike();
+                }}
+                disabled={disablePostLike}
                 className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
                   postDetail.is_liked
                     ? "bg-amber-500/15 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400"
                     : "bg-slate-900/5 text-slate-600 hover:bg-slate-900/10 hover:text-slate-900 dark:bg-white/5 dark:text-white/60 dark:hover:bg-white/10 dark:hover:text-white"
                 } disabled:opacity-50 disabled:cursor-not-allowed`}
               >
-                <ThumbsUp
-                  className={`h-4 w-4 ${
-                    postDetail.is_liked ? "fill-amber-400" : ""
-                  }`}
-                />
-                <span>{postDetail.like_count}</span>
+                {postLikeLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <ThumbsUp
+                    className={`h-4 w-4 ${
+                      postDetail.is_liked ? "fill-amber-400" : ""
+                    }`}
+                  />
+                )}
+                <span>{postLikeLoading ? "点赞中..." : postDetail.like_count}</span>
               </button>
 
               <button
-                onClick={handleFavorite}
-                disabled={!isAuthenticated}
+                onClick={() => {
+                  if (disablePostFavorite) return;
+                  void handleFavorite();
+                }}
+                disabled={disablePostFavorite}
                 className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
                   postDetail.is_favorited
                     ? "bg-amber-500/15 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400"
                     : "bg-slate-900/5 text-slate-600 hover:bg-slate-900/10 hover:text-slate-900 dark:bg-white/5 dark:text-white/60 dark:hover:bg-white/10 dark:hover:text-white"
                 } disabled:opacity-50 disabled:cursor-not-allowed`}
               >
-                <Star
-                  className={`h-4 w-4 ${
-                    postDetail.is_favorited ? "fill-amber-400" : ""
-                  }`}
-                />
-                <span>{postDetail.favorite_count}</span>
+                {postFavoriteLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Star
+                    className={`h-4 w-4 ${
+                      postDetail.is_favorited ? "fill-amber-400" : ""
+                    }`}
+                  />
+                )}
+                <span>
+                  {postFavoriteLoading ? "收藏中..." : postDetail.favorite_count}
+                </span>
               </button>
 
               <div className="flex items-center gap-2 text-slate-500 dark:text-white/50">
@@ -1416,9 +2030,21 @@ export default function PostDetailPage() {
       {/* 评论区 */}
       {!isDeletedView ? (
         <Card variant="surface" padding="lg">
-          <h3 className="text-lg font-semibold text-slate-900 mb-6 dark:text-white">
-            评论 ({comments.length})
-          </h3>
+          <div className="flex items-center justify-between gap-3 mb-6">
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+              评论 ({comments.length}/{commentsTotal})
+            </h3>
+            <Button
+              variant="outline"
+              size="sm"
+              icon={RotateCcw}
+              isLoading={commentsQuery.isFetching && !commentsQuery.isFetchingNextPage}
+              loadingText="刷新中..."
+              onClick={handleRefreshComments}
+            >
+              刷新评论
+            </Button>
+          </div>
 
           {/* 发表评论 */}
           {isAuthenticated ? (
@@ -1451,6 +2077,7 @@ export default function PostDetailPage() {
                   onClick={handleSubmitComment}
                   disabled={!newComment.trim() || commentMutation.isPending}
                   isLoading={commentMutation.isPending}
+                  loadingText="发表中..."
                   icon={Send}
                   className="px-6"
                 >
@@ -1474,7 +2101,9 @@ export default function PostDetailPage() {
 
           {/* 评论列表 */}
           <div className="space-y-6">
-            {comments.length === 0 ? (
+            {commentsQuery.isLoading ? (
+              <ListSkeleton count={3} />
+            ) : comments.length === 0 ? (
               <p className="text-center text-slate-500 py-8 dark:text-white/40">
                 暂无评论，来发表第一条评论吧
               </p>
@@ -1482,6 +2111,30 @@ export default function PostDetailPage() {
               comments.map((comment) => renderComment(comment, 0))
             )}
           </div>
+
+          {commentsQuery.hasNextPage ? (
+            <div className="pt-6 flex justify-center">
+              <Button
+                variant="outline"
+                isLoading={commentsQuery.isFetchingNextPage}
+                loadingText="加载更多中..."
+                disabled={commentsQuery.isFetchingNextPage}
+                onClick={() => commentsQuery.fetchNextPage()}
+              >
+                加载更多
+              </Button>
+            </div>
+          ) : commentsTotal > 0 ? (
+            <div className="pt-6 text-center text-xs text-slate-500 dark:text-white/45">
+              已加载全部
+            </div>
+          ) : null}
+
+          {commentsQuery.isFetchingNextPage ? (
+            <div className="pt-4">
+              <ListSkeleton count={1} />
+            </div>
+          ) : null}
         </Card>
       ) : null}
     </div>

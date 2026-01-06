@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   Bell,
@@ -31,6 +31,11 @@ export default function NotificationBell({
   const { isAuthenticated } = useAuth();
   const toast = useToast();
 
+  const [pendingRead, setPendingRead] = useState<Record<number, boolean>>({});
+  const [pendingDelete, setPendingDelete] = useState<Record<number, boolean>>(
+    {}
+  );
+
   const queryClient = useQueryClient();
 
   const { queryKey: previewQueryKey, query: previewQuery } =
@@ -39,12 +44,22 @@ export default function NotificationBell({
   const notifications = previewQuery.data?.items ?? [];
   const unreadCount = previewQuery.data?.unread_count ?? 0;
 
+  const pendingReadSet = useMemo(
+    () => new Set(Object.keys(pendingRead).map((k) => Number(k))),
+    [pendingRead]
+  );
+  const pendingDeleteSet = useMemo(
+    () => new Set(Object.keys(pendingDelete).map((k) => Number(k))),
+    [pendingDelete]
+  );
+
   const markAsReadMutation = useMutation({
     mutationFn: async (id: number) => {
       await api.put(`/notifications/${id}/read`, {});
       return id;
     },
     onMutate: async (id) => {
+      setPendingRead((prev) => ({ ...prev, [id]: true }));
       await queryClient.cancelQueries({ queryKey: previewQueryKey });
       const previous =
         queryClient.getQueryData<NotificationsPreviewResponse>(previewQueryKey);
@@ -69,7 +84,19 @@ export default function NotificationBell({
 
       return { previous };
     },
+    onSuccess: (_id) => {
+      setPendingRead((prev) => {
+        const next = { ...prev };
+        delete next[_id];
+        return next;
+      });
+    },
     onError: (err, _id, ctx) => {
+      setPendingRead((prev) => {
+        const next = { ...prev };
+        delete next[_id];
+        return next;
+      });
       if (ctx?.previous)
         queryClient.setQueryData(previewQueryKey, ctx.previous);
       toast.error(getApiErrorMessage(err, "操作失败"));
@@ -113,6 +140,7 @@ export default function NotificationBell({
       return id;
     },
     onMutate: async (id) => {
+      setPendingDelete((prev) => ({ ...prev, [id]: true }));
       await queryClient.cancelQueries({ queryKey: previewQueryKey });
       const previous =
         queryClient.getQueryData<NotificationsPreviewResponse>(previewQueryKey);
@@ -131,18 +159,34 @@ export default function NotificationBell({
       );
       return { previous };
     },
-    onSuccess: () => {
+    onSuccess: (_data, id) => {
       toast.success("已删除");
+      setPendingDelete((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
     },
     onError: (err, _id, ctx) => {
+      setPendingDelete((prev) => {
+        const next = { ...prev };
+        delete next[_id];
+        return next;
+      });
       if (ctx?.previous)
         queryClient.setQueryData(previewQueryKey, ctx.previous);
       toast.error(getApiErrorMessage(err, "删除失败"));
     },
   });
 
+  const actionBusy =
+    markAllAsReadMutation.isPending ||
+    pendingReadSet.size > 0 ||
+    pendingDeleteSet.size > 0;
+
   const handleMarkAsRead = async (id: number) => {
-    if (markAsReadMutation.isPending) return;
+    if (markAllAsReadMutation.isPending) return;
+    if (pendingRead[id] || pendingDelete[id]) return;
     markAsReadMutation.mutate(id);
   };
 
@@ -152,7 +196,8 @@ export default function NotificationBell({
   };
 
   const handleDelete = async (id: number) => {
-    if (deleteMutation.isPending) return;
+    if (markAllAsReadMutation.isPending) return;
+    if (pendingRead[id] || pendingDelete[id]) return;
     deleteMutation.mutate(id);
   };
 
@@ -170,7 +215,9 @@ export default function NotificationBell({
       default:
         return (
           <AlertCircle
-            className={`h-4 w-4 ${isLight ? "text-slate-500" : "text-white/50"}`}
+            className={`h-4 w-4 ${
+              isLight ? "text-slate-500" : "text-white/50"
+            }`}
           />
         );
     }
@@ -196,7 +243,10 @@ export default function NotificationBell({
   return (
     <div className="relative">
       <button
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={() => {
+          if (actionBusy) return;
+          setIsOpen(!isOpen);
+        }}
         className={`relative p-2 rounded-full outline-none transition-all active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 ${
           isLight ? "hover:bg-slate-100" : "hover:bg-white/10"
         }`}
@@ -215,7 +265,10 @@ export default function NotificationBell({
         <>
           <div
             className="fixed inset-0 z-40"
-            onClick={() => setIsOpen(false)}
+            onClick={() => {
+              if (actionBusy) return;
+              setIsOpen(false);
+            }}
           />
           <div
             className={`absolute right-0 top-full mt-2 w-80 sm:w-96 rounded-xl shadow-xl z-50 overflow-hidden ${
@@ -241,6 +294,13 @@ export default function NotificationBell({
                   variant="ghost"
                   size="sm"
                   onClick={handleMarkAllAsRead}
+                  isLoading={markAllAsReadMutation.isPending}
+                  loadingText="处理中..."
+                  disabled={
+                    markAllAsReadMutation.isPending ||
+                    pendingReadSet.size > 0 ||
+                    pendingDeleteSet.size > 0
+                  }
                   className={`text-xs ${
                     isLight
                       ? "text-emerald-700 hover:text-emerald-800"
@@ -318,31 +378,51 @@ export default function NotificationBell({
                           </span>
                           <div className="flex gap-1">
                             {!notification.is_read && (
-                              <button
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className={
+                                  pendingReadSet.has(notification.id)
+                                    ? "px-3 py-2"
+                                    : "p-2"
+                                }
+                                title="标记已读"
                                 onClick={() =>
                                   handleMarkAsRead(notification.id)
                                 }
-                                className={`p-1 rounded outline-none transition-all active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 ${
-                                  isLight
-                                    ? "hover:bg-slate-100 text-slate-400 hover:text-slate-700"
-                                    : "hover:bg-white/10 text-white/40 hover:text-white/70"
-                                }`}
-                                title="标记已读"
+                                isLoading={pendingReadSet.has(notification.id)}
+                                loadingText="标记中..."
+                                disabled={
+                                  markAllAsReadMutation.isPending ||
+                                  pendingDeleteSet.has(notification.id)
+                                }
                               >
                                 <Check className="h-3 w-3" />
-                              </button>
+                              </Button>
                             )}
-                            <button
-                              onClick={() => handleDelete(notification.id)}
-                              className={`p-1 rounded outline-none transition-all active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 ${
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className={`${
+                                pendingDeleteSet.has(notification.id)
+                                  ? "px-3 py-2"
+                                  : "p-2"
+                              } ${
                                 isLight
-                                  ? "hover:bg-slate-100 text-slate-400 hover:text-red-600"
-                                  : "hover:bg-white/10 text-white/40 hover:text-red-400"
+                                  ? "text-slate-400 hover:text-red-600"
+                                  : "text-white/40 hover:text-red-400"
                               }`}
                               title="删除"
+                              onClick={() => handleDelete(notification.id)}
+                              isLoading={pendingDeleteSet.has(notification.id)}
+                              loadingText="删除中..."
+                              disabled={
+                                markAllAsReadMutation.isPending ||
+                                pendingReadSet.has(notification.id)
+                              }
                             >
                               <Trash2 className="h-3 w-3" />
-                            </button>
+                            </Button>
                           </div>
                         </div>
                       </div>
@@ -365,7 +445,10 @@ export default function NotificationBell({
                       ? "text-emerald-700 hover:text-emerald-800"
                       : "text-amber-400 hover:text-amber-300"
                   }`}
-                  onClick={() => setIsOpen(false)}
+                  onClick={() => {
+                    if (actionBusy) return;
+                    setIsOpen(false);
+                  }}
                 >
                   查看全部通知
                 </Link>

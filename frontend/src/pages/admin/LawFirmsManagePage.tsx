@@ -1,10 +1,9 @@
 import { useMemo, useState } from 'react'
-import { Search, Plus, Edit, Trash2, BadgeCheck, Ban } from 'lucide-react'
-import { Card, Input, Button, Badge, Modal, Loading } from '../../components/ui'
+import { Search, Plus, Edit, Trash2, BadgeCheck, Ban, RotateCcw } from 'lucide-react'
+import { Card, Input, Button, Badge, Modal, ListSkeleton } from '../../components/ui'
 import { useQuery } from '@tanstack/react-query'
 import api from '../../api/client'
 import { useAppMutation } from '../../hooks'
-import { useTheme } from '../../contexts/ThemeContext'
 import { getApiErrorMessage } from '../../utils'
 
 interface LawFirm {
@@ -20,11 +19,11 @@ interface LawFirm {
 }
 
 export default function LawFirmsManagePage() {
-  const { actualTheme } = useTheme()
   const [keyword, setKeyword] = useState('')
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
   const [editingFirm, setEditingFirm] = useState<LawFirm | null>(null)
+  const [activeAction, setActiveAction] = useState<{ id: number; kind: 'verify' | 'active' | 'delete' } | null>(null)
 
   const [createForm, setCreateForm] = useState({
     name: '',
@@ -75,6 +74,12 @@ export default function LawFirmsManagePage() {
     },
     errorMessageFallback: '操作失败，请稍后重试',
     invalidateQueryKeys: [firmsQueryKey as any],
+    onMutate: async (id) => {
+      setActiveAction({ id, kind: 'delete' })
+    },
+    onSettled: (_data, _err, id) => {
+      setActiveAction((prev) => (prev && prev.id === id && prev.kind === 'delete' ? null : prev))
+    },
   })
 
   const verifyMutation = useAppMutation<void, { id: number; is_verified: boolean }>({
@@ -83,6 +88,12 @@ export default function LawFirmsManagePage() {
     },
     errorMessageFallback: '操作失败，请稍后重试',
     invalidateQueryKeys: [firmsQueryKey as any],
+    onMutate: async (payload) => {
+      setActiveAction({ id: payload.id, kind: 'verify' })
+    },
+    onSettled: (_data, _err, payload) => {
+      setActiveAction((prev) => (prev && prev.id === payload?.id && prev.kind === 'verify' ? null : prev))
+    },
   })
 
   const activeMutation = useAppMutation<void, { id: number; is_active: boolean }>({
@@ -91,6 +102,12 @@ export default function LawFirmsManagePage() {
     },
     errorMessageFallback: '操作失败，请稍后重试',
     invalidateQueryKeys: [firmsQueryKey as any],
+    onMutate: async (payload) => {
+      setActiveAction({ id: payload.id, kind: 'active' })
+    },
+    onSettled: (_data, _err, payload) => {
+      setActiveAction((prev) => (prev && prev.id === payload?.id && prev.kind === 'active' ? null : prev))
+    },
   })
 
   const createMutation = useAppMutation<void, { name: string; city: string | null; phone: string | null; address: string | null; description: string | null }>({
@@ -180,9 +197,21 @@ export default function LawFirmsManagePage() {
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white">律所管理</h1>
           <p className="text-slate-600 mt-1 dark:text-white/50">管理入驻律师事务所</p>
         </div>
-        <Button icon={Plus} onClick={() => setShowCreateModal(true)}>
-          添加律所
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            icon={RotateCcw}
+            isLoading={firmsQuery.isFetching}
+            loadingText="刷新中..."
+            disabled={firmsQuery.isFetching}
+            onClick={() => firmsQuery.refetch()}
+          >
+            刷新
+          </Button>
+          <Button icon={Plus} onClick={() => setShowCreateModal(true)}>
+            添加律所
+          </Button>
+        </div>
       </div>
 
       <Card variant="surface" padding="md">
@@ -197,8 +226,8 @@ export default function LawFirmsManagePage() {
           </div>
         </div>
 
-        {loading ? (
-          <Loading text="加载中..." tone={actualTheme} />
+        {loading && firms.length === 0 ? (
+          <ListSkeleton count={6} />
         ) : loadError ? (
           <div className="flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
             <div>{loadError}</div>
@@ -247,21 +276,38 @@ export default function LawFirmsManagePage() {
                   </td>
                   <td className="py-4 px-4">
                     <div className="flex items-center justify-end gap-2">
+                      {(() => {
+                        const isActive = activeAction?.id === item.id
+                        const actionBusy = deleteMutation.isPending || verifyMutation.isPending || activeMutation.isPending
+                        const rowBusy = actionBusy && isActive
+                        const disableOther = actionBusy && !isActive
+                        const verifyLoading = verifyMutation.isPending && isActive && activeAction?.kind === 'verify'
+                        const activeLoading = activeMutation.isPending && isActive && activeAction?.kind === 'active'
+                        const deleteLoading = deleteMutation.isPending && isActive && activeAction?.kind === 'delete'
+
+                        return (
+                          <>
                       <Button 
                         variant="ghost" 
                         size="sm" 
-                        className="p-2"
+                        className={verifyLoading ? "px-3 py-2" : "p-2"}
                         onClick={() => toggleVerify(item)}
                         title={item.is_verified ? '取消认证' : '认证'}
+                        isLoading={verifyLoading}
+                        loadingText="处理中..."
+                        disabled={(rowBusy && !verifyLoading) || disableOther}
                       >
                         <BadgeCheck className={`h-4 w-4 ${item.is_verified ? 'text-emerald-400' : ''}`} />
                       </Button>
                       <Button 
                         variant="ghost" 
                         size="sm" 
-                        className="p-2"
+                        className={activeLoading ? "px-3 py-2" : "p-2"}
                         onClick={() => toggleActive(item)}
                         title={item.is_active ? '禁用' : '启用'}
+                        isLoading={activeLoading}
+                        loadingText="处理中..."
+                        disabled={(rowBusy && !activeLoading) || disableOther}
                       >
                         <Ban className={`h-4 w-4 ${!item.is_active ? 'text-red-400' : ''}`} />
                       </Button>
@@ -270,19 +316,29 @@ export default function LawFirmsManagePage() {
                         size="sm"
                         className="p-2"
                         title="编辑"
-                        onClick={() => openEditModal(item)}
+                        onClick={() => {
+                          if (actionBusy) return
+                          openEditModal(item)
+                        }}
+                        disabled={actionBusy}
                       >
                         <Edit className="h-4 w-4" />
                       </Button>
                       <Button 
                         variant="ghost" 
                         size="sm" 
-                        className="p-2 text-red-400 hover:text-red-300"
+                        className={`${deleteLoading ? 'px-3 py-2' : 'p-2'} text-red-400 hover:text-red-300`}
                         onClick={() => handleDelete(item.id)}
                         title="删除"
+                        isLoading={deleteLoading}
+                        loadingText="删除中..."
+                        disabled={(rowBusy && !deleteLoading) || disableOther}
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
+                          </>
+                        )
+                      })()}
                     </div>
                   </td>
                 </tr>
@@ -301,7 +357,10 @@ export default function LawFirmsManagePage() {
 
       <Modal
         isOpen={showCreateModal}
-        onClose={() => setShowCreateModal(false)}
+        onClose={() => {
+          if (createMutation.isPending) return
+          setShowCreateModal(false)
+        }}
         title="添加律所"
         description="填写律所信息"
       >
@@ -311,6 +370,7 @@ export default function LawFirmsManagePage() {
             placeholder="请输入律所名称"
             value={createForm.name}
             onChange={(e) => setCreateForm(prev => ({ ...prev, name: e.target.value }))}
+            disabled={createMutation.isPending}
           />
           <div className="grid grid-cols-2 gap-4">
             <Input
@@ -318,12 +378,14 @@ export default function LawFirmsManagePage() {
               placeholder="请输入城市"
               value={createForm.city}
               onChange={(e) => setCreateForm(prev => ({ ...prev, city: e.target.value }))}
+              disabled={createMutation.isPending}
             />
             <Input
               label="联系电话"
               placeholder="请输入电话"
               value={createForm.phone}
               onChange={(e) => setCreateForm(prev => ({ ...prev, phone: e.target.value }))}
+              disabled={createMutation.isPending}
             />
           </div>
           <Input
@@ -331,6 +393,7 @@ export default function LawFirmsManagePage() {
             placeholder="请输入详细地址"
             value={createForm.address}
             onChange={(e) => setCreateForm(prev => ({ ...prev, address: e.target.value }))}
+            disabled={createMutation.isPending}
           />
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">简介</label>
@@ -339,12 +402,19 @@ export default function LawFirmsManagePage() {
               placeholder="请输入律所简介"
               value={createForm.description}
               onChange={(e) => setCreateForm(prev => ({ ...prev, description: e.target.value }))}
+              disabled={createMutation.isPending}
               className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none resize-none dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
             />
           </div>
           <div className="flex justify-end gap-3 pt-4">
-            <Button variant="outline" onClick={() => setShowCreateModal(false)}>取消</Button>
-            <Button onClick={handleCreate} disabled={!createForm.name.trim()}>添加</Button>
+            <Button
+              variant="outline"
+              onClick={() => setShowCreateModal(false)}
+              disabled={createMutation.isPending}
+            >
+              取消
+            </Button>
+            <Button onClick={handleCreate} disabled={!createForm.name.trim() || createMutation.isPending} isLoading={createMutation.isPending} loadingText="添加中...">添加</Button>
           </div>
         </div>
       </Modal>
@@ -352,6 +422,7 @@ export default function LawFirmsManagePage() {
       <Modal
         isOpen={showEditModal}
         onClose={() => {
+          if (editMutation.isPending) return
           setShowEditModal(false)
           setEditingFirm(null)
         }}
@@ -364,6 +435,7 @@ export default function LawFirmsManagePage() {
             placeholder="请输入律所名称"
             value={editForm.name}
             onChange={(e) => setEditForm(prev => ({ ...prev, name: e.target.value }))}
+            disabled={editMutation.isPending}
           />
           <div className="grid grid-cols-2 gap-4">
             <Input
@@ -371,12 +443,14 @@ export default function LawFirmsManagePage() {
               placeholder="请输入城市"
               value={editForm.city}
               onChange={(e) => setEditForm(prev => ({ ...prev, city: e.target.value }))}
+              disabled={editMutation.isPending}
             />
             <Input
               label="联系电话"
               placeholder="请输入电话"
               value={editForm.phone}
               onChange={(e) => setEditForm(prev => ({ ...prev, phone: e.target.value }))}
+              disabled={editMutation.isPending}
             />
           </div>
           <Input
@@ -384,6 +458,7 @@ export default function LawFirmsManagePage() {
             placeholder="请输入详细地址"
             value={editForm.address}
             onChange={(e) => setEditForm(prev => ({ ...prev, address: e.target.value }))}
+            disabled={editMutation.isPending}
           />
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">简介</label>
@@ -392,6 +467,7 @@ export default function LawFirmsManagePage() {
               placeholder="请输入律所简介"
               value={editForm.description}
               onChange={(e) => setEditForm(prev => ({ ...prev, description: e.target.value }))}
+              disabled={editMutation.isPending}
               className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none resize-none dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
             />
           </div>
@@ -402,10 +478,11 @@ export default function LawFirmsManagePage() {
                 setShowEditModal(false)
                 setEditingFirm(null)
               }}
+              disabled={editMutation.isPending}
             >
               取消
             </Button>
-            <Button onClick={handleEdit} disabled={!editForm.name.trim()}>
+            <Button onClick={handleEdit} disabled={!editForm.name.trim() || editMutation.isPending} isLoading={editMutation.isPending} loadingText="保存中...">
               保存
             </Button>
           </div>

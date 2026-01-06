@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { BarChart3, Download, RefreshCw, TrendingUp } from "lucide-react";
 import api from "../../api/client";
-import { Badge, Button, Card, EmptyState, Loading } from "../../components/ui";
+import { Badge, Button, Card, EmptyState, ListSkeleton, Skeleton } from "../../components/ui";
 import { useToast } from "../../hooks";
 import { getApiErrorMessage } from "../../utils";
 
@@ -77,7 +77,37 @@ export default function SettlementStatsPage() {
   }, [data]);
 
   if (statsQuery.isLoading && !data) {
-    return <Loading text="加载中..." />;
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <Skeleton width="120px" height="20px" />
+            <div className="mt-2">
+              <Skeleton width="240px" height="14px" />
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Skeleton width="96px" height="36px" />
+            <Skeleton width="72px" height="36px" />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+          {Array.from({ length: 5 }).map((_, idx) => (
+            <Card key={idx} variant="surface" padding="md">
+              <Skeleton width="72px" height="12px" />
+              <div className="mt-2">
+                <Skeleton width="90px" height="20px" />
+              </div>
+            </Card>
+          ))}
+        </div>
+
+        <Card variant="surface" padding="lg">
+          <ListSkeleton count={4} />
+        </Card>
+      </div>
+    );
   }
 
   if (!data) {
@@ -150,6 +180,7 @@ export default function SettlementStatsPage() {
             icon={Download}
             onClick={exportIncomeRecords}
             isLoading={exporting}
+            loadingText="导出中..."
           >
             导出收入
           </Button>
@@ -157,6 +188,8 @@ export default function SettlementStatsPage() {
             variant="outline"
             icon={RefreshCw}
             onClick={() => statsQuery.refetch()}
+            isLoading={statsQuery.isFetching}
+            loadingText="刷新中..."
             disabled={statsQuery.isFetching}
           >
             刷新

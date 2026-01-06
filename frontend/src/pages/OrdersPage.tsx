@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { CreditCard, ExternalLink, Eye, FileText, RefreshCw, XCircle } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
-import { Badge, Button, Card, EmptyState, Loading, Modal, Pagination } from '../components/ui'
+import { Badge, Button, Card, EmptyState, ListSkeleton, Modal, Pagination, Skeleton } from '../components/ui'
 import api from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 import { useTheme } from '../contexts/ThemeContext'
@@ -49,6 +50,56 @@ function paymentMethodToLabel(value: string | null | undefined): string {
   return value || '—'
 }
 
+function orderTypeToNextStep(orderType: string | null | undefined): { label: string; to: string } | null {
+  const t = String(orderType || '').trim().toLowerCase()
+  if (!t) return null
+  if (t === 'vip' || t === 'ai_pack' || t === 'recharge') {
+    return { label: '去个人中心查看权益', to: '/profile' }
+  }
+  if (t === 'consultation') {
+    return { label: '查看我的预约', to: '/orders?tab=consultations' }
+  }
+  if (t === 'service') {
+    return { label: '去律所服务', to: '/lawfirm' }
+  }
+  return null
+}
+
+function orderStatusToHint(status: string): { title: string; description: string } {
+  const s = String(status || '').toLowerCase()
+  if (s === 'pending') {
+    return {
+      title: '待支付',
+      description: '请完成支付。支付完成后可点击“刷新状态”确认结果。',
+    }
+  }
+  if (s === 'paid') {
+    return {
+      title: '已支付',
+      description: '订单已支付成功，可前往对应功能查看权益或服务进度。',
+    }
+  }
+  if (s === 'cancelled') {
+    return {
+      title: '已取消',
+      description: '该订单已取消。如需继续购买，请重新下单。',
+    }
+  }
+  if (s === 'refunded') {
+    return {
+      title: '已退款',
+      description: '退款通常原路返回，到账时间以支付渠道为准。',
+    }
+  }
+  if (s === 'failed') {
+    return {
+      title: '支付失败',
+      description: '可尝试重新支付或更换支付方式。',
+    }
+  }
+  return { title: '状态未知', description: '如状态异常，请刷新或联系管理员。' }
+}
+
 function fmtMoney(amount: number | null | undefined): string {
   if (typeof amount !== 'number' || Number.isNaN(amount)) return ''
   return `¥${amount.toFixed(2)}`
@@ -62,6 +113,11 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
   const [page, setPage] = useState(1)
   const pageSize = 20
   const [statusFilter, setStatusFilter] = useState<string | null>(null)
+  const [refreshingTarget, setRefreshingTarget] = useState<string | null>(null)
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null)
+  const [activeCancelOrderNo, setActiveCancelOrderNo] = useState<string | null>(null)
+  const [activeBalancePayOrderNo, setActiveBalancePayOrderNo] = useState<string | null>(null)
+  const [activeAlipayOrderNo, setActiveAlipayOrderNo] = useState<string | null>(null)
 
   const queryKey = queryKeys.paymentOrders(page, pageSize, statusFilter)
 
@@ -102,6 +158,12 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
     successMessage: '订单已取消',
     errorMessageFallback: '取消失败，请稍后重试',
     invalidateQueryKeys: [queryKeys.paymentOrdersBase()],
+    onMutate: async (orderNo) => {
+      setActiveCancelOrderNo(orderNo)
+    },
+    onSettled: (_data, _err, orderNo) => {
+      setActiveCancelOrderNo((prev) => (prev === orderNo ? null : prev))
+    },
   })
 
   const balancePayMutation = useAppMutation<unknown, string>({
@@ -113,6 +175,12 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
     successMessage: '支付成功',
     errorMessageFallback: '支付失败，请稍后重试',
     invalidateQueryKeys: [queryKeys.paymentOrdersBase()],
+    onMutate: async (orderNo) => {
+      setActiveBalancePayOrderNo(orderNo)
+    },
+    onSettled: (_data, _err, orderNo) => {
+      setActiveBalancePayOrderNo((prev) => (prev === orderNo ? null : prev))
+    },
   })
 
   const alipayMutation = useAppMutation<ThirdPartyPayResponse, string>({
@@ -123,6 +191,9 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
       return (res.data || {}) as ThirdPartyPayResponse
     },
     errorMessageFallback: '获取支付链接失败，请稍后重试',
+    onMutate: async (orderNo) => {
+      setActiveAlipayOrderNo(orderNo)
+    },
     onSuccess: (data) => {
       const url = String(data?.pay_url || '').trim()
       if (!url) {
@@ -132,7 +203,12 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
       window.open(url, '_blank', 'noopener,noreferrer')
       toast.success('已打开支付宝支付页面')
     },
+    onSettled: (_data, _err, orderNo) => {
+      setActiveAlipayOrderNo((prev) => (prev === orderNo ? null : prev))
+    },
   })
+
+  const actionBusy = cancelMutation.isPending || balancePayMutation.isPending || alipayMutation.isPending
 
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailOrderNo, setDetailOrderNo] = useState<string | null>(null)
@@ -154,16 +230,61 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
 
   const handleCancel = (orderNo: string) => {
     if (!confirm('确定要取消该订单吗？')) return
+    if (cancelMutation.isPending) return
     cancelMutation.mutate(orderNo)
   }
 
   const handleBalancePay = (orderNo: string) => {
     if (!confirm('确定使用余额支付该订单吗？')) return
+    if (balancePayMutation.isPending) return
     balancePayMutation.mutate(orderNo)
   }
 
   const handleAlipayPay = (orderNo: string) => {
+    if (alipayMutation.isPending) return
     alipayMutation.mutate(orderNo)
+  }
+
+  const handleRefreshStatus = async () => {
+    setRefreshingTarget('__all__')
+    const res = await listQuery.refetch()
+    if (res.error) {
+      toast.error(getApiErrorMessage(res.error, '刷新失败，请稍后重试'))
+      setRefreshingTarget(null)
+      return
+    }
+
+    if (detailOrderNo) {
+      const detailRes = await detailQuery.refetch()
+      if (detailRes.error) {
+        toast.error(getApiErrorMessage(detailRes.error, '订单详情刷新失败'))
+      }
+    }
+
+    setLastRefreshedAt(new Date().toLocaleString())
+    toast.success('已刷新订单状态')
+    setRefreshingTarget(null)
+  }
+
+  const handleRefreshOne = async (orderNo: string) => {
+    const target = String(orderNo || '').trim()
+    if (!target) return
+    setRefreshingTarget(target)
+    const res = await listQuery.refetch()
+    if (res.error) {
+      toast.error(getApiErrorMessage(res.error, '刷新失败，请稍后重试'))
+      setRefreshingTarget(null)
+      return
+    }
+    if (detailOrderNo && detailOrderNo === target) {
+      const detailRes = await detailQuery.refetch()
+      if (detailRes.error) {
+        toast.error(getApiErrorMessage(detailRes.error, '订单详情刷新失败'))
+      }
+    }
+    setLastRefreshedAt(new Date().toLocaleString())
+    toast.success('已刷新订单状态')
+    setRefreshingTarget(null)
   }
 
   const openDetail = (orderNo: string) => {
@@ -203,28 +324,28 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
     )
   }
 
-  if (listQuery.isLoading && items.length === 0) {
-    return <Loading text="加载中..." tone={actualTheme} />
-  }
-
   return (
     <div className={embedded ? 'space-y-6' : 'space-y-10'}>
       {embedded ? null : (
         <PageHeader
           eyebrow="订单"
           title="我的订单"
-          description="查看订单状态、支付或取消"
+          description={
+            lastRefreshedAt
+              ? `查看订单状态、支付或取消 · 最近更新 ${lastRefreshedAt}`
+              : '查看订单状态、支付或取消'
+          }
           layout="mdStart"
           tone={actualTheme}
           right={
             <Button
               variant="outline"
-              onClick={() => listQuery.refetch()}
-              disabled={listQuery.isFetching}
+              icon={RefreshCw}
+              isLoading={refreshingTarget === '__all__'}
+              loadingText="刷新中..."
+              onClick={() => void handleRefreshStatus()}
+              disabled={listQuery.isFetching || refreshingTarget != null}
             >
-              <RefreshCw
-                className={`h-4 w-4 mr-2 ${listQuery.isFetching ? 'animate-spin' : ''}`}
-              />
               刷新
             </Button>
           }
@@ -237,12 +358,12 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
             <Button
               variant="outline"
               size="sm"
-              onClick={() => listQuery.refetch()}
-              disabled={listQuery.isFetching}
+              icon={RefreshCw}
+              isLoading={refreshingTarget === '__all__'}
+              loadingText="刷新中..."
+              onClick={() => void handleRefreshStatus()}
+              disabled={listQuery.isFetching || refreshingTarget != null}
             >
-              <RefreshCw
-                className={`h-4 w-4 mr-2 ${listQuery.isFetching ? 'animate-spin' : ''}`}
-              />
               刷新
             </Button>
           </div>
@@ -262,14 +383,23 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
           </Button>
         </div>
 
-        {items.length === 0 ? (
+        {listQuery.isLoading && items.length === 0 ? (
+          <ListSkeleton count={4} />
+        ) : items.length === 0 ? (
           <EmptyState icon={FileText} title="暂无订单" description="你的订单会显示在这里" tone={actualTheme} />
         ) : (
           <div className="space-y-4">
             {items.map((o) => {
               const status = String(o.status || '')
-              const canPay = status.toLowerCase() === 'pending'
-              const canCancel = status.toLowerCase() === 'pending'
+              const statusLower = status.toLowerCase()
+              const canPay = statusLower === 'pending' || statusLower === 'failed'
+              const canCancel = statusLower === 'pending'
+              const hint = orderStatusToHint(status)
+              const nextStep = orderTypeToNextStep(o.order_type)
+              const balancePayLoading = balancePayMutation.isPending && activeBalancePayOrderNo === o.order_no
+              const alipayLoading = alipayMutation.isPending && activeAlipayOrderNo === o.order_no
+              const cancelLoading = cancelMutation.isPending && activeCancelOrderNo === o.order_no
+              const rowBusy = actionBusy && !(balancePayLoading || alipayLoading || cancelLoading)
               return (
                 <Card key={o.order_no} variant="surface" padding="md" className="border border-slate-200/70 dark:border-white/10">
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -280,6 +410,7 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
                           {orderStatusToLabel(status)}
                         </Badge>
                       </div>
+                      <div className="mt-1 text-xs text-slate-500 dark:text-white/50">{hint.description}</div>
                       <div className="mt-2 space-y-1 text-sm text-slate-600 dark:text-white/60">
                         <div>订单号：{o.order_no}</div>
                         <div>金额：{fmtMoney(o.actual_amount)}</div>
@@ -293,25 +424,40 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
                       <Button variant="outline" size="sm" icon={Eye} onClick={() => openDetail(o.order_no)}>
                         详情
                       </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        icon={RefreshCw}
+                        isLoading={refreshingTarget === o.order_no}
+                        loadingText="刷新中..."
+                        disabled={refreshingTarget != null}
+                        onClick={() => void handleRefreshOne(o.order_no)}
+                      >
+                        刷新状态
+                      </Button>
                       {canPay ? (
                         <>
                           <Button
                             variant="primary"
                             size="sm"
                             icon={CreditCard}
-                            isLoading={balancePayMutation.isPending}
+                            isLoading={balancePayLoading}
+                            loadingText="支付中..."
+                            disabled={rowBusy || balancePayLoading}
                             onClick={() => handleBalancePay(o.order_no)}
                           >
-                            余额支付
+                            {statusLower === 'failed' ? '重新余额支付' : '余额支付'}
                           </Button>
                           <Button
                             variant="outline"
                             size="sm"
                             icon={ExternalLink}
-                            isLoading={alipayMutation.isPending}
+                            isLoading={alipayLoading}
+                            loadingText="获取中..."
+                            disabled={rowBusy || alipayLoading}
                             onClick={() => handleAlipayPay(o.order_no)}
                           >
-                            支付宝支付
+                            {statusLower === 'failed' ? '重新支付宝支付' : '支付宝支付'}
                           </Button>
                         </>
                       ) : null}
@@ -320,11 +466,29 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
                           variant="danger"
                           size="sm"
                           icon={XCircle}
-                          isLoading={cancelMutation.isPending}
+                          isLoading={cancelLoading}
+                          loadingText="取消中..."
+                          disabled={rowBusy || cancelLoading}
                           onClick={() => handleCancel(o.order_no)}
                         >
                           取消
                         </Button>
+                      ) : null}
+
+                      {statusLower === 'paid' && nextStep ? (
+                        <Link to={nextStep.to} className="w-full sm:w-auto">
+                          <Button variant="primary" size="sm" icon={ExternalLink}>
+                            {nextStep.label}
+                          </Button>
+                        </Link>
+                      ) : null}
+
+                      {(statusLower === 'cancelled' || statusLower === 'refunded') && nextStep ? (
+                        <Link to={nextStep.to} className="w-full sm:w-auto">
+                          <Button variant="outline" size="sm" icon={ExternalLink}>
+                            去重新下单
+                          </Button>
+                        </Link>
                       ) : null}
                     </div>
                   </div>
@@ -341,13 +505,33 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
 
       <Modal
         isOpen={detailOpen}
-        onClose={closeDetail}
+        onClose={() => {
+          if (actionBusy) return
+          closeDetail()
+        }}
         title="订单详情"
         description={detailOrderNo ? `订单号：${detailOrderNo}` : undefined}
         size="lg"
       >
         {detailQuery.isLoading ? (
-          <Loading text="加载中..." tone={actualTheme} />
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Skeleton width="56px" height="22px" />
+              <Skeleton width="220px" height="14px" />
+            </div>
+
+            <Card variant="surface" padding="md" className="border border-slate-200/70 dark:border-white/10">
+              <div className="space-y-2">
+                <Skeleton width="100%" height="14px" />
+                <Skeleton width="92%" height="14px" />
+                <Skeleton width="86%" height="14px" />
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Skeleton width="88px" height="32px" />
+                <Skeleton width="112px" height="32px" />
+              </div>
+            </Card>
+          </div>
         ) : detailQuery.isError ? (
           <EmptyState
             icon={FileText}
@@ -363,6 +547,93 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
               </Badge>
               <span className="text-sm text-slate-600 dark:text-white/60">{detailQuery.data.title}</span>
             </div>
+
+            <Card variant="surface" padding="md" className="border border-slate-200/70 dark:border-white/10">
+              <div className="text-sm text-slate-700 dark:text-white/70">
+                {orderStatusToHint(String(detailQuery.data.status || '')).description}
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  icon={RefreshCw}
+                  isLoading={detailQuery.isFetching}
+                  loadingText="刷新中..."
+                  disabled={detailQuery.isFetching}
+                  onClick={() => void handleRefreshStatus()}
+                >
+                  刷新状态
+                </Button>
+
+                {(() => {
+                  const detail = detailQuery.data
+                  if (!detail) return null
+                  const s = String(detail.status || '').toLowerCase()
+                  const canPay = s === 'pending' || s === 'failed'
+                  const canCancel = s === 'pending'
+                  const next = orderTypeToNextStep(detail.order_type)
+
+                  return (
+                    <>
+                      {canPay ? (
+                        <>
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            icon={CreditCard}
+                            isLoading={balancePayMutation.isPending && activeBalancePayOrderNo === detail.order_no}
+                            loadingText="支付中..."
+                            disabled={
+                              (actionBusy && activeBalancePayOrderNo !== detail.order_no) ||
+                              balancePayMutation.isPending
+                            }
+                            onClick={() => handleBalancePay(detail.order_no)}
+                          >
+                            {s === 'failed' ? '重新余额支付' : '余额支付'}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            icon={ExternalLink}
+                            isLoading={alipayMutation.isPending && activeAlipayOrderNo === detail.order_no}
+                            loadingText="获取中..."
+                            disabled={
+                              (actionBusy && activeAlipayOrderNo !== detail.order_no) ||
+                              alipayMutation.isPending
+                            }
+                            onClick={() => handleAlipayPay(detail.order_no)}
+                          >
+                            {s === 'failed' ? '重新支付宝支付' : '支付宝支付'}
+                          </Button>
+                        </>
+                      ) : null}
+                      {canCancel ? (
+                        <Button
+                          variant="danger"
+                          size="sm"
+                          icon={XCircle}
+                          isLoading={cancelMutation.isPending && activeCancelOrderNo === detail.order_no}
+                          loadingText="取消中..."
+                          disabled={
+                            (actionBusy && activeCancelOrderNo !== detail.order_no) || cancelMutation.isPending
+                          }
+                          onClick={() => handleCancel(detail.order_no)}
+                        >
+                          取消订单
+                        </Button>
+                      ) : null}
+                      {s === 'paid' && next ? (
+                        <Link to={next.to}>
+                          <Button variant="primary" size="sm" icon={ExternalLink}>
+                            {next.label}
+                          </Button>
+                        </Link>
+                      ) : null}
+                    </>
+                  )
+                })()}
+              </div>
+            </Card>
 
             <Card variant="surface" padding="md" className="border border-slate-200/70 dark:border-white/10">
               <div className="space-y-2 text-sm text-slate-700 dark:text-white/70">

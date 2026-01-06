@@ -4,7 +4,7 @@
 
 版本：v1.1
 
-更新时间：2026-01-06
+更新时间：2026-01-07
 
 适用对象：甲方研发/运维/安全/测试工程师
 
@@ -447,12 +447,14 @@
 E2E 注意事项（常见失败原因）：
 
 - 前端 `AuthContext` 会校验 `localStorage.token` 必须为可解码且未过期的 JWT；否则会清理 token 并重定向到 `/login`。
-  - 在纯前端 mock（`page.route`）类用例中，请使用测试工具函数生成伪 JWT：`frontend/tests/e2e/helpers.ts`：`makeE2eJwt()`。
+- 在纯前端 mock（`page.route`）类用例中，请使用测试工具函数生成伪 JWT：`frontend/tests/e2e/helpers.ts`：`makeE2eJwt()`。
 - `/admin/settings` 默认 tab 为 `base`，部分运维卡片只在 `AI 咨询` / `新闻 AI` tab 渲染；E2E 断言前需先切 tab。
 - 热门新闻榜单为排序 + limit 场景，E2E 通过 DEBUG 管理接口一次性准备数据：`POST /api/news/admin/{news_id}/debug/set-view-count`（仅 `debug=true` 可用）。
 - 移动端底部导航与“更多”弹层入口随导航结构调整：论坛入口在底部导航，工具类（如日历）在“更多”弹层。
 
-最新一次回归结果（2026-01-06）：后端 pytest 95 passed；Playwright E2E `76 passed, 0 failed`；pyright / basedpyright `0 errors/warnings`。
+最新一次全量回归结果（2026-01-06）：后端 pytest 95 passed；Playwright E2E `76 passed, 0 failed`；pyright / basedpyright `0 errors/warnings`。
+
+增量验证（2026-01-07，本次变更）：前端 `npm run build` OK；Playwright（admin UI feedback 冒烟）`frontend/tests/e2e/admin-ui-feedback.spec.ts` 7 passed。
 
 ---
 
@@ -461,8 +463,6 @@ E2E 注意事项（常见失败原因）：
 - **生产环境周期任务不跑**
 
   - 检查 `DEBUG=false` 时是否配置了可用 `REDIS_URL`。
-
-- **AI/News AI 不生效**
 
   - 检查 `OPENAI_API_KEY` 是否通过环境变量注入。
   - News AI pipeline 需 `NEWS_AI_ENABLED=true`。

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, Search, Trash2, XCircle } from "lucide-react";
+import { Check, RotateCcw, Search, Trash2, XCircle } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import api from "../../api/client";
 import { useAppMutation, useToast } from "../../hooks";
@@ -14,9 +14,8 @@ import {
   Modal,
   ModalActions,
   Textarea,
-  Loading,
+  ListSkeleton,
 } from "../../components/ui";
-import { useTheme } from "../../contexts/ThemeContext";
 
 interface CommentAuthor {
   id: number;
@@ -108,7 +107,6 @@ function getStatusBadgeVariant(
 
 export default function NewsCommentsManagePage() {
   const toast = useToast();
-  const { actualTheme } = useTheme();
   const queryClient = useQueryClient();
 
   const [page, setPage] = useState(1);
@@ -179,6 +177,19 @@ export default function NewsCommentsManagePage() {
     useState<ReasonModalTarget | null>(null);
   const [reasonTemplateDraft, setReasonTemplateDraft] = useState("");
   const [reasonDraft, setReasonDraft] = useState("");
+  const [activeAction, setActiveAction] = useState<
+    | {
+        id?: number;
+        kind:
+          | "approve"
+          | "reject"
+          | "delete"
+          | "batch-approve"
+          | "batch-reject"
+          | "batch-delete";
+      }
+    | null
+  >(null);
 
   const closeReasonModal = () => {
     setReasonModalOpen(false);
@@ -205,11 +216,19 @@ export default function NewsCommentsManagePage() {
       });
     },
     errorMessageFallback: "操作失败，请稍后重试",
+    onMutate: async (payload) => {
+      setActiveAction({ id: payload.commentId, kind: payload.action });
+    },
     onSuccess: async () => {
       closeReasonModal();
       await queryClient.invalidateQueries({
         queryKey: ["admin-news-comments"],
       });
+    },
+    onSettled: (_data, _err, payload) => {
+      setActiveAction((prev) =>
+        prev && prev.id === payload?.commentId ? null : prev
+      );
     },
   });
 
@@ -226,6 +245,9 @@ export default function NewsCommentsManagePage() {
       return res.data as BatchReviewResponse;
     },
     errorMessageFallback: "操作失败，请稍后重试",
+    onMutate: async (payload) => {
+      setActiveAction({ kind: `batch-${payload.action}` as any });
+    },
     onSuccess: async (data) => {
       closeReasonModal();
       setSelectedIds(new Set());
@@ -234,7 +256,14 @@ export default function NewsCommentsManagePage() {
         queryKey: ["admin-news-comments"],
       });
     },
+    onSettled: (_data, _err, payload) => {
+      setActiveAction((prev) =>
+        prev && prev.kind === `batch-${payload?.action}` ? null : prev
+      );
+    },
   });
+
+  const actionBusy = reviewMutation.isPending || batchReviewMutation.isPending;
 
   const handleReview = (commentId: number, action: ReviewAction) => {
     if (reviewMutation.isPending) return;
@@ -306,6 +335,19 @@ export default function NewsCommentsManagePage() {
             审核与管理新闻评论
           </p>
         </div>
+        <Button
+          variant="outline"
+          icon={RotateCcw}
+          isLoading={listQuery.isFetching}
+          loadingText="刷新中..."
+          disabled={listQuery.isFetching || actionBusy}
+          onClick={() => {
+            if (actionBusy) return;
+            listQuery.refetch();
+          }}
+        >
+          刷新
+        </Button>
       </div>
 
       <Card variant="surface" padding="md">
@@ -316,19 +358,23 @@ export default function NewsCommentsManagePage() {
                 icon={Search}
                 value={keyword}
                 onChange={(e) => {
+                  if (actionBusy) return;
                   setKeyword(e.target.value);
                   setPage(1);
                 }}
                 placeholder="搜索评论内容..."
+                disabled={actionBusy}
               />
             </div>
 
             <select
               value={reviewStatus}
               onChange={(e) => {
+                if (actionBusy) return;
                 setReviewStatus(e.target.value);
                 setPage(1);
               }}
+              disabled={actionBusy}
               className="px-4 py-2 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
             >
               <option value="pending">待审核</option>
@@ -342,17 +388,19 @@ export default function NewsCommentsManagePage() {
                 type="checkbox"
                 checked={includeDeleted}
                 onChange={(e) => {
+                  if (actionBusy) return;
                   setIncludeDeleted(e.target.checked);
                   setPage(1);
                 }}
+                disabled={actionBusy}
               />
               包含已删除
             </label>
           </div>
         </div>
 
-        {listQuery.isLoading ? (
-          <Loading text="加载中..." tone={actualTheme} />
+        {listQuery.isLoading && items.length === 0 ? (
+          <ListSkeleton count={6} />
         ) : (
           <>
             <div className="flex items-center justify-between mb-4">
@@ -366,10 +414,14 @@ export default function NewsCommentsManagePage() {
                   data-testid="admin-news-comment-batch-approve"
                   aria-label="admin-news-comment-batch-approve"
                   onClick={() => handleBatchReview("approve")}
+                  isLoading={
+                    batchReviewMutation.isPending &&
+                    activeAction?.kind === "batch-approve"
+                  }
+                  loadingText="处理中..."
                   disabled={
                     selectedIds.size === 0 ||
-                    batchReviewMutation.isPending ||
-                    reviewMutation.isPending
+                    actionBusy
                   }
                 >
                   批量通过
@@ -380,10 +432,14 @@ export default function NewsCommentsManagePage() {
                   data-testid="admin-news-comment-batch-reject"
                   aria-label="admin-news-comment-batch-reject"
                   onClick={() => handleBatchReview("reject")}
+                  isLoading={
+                    batchReviewMutation.isPending &&
+                    activeAction?.kind === "batch-reject"
+                  }
+                  loadingText="处理中..."
                   disabled={
                     selectedIds.size === 0 ||
-                    batchReviewMutation.isPending ||
-                    reviewMutation.isPending
+                    actionBusy
                   }
                 >
                   批量驳回
@@ -395,10 +451,14 @@ export default function NewsCommentsManagePage() {
                   data-testid="admin-news-comment-batch-delete"
                   aria-label="admin-news-comment-batch-delete"
                   onClick={() => handleBatchReview("delete")}
+                  isLoading={
+                    batchReviewMutation.isPending &&
+                    activeAction?.kind === "batch-delete"
+                  }
+                  loadingText="处理中..."
                   disabled={
                     selectedIds.size === 0 ||
-                    batchReviewMutation.isPending ||
-                    reviewMutation.isPending
+                    actionBusy
                   }
                 >
                   批量删除
@@ -415,7 +475,9 @@ export default function NewsCommentsManagePage() {
                         data-testid="admin-news-comment-select-all"
                         aria-label="admin-news-comment-select-all"
                         checked={items.length > 0 && items.every((x) => selectedIds.has(x.id))}
+                        disabled={actionBusy}
                         onChange={() => {
+                          if (actionBusy) return;
                           const ids = items.map((x) => x.id);
                           setSelectedIds((prev) => {
                             const next = new Set(prev);
@@ -459,6 +521,21 @@ export default function NewsCommentsManagePage() {
                       const newsTitle = c.news?.title || `新闻 #${c.news_id}`;
                       const content = String(c.content || "");
 
+                      const approveLoading =
+                        reviewMutation.isPending &&
+                        activeAction?.id === c.id &&
+                        activeAction?.kind === "approve";
+                      const rejectLoading =
+                        reviewMutation.isPending &&
+                        activeAction?.id === c.id &&
+                        activeAction?.kind === "reject";
+                      const deleteLoading =
+                        reviewMutation.isPending &&
+                        activeAction?.id === c.id &&
+                        activeAction?.kind === "delete";
+                      const disableOther = actionBusy && activeAction?.id !== c.id;
+                      const rowBusy = actionBusy && activeAction?.id === c.id;
+
                       return (
                         <tr
                           key={c.id}
@@ -471,7 +548,9 @@ export default function NewsCommentsManagePage() {
                               data-testid={`admin-news-comment-select-${c.id}`}
                               aria-label={`admin-news-comment-select-${c.id}`}
                               checked={selectedIds.has(c.id)}
+                              disabled={actionBusy}
                               onChange={() => {
+                                if (actionBusy) return;
                                 setSelectedIds((prev) => {
                                   const next = new Set(prev);
                                   if (next.has(c.id)) next.delete(c.id);
@@ -522,14 +601,13 @@ export default function NewsCommentsManagePage() {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                className="p-2"
+                                className={approveLoading ? "px-3 py-2" : "p-2"}
                                 title="通过"
                                 aria-label={`admin-news-comment-approve-${c.id}`}
                                 data-testid={`admin-news-comment-approve-${c.id}`}
-                                disabled={
-                                  reviewMutation.isPending ||
-                                  batchReviewMutation.isPending
-                                }
+                                isLoading={approveLoading}
+                                loadingText="处理中..."
+                                disabled={(rowBusy && !approveLoading) || disableOther}
                                 onClick={() => handleReview(c.id, "approve")}
                               >
                                 <Check className="h-4 w-4" />
@@ -537,14 +615,13 @@ export default function NewsCommentsManagePage() {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                className="p-2"
+                                className={rejectLoading ? "px-3 py-2" : "p-2"}
                                 title="驳回"
                                 aria-label={`admin-news-comment-reject-${c.id}`}
                                 data-testid={`admin-news-comment-reject-${c.id}`}
-                                disabled={
-                                  reviewMutation.isPending ||
-                                  batchReviewMutation.isPending
-                                }
+                                isLoading={rejectLoading}
+                                loadingText="处理中..."
+                                disabled={(rowBusy && !rejectLoading) || disableOther}
                                 onClick={() => handleReview(c.id, "reject")}
                               >
                                 <XCircle className="h-4 w-4" />
@@ -552,14 +629,13 @@ export default function NewsCommentsManagePage() {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                className="p-2 text-red-400 hover:text-red-300"
+                                className={`${deleteLoading ? 'px-3 py-2' : 'p-2'} text-red-400 hover:text-red-300`}
                                 title="删除"
                                 aria-label={`admin-news-comment-delete-${c.id}`}
                                 data-testid={`admin-news-comment-delete-${c.id}`}
-                                disabled={
-                                  reviewMutation.isPending ||
-                                  batchReviewMutation.isPending
-                                }
+                                isLoading={deleteLoading}
+                                loadingText="处理中..."
+                                disabled={(rowBusy && !deleteLoading) || disableOther}
                                 onClick={() => handleReview(c.id, "delete")}
                               >
                                 <Trash2 className="h-4 w-4" />
@@ -577,7 +653,10 @@ export default function NewsCommentsManagePage() {
             <Pagination
               currentPage={page}
               totalPages={totalPages}
-              onPageChange={(p) => setPage(Math.max(1, p))}
+              onPageChange={(p) => {
+                if (actionBusy) return;
+                setPage(Math.max(1, p));
+              }}
               className="mt-6"
             />
           </>
@@ -586,7 +665,10 @@ export default function NewsCommentsManagePage() {
 
       <Modal
         isOpen={reasonModalOpen}
-        onClose={closeReasonModal}
+        onClose={() => {
+          if (actionBusy) return;
+          closeReasonModal();
+        }}
         title={modalTitle}
         description={modalDescription}
       >
@@ -628,6 +710,7 @@ export default function NewsCommentsManagePage() {
               onChange={(e) => setReasonDraft(e.target.value)}
               rows={4}
               placeholder="可填写驳回/删除原因（将同步通知给用户）"
+              disabled={actionBusy}
             />
           </div>
 
@@ -635,21 +718,17 @@ export default function NewsCommentsManagePage() {
             <Button
               variant="ghost"
               onClick={closeReasonModal}
-              disabled={
-                reviewMutation.isPending || batchReviewMutation.isPending
-              }
+              disabled={actionBusy}
             >
               取消
             </Button>
             <Button
               onClick={handleConfirmReasonModal}
-              disabled={
-                reviewMutation.isPending || batchReviewMutation.isPending
-              }
+              isLoading={actionBusy}
+              loadingText="处理中..."
+              disabled={actionBusy}
             >
-              {reviewMutation.isPending || batchReviewMutation.isPending
-                ? "处理中..."
-                : "确认"}
+              确认
             </Button>
           </ModalActions>
         </div>

@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Calendar,
   CreditCard,
   ExternalLink,
   MessageSquareText,
+  RotateCcw,
   Star,
   XCircle,
 } from "lucide-react";
@@ -14,8 +15,9 @@ import {
   Button,
   Card,
   EmptyState,
-  Loading,
   Pagination,
+  ListSkeleton,
+  Skeleton,
 } from "../components/ui";
 import api from "../api/client";
 import LawyerConsultationMessagesModal from "../components/LawyerConsultationMessagesModal";
@@ -102,6 +104,7 @@ export default function LawFirmConsultationsPage({
   const { isAuthenticated } = useAuth();
   const { actualTheme } = useTheme();
   const toast = useToast();
+  const queryClient = useQueryClient();
 
   const [page, setPage] = useState(1);
   const pageSize = 20;
@@ -149,13 +152,44 @@ export default function LawFirmConsultationsPage({
     );
   }, [listQuery.error, toast]);
 
-  const cancelMutation = useAppMutation<unknown, number>({
+  const [activeCancelId, setActiveCancelId] = useState<number | null>(null);
+  const [activePayOrderNo, setActivePayOrderNo] = useState<string | null>(null);
+  const [activeAlipayOrderNo, setActiveAlipayOrderNo] = useState<string | null>(null);
+
+  const cancelMutation = useAppMutation<
+    unknown,
+    number,
+    { previous?: ConsultationListResponse }
+  >({
     mutationFn: async (id) => {
       await api.post(`/lawfirm/consultations/${id}/cancel`);
     },
     successMessage: "已取消预约",
     errorMessageFallback: "取消失败，请稍后重试",
     invalidateQueryKeys: [queryKeys.lawFirmConsultationsBase()],
+    onMutate: async (id) => {
+      setActiveCancelId(id);
+      const previous = queryClient.getQueryData<ConsultationListResponse>(queryKey);
+      queryClient.setQueryData<ConsultationListResponse>(queryKey, (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          items: (old.items ?? []).map((c) =>
+            c.id === id ? { ...c, status: "cancelled" } : c
+          ),
+        };
+      });
+      return { previous };
+    },
+    onError: (err, _id, ctx) => {
+      if (ctx?.previous) {
+        queryClient.setQueryData(queryKey, ctx.previous);
+      }
+      return err as any;
+    },
+    onSettled: (_data, _err, id) => {
+      setActiveCancelId((prev) => (prev === id ? null : prev));
+    },
   });
 
   const alipayMutation = useAppMutation<ThirdPartyPayResponse, string>({
@@ -169,6 +203,9 @@ export default function LawFirmConsultationsPage({
       return (res.data || {}) as ThirdPartyPayResponse;
     },
     errorMessageFallback: "获取支付链接失败，请稍后重试",
+    onMutate: async (orderNo) => {
+      setActiveAlipayOrderNo(orderNo);
+    },
     onSuccess: (data) => {
       const url = String(data?.pay_url || "").trim();
       if (!url) {
@@ -178,9 +215,16 @@ export default function LawFirmConsultationsPage({
       window.open(url, "_blank", "noopener,noreferrer");
       toast.success("已打开支付宝支付页面");
     },
+    onSettled: (_data, _err, orderNo) => {
+      setActiveAlipayOrderNo((prev) => (prev === orderNo ? null : prev));
+    },
   });
 
-  const payMutation = useAppMutation<unknown, string>({
+  const payMutation = useAppMutation<
+    unknown,
+    string,
+    { previous?: ConsultationListResponse }
+  >({
     mutationFn: async (orderNo) => {
       await api.post(`/payment/orders/${encodeURIComponent(orderNo)}/pay`, {
         payment_method: "balance",
@@ -189,25 +233,54 @@ export default function LawFirmConsultationsPage({
     successMessage: "支付成功，等待律师确认",
     errorMessageFallback: "支付失败，请稍后重试",
     invalidateQueryKeys: [queryKeys.lawFirmConsultationsBase()],
+    onMutate: async (orderNo) => {
+      setActivePayOrderNo(orderNo);
+      const previous = queryClient.getQueryData<ConsultationListResponse>(queryKey);
+      queryClient.setQueryData<ConsultationListResponse>(queryKey, (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          items: (old.items ?? []).map((c) =>
+            String(c.payment_order_no || "").trim() === orderNo
+              ? { ...c, payment_status: "paid" }
+              : c
+          ),
+        };
+      });
+      return { previous };
+    },
+    onError: (err, _orderNo, ctx) => {
+      if (ctx?.previous) {
+        queryClient.setQueryData(queryKey, ctx.previous);
+      }
+      return err as any;
+    },
+    onSettled: (_data, _err, orderNo) => {
+      setActivePayOrderNo((prev) => (prev === orderNo ? null : prev));
+    },
   });
 
   const handleCancel = (id: number) => {
     if (!confirm("确定要取消这条预约吗？")) return;
+    if (cancelMutation.isPending || payMutation.isPending || alipayMutation.isPending) return;
     cancelMutation.mutate(id);
   };
 
   const handlePay = (orderNo: string) => {
     if (!orderNo) return;
     if (!confirm("确定使用余额支付该订单吗？")) return;
-    if (payMutation.isPending) return;
+    if (cancelMutation.isPending || payMutation.isPending || alipayMutation.isPending) return;
     payMutation.mutate(orderNo);
   };
 
   const handleAlipay = (orderNo: string) => {
     if (!orderNo) return;
-    if (alipayMutation.isPending) return;
+    if (cancelMutation.isPending || payMutation.isPending || alipayMutation.isPending) return;
     alipayMutation.mutate(orderNo);
   };
+
+  const actionBusy =
+    cancelMutation.isPending || payMutation.isPending || alipayMutation.isPending;
 
   const items = listQuery.data?.items ?? [];
   const total = listQuery.data?.total ?? 0;
@@ -239,7 +312,39 @@ export default function LawFirmConsultationsPage({
   }
 
   if (listQuery.isLoading && items.length === 0) {
-    return <Loading text="加载中..." tone={actualTheme} />;
+    return (
+      <div className={embedded ? "space-y-6" : "space-y-10"}>
+        {embedded ? null : (
+          <PageHeader
+            eyebrow="律所"
+            title="我的律师预约"
+            description="查看预约状态、取消未完成的预约"
+            layout="mdStart"
+            tone={actualTheme}
+            right={
+              <Button
+                variant="outline"
+                size="sm"
+                icon={RotateCcw}
+                isLoading
+                loadingText="刷新中..."
+                disabled
+              >
+                刷新
+              </Button>
+            }
+          />
+        )}
+
+        <Card variant="surface" padding="lg">
+          <div className="flex items-center justify-between mb-4">
+            <Skeleton width="120px" height="18px" />
+            <Skeleton width="90px" height="32px" />
+          </div>
+          <ListSkeleton count={3} />
+        </Card>
+      </div>
+    );
   }
 
   return (
@@ -251,6 +356,22 @@ export default function LawFirmConsultationsPage({
           description="查看预约状态、取消未完成的预约"
           layout="mdStart"
           tone={actualTheme}
+          right={
+            <Button
+              variant="outline"
+              size="sm"
+              icon={RotateCcw}
+              isLoading={listQuery.isFetching}
+              loadingText="刷新中..."
+              disabled={listQuery.isFetching || actionBusy}
+              onClick={() => {
+                if (actionBusy) return;
+                listQuery.refetch();
+              }}
+            >
+              刷新
+            </Button>
+          }
         />
       )}
 
@@ -273,6 +394,18 @@ export default function LawFirmConsultationsPage({
                 .trim()
                 .toLowerCase();
               const needPay = !!orderNo && payStatus === "pending";
+
+              const cancelLoading = cancelMutation.isPending && activeCancelId === c.id;
+              const payLoading = payMutation.isPending && activePayOrderNo === orderNo;
+              const alipayLoading = alipayMutation.isPending && activeAlipayOrderNo === orderNo;
+
+              const rowActive = cancelLoading || payLoading || alipayLoading;
+              const rowBusy = actionBusy && rowActive;
+              const disableOther = actionBusy && !rowActive;
+
+              const cancelDisabled = disableOther || (rowBusy && !cancelLoading) || cancelLoading;
+              const payDisabled = disableOther || (rowBusy && !payLoading) || payLoading;
+              const alipayDisabled = disableOther || (rowBusy && !alipayLoading) || alipayLoading;
 
               const canReview = Boolean(c.can_review);
               const reviewed = !!c.review_id && !canReview;
@@ -333,10 +466,12 @@ export default function LawFirmConsultationsPage({
                         size="sm"
                         icon={MessageSquareText}
                         onClick={() => {
+                          if (actionBusy) return;
                           setMessagesConsultationId(c.id);
                           setMessagesTitle(`沟通：${c.subject}`);
                           setMessagesOpen(true);
                         }}
+                        disabled={actionBusy}
                       >
                         沟通
                       </Button>
@@ -347,11 +482,13 @@ export default function LawFirmConsultationsPage({
                           size="sm"
                           icon={Star}
                           onClick={() => {
+                            if (actionBusy) return;
                             setReviewConsultationId(c.id);
                             setReviewLawyerId(c.lawyer_id);
                             setReviewTitle(`评价：${c.lawyer_name ? c.lawyer_name : `#${c.lawyer_id}`}`);
                             setReviewOpen(true);
                           }}
+                          disabled={actionBusy}
                         >
                           评价
                         </Button>
@@ -361,8 +498,10 @@ export default function LawFirmConsultationsPage({
                           size="sm"
                           icon={Star}
                           onClick={() => {
+                            if (actionBusy) return;
                             window.location.href = `/lawfirm/lawyers/${c.lawyer_id}`;
                           }}
+                          disabled={actionBusy}
                         >
                           已评价
                         </Button>
@@ -373,8 +512,13 @@ export default function LawFirmConsultationsPage({
                             variant="primary"
                             size="sm"
                             icon={CreditCard}
-                            isLoading={payMutation.isPending}
-                            onClick={() => handlePay(orderNo)}
+                            isLoading={payLoading}
+                            loadingText="支付中..."
+                            disabled={payDisabled}
+                            onClick={() => {
+                              if (actionBusy && !payLoading) return;
+                              handlePay(orderNo);
+                            }}
                           >
                             余额支付
                           </Button>
@@ -382,8 +526,13 @@ export default function LawFirmConsultationsPage({
                             variant="outline"
                             size="sm"
                             icon={ExternalLink}
-                            isLoading={alipayMutation.isPending}
-                            onClick={() => handleAlipay(orderNo)}
+                            isLoading={alipayLoading}
+                            loadingText="获取中..."
+                            disabled={alipayDisabled}
+                            onClick={() => {
+                              if (actionBusy && !alipayLoading) return;
+                              handleAlipay(orderNo);
+                            }}
                           >
                             支付宝支付
                           </Button>
@@ -394,8 +543,13 @@ export default function LawFirmConsultationsPage({
                           variant="danger"
                           size="sm"
                           icon={XCircle}
-                          isLoading={cancelMutation.isPending}
-                          onClick={() => handleCancel(c.id)}
+                          isLoading={cancelLoading}
+                          loadingText="取消中..."
+                          disabled={cancelDisabled}
+                          onClick={() => {
+                            if (actionBusy && !cancelLoading) return;
+                            handleCancel(c.id);
+                          }}
                         >
                           取消
                         </Button>
@@ -410,7 +564,10 @@ export default function LawFirmConsultationsPage({
               <Pagination
                 currentPage={page}
                 totalPages={totalPages}
-                onPageChange={setPage}
+                onPageChange={(p) => {
+                  if (actionBusy) return;
+                  setPage(p);
+                }}
               />
             </div>
           </div>

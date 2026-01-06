@@ -23,15 +23,15 @@ import {
   Badge,
   FadeInImage,
   Modal,
-  Loading,
   Pagination,
   ModalActions,
   Textarea,
+  ListSkeleton,
+  Skeleton,
 } from "../../components/ui";
 import { useQuery } from "@tanstack/react-query";
 import api from "../../api/client";
 import { useAppMutation, useToast } from "../../hooks";
-import { useTheme } from "../../contexts/ThemeContext";
 import { getApiErrorMessage } from "../../utils";
 import RichTextEditor from "../../components/RichTextEditor";
 import MarkdownContent from "../../components/MarkdownContent";
@@ -254,7 +254,6 @@ interface NewsAdminListResponse {
 }
 
 export default function NewsManagePage() {
-  const { actualTheme } = useTheme();
   const [keyword, setKeyword] = useState("");
   const [page, setPage] = useState(1);
   const pageSize = 20;
@@ -390,6 +389,14 @@ export default function NewsManagePage() {
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [batchAction, setBatchAction] = useState<NewsBatchAction>("publish");
 
+  const [activeRowAction, setActiveRowAction] = useState<
+    | {
+        id: number;
+        kind: "approve" | "reject" | "pending" | "top" | "publish" | "delete" | "rerunAi";
+      }
+    | null
+  >(null);
+
   const [showVersionsModal, setShowVersionsModal] = useState(false);
   const [showLinkCheckModal, setShowLinkCheckModal] = useState(false);
   const [showWorkbenchModal, setShowWorkbenchModal] = useState(false);
@@ -422,6 +429,14 @@ export default function NewsManagePage() {
     successMessage: "删除成功",
     errorMessageFallback: "删除失败，请稍后重试",
     invalidateQueryKeys: [newsQueryKey as any],
+    onMutate: async (id) => {
+      setActiveRowAction({ id, kind: "delete" });
+    },
+    onSettled: (_data, _err, id) => {
+      setActiveRowAction((prev) =>
+        prev && prev.kind === "delete" && prev.id === id ? null : prev
+      );
+    },
   });
 
   const togglePublishMutation = useAppMutation<
@@ -436,6 +451,9 @@ export default function NewsManagePage() {
     },
     errorMessageFallback: "操作失败，请稍后重试",
     invalidateQueryKeys: [newsQueryKey as any],
+    onMutate: async (payload) => {
+      setActiveRowAction({ id: payload.id, kind: "publish" });
+    },
     onSuccess: (res) => {
       const ok = Boolean((res as any)?.is_published);
       const rs = normalizeReviewStatus((res as any)?.review_status);
@@ -444,6 +462,11 @@ export default function NewsManagePage() {
         return;
       }
       toast.success(ok ? "已发布" : "已取消发布");
+    },
+    onSettled: (_data, _err, payload) => {
+      setActiveRowAction((prev) =>
+        prev && prev.kind === "publish" && prev.id === payload.id ? null : prev
+      );
     },
   });
 
@@ -709,6 +732,15 @@ export default function NewsManagePage() {
     },
     errorMessageFallback: "操作失败，请稍后重试",
     invalidateQueryKeys: [newsQueryKey as any],
+    onMutate: async (payload) => {
+      const action = String(payload.action || "").trim() as
+        | "approve"
+        | "reject"
+        | "pending";
+      if (action === "approve" || action === "reject" || action === "pending") {
+        setActiveRowAction({ id: payload.id, kind: action });
+      }
+    },
     onSuccess: (res, payload) => {
       closeReviewReasonModal();
       if (payload.action === "approve") toast.success("已通过审核");
@@ -718,6 +750,15 @@ export default function NewsManagePage() {
       if (payload.action === "approve" && Boolean((res as any)?.is_published)) {
         toast.success("审核通过并已发布");
       }
+    },
+    onSettled: (_data, _err, payload) => {
+      const action = String(payload.action || "").trim() as
+        | "approve"
+        | "reject"
+        | "pending";
+      setActiveRowAction((prev) =>
+        prev && prev.id === payload.id && prev.kind === action ? null : prev
+      );
     },
   });
 
@@ -730,8 +771,16 @@ export default function NewsManagePage() {
     },
     errorMessageFallback: "操作失败，请稍后重试",
     invalidateQueryKeys: [newsQueryKey as any],
+    onMutate: async (payload) => {
+      setActiveRowAction({ id: payload.id, kind: "top" });
+    },
     onSuccess: (_res, payload) => {
       toast.success(payload.is_top ? "已置顶" : "已取消置顶");
+    },
+    onSettled: (_data, _err, payload) => {
+      setActiveRowAction((prev) =>
+        prev && prev.kind === "top" && prev.id === payload.id ? null : prev
+      );
     },
   });
 
@@ -743,6 +792,9 @@ export default function NewsManagePage() {
     successMessage: "已触发重跑AI标注，请稍等后刷新查看结果",
     errorMessageFallback: "重跑失败，请稍后重试",
     invalidateQueryKeys: [newsQueryKey as any],
+    onMutate: async (payload) => {
+      setActiveRowAction({ id: payload.id, kind: "rerunAi" });
+    },
     onSuccess: async (_data, payload) => {
       if (editingId && editingId === payload.id) {
         try {
@@ -751,6 +803,11 @@ export default function NewsManagePage() {
           toast.error(getApiErrorMessage(e, "加载失败，请稍后重试"));
         }
       }
+    },
+    onSettled: (_data, _err, payload) => {
+      setActiveRowAction((prev) =>
+        prev && prev.kind === "rerunAi" && prev.id === payload.id ? null : prev
+      );
     },
   });
 
@@ -1196,8 +1253,8 @@ export default function NewsManagePage() {
           </select>
         </div>
 
-        {loading ? (
-          <Loading text="加载中..." tone={actualTheme} />
+        {loading && news.length === 0 ? (
+          <ListSkeleton count={6} />
         ) : loadError ? (
           <div className="flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
             <div>{loadError}</div>
@@ -1277,6 +1334,8 @@ export default function NewsManagePage() {
                   variant="outline"
                   size="sm"
                   onClick={handleBatchAction}
+                  isLoading={batchActionMutation.isPending}
+                  loadingText="执行中..."
                   disabled={
                     selectedIds.size === 0 ||
                     batchActionMutation.isPending ||
@@ -1284,7 +1343,7 @@ export default function NewsManagePage() {
                     reviewNewsMutation.isPending
                   }
                 >
-                  {batchActionMutation.isPending ? "执行中..." : "执行"}
+                  执行
                 </Button>
               </div>
             </div>
@@ -1462,24 +1521,61 @@ export default function NewsManagePage() {
                       </td>
                       <td className="py-4 px-4">
                         <div className="flex items-center justify-end gap-2">
+                          {(() => {
+                            const actionBusy =
+                              deleteMutation.isPending ||
+                              togglePublishMutation.isPending ||
+                              toggleTopMutation.isPending ||
+                              reviewNewsMutation.isPending ||
+                              batchReviewNewsMutation.isPending ||
+                              rerunAiMutation.isPending ||
+                              batchActionMutation.isPending;
+
+                            const approveLoading =
+                              reviewNewsMutation.isPending &&
+                              activeRowAction?.id === item.id &&
+                              activeRowAction?.kind === "approve";
+                            const topLoading =
+                              toggleTopMutation.isPending &&
+                              activeRowAction?.id === item.id &&
+                              activeRowAction?.kind === "top";
+                            const publishLoading =
+                              togglePublishMutation.isPending &&
+                              activeRowAction?.id === item.id &&
+                              activeRowAction?.kind === "publish";
+                            const deleteLoading =
+                              deleteMutation.isPending &&
+                              activeRowAction?.id === item.id &&
+                              activeRowAction?.kind === "delete";
+                            const rerunLoading =
+                              rerunAiMutation.isPending &&
+                              activeRowAction?.id === item.id &&
+                              activeRowAction?.kind === "rerunAi";
+
+                            const isActive = activeRowAction?.id === item.id;
+                            const rowBusy = actionBusy && isActive;
+                            const disableOther = actionBusy && !isActive;
+
+                            return (
+                              <>
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="p-2"
-                            onClick={() =>
+                            className={approveLoading ? "px-3 py-2" : "p-2"}
+                            onClick={() => {
+                              if (actionBusy) return;
                               reviewNewsMutation.mutate({
                                 id: item.id,
                                 action: "approve",
                                 reason: null,
-                              })
-                            }
+                              });
+                            }}
                             title="审核通过"
                             aria-label={`admin-news-approve-${item.id}`}
                             data-testid={`admin-news-approve-${item.id}`}
-                            disabled={
-                              reviewNewsMutation.isPending ||
-                              batchReviewNewsMutation.isPending
-                            }
+                            isLoading={approveLoading}
+                            loadingText="通过中..."
+                            disabled={(rowBusy && !approveLoading) || disableOther}
                           >
                             <Check className="h-4 w-4" />
                           </Button>
@@ -1497,10 +1593,7 @@ export default function NewsManagePage() {
                             title="审核驳回"
                             aria-label={`admin-news-reject-${item.id}`}
                             data-testid={`admin-news-reject-${item.id}`}
-                            disabled={
-                              reviewNewsMutation.isPending ||
-                              batchReviewNewsMutation.isPending
-                            }
+                            disabled={actionBusy}
                           >
                             <XCircle className="h-4 w-4" />
                           </Button>
@@ -1518,25 +1611,21 @@ export default function NewsManagePage() {
                             title="设为待审核"
                             aria-label={`admin-news-pending-${item.id}`}
                             data-testid={`admin-news-pending-${item.id}`}
-                            disabled={
-                              reviewNewsMutation.isPending ||
-                              batchReviewNewsMutation.isPending
-                            }
+                            disabled={actionBusy}
                           >
                             <Clock className="h-4 w-4" />
                           </Button>
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="p-2"
+                            className={topLoading ? "px-3 py-2" : "p-2"}
                             onClick={() => toggleTop(item.id, !!item.is_top)}
                             title={item.is_top ? "取消置顶" : "置顶"}
                             aria-label={`admin-news-toggle-top-${item.id}`}
                             data-testid={`admin-news-toggle-top-${item.id}`}
-                            disabled={
-                              reviewNewsMutation.isPending ||
-                              batchReviewNewsMutation.isPending
-                            }
+                            isLoading={topLoading}
+                            loadingText="处理中..."
+                            disabled={(rowBusy && !topLoading) || disableOther}
                           >
                             <Pin
                               className={`h-4 w-4 ${
@@ -1547,18 +1636,16 @@ export default function NewsManagePage() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="p-2"
+                            className={publishLoading ? "px-3 py-2" : "p-2"}
                             onClick={() =>
                               togglePublish(item.id, item.is_published)
                             }
                             title={item.is_published ? "取消发布" : "发布"}
                             aria-label={`admin-news-toggle-publish-${item.id}`}
                             data-testid={`admin-news-toggle-publish-${item.id}`}
-                            disabled={
-                              reviewNewsMutation.isPending ||
-                              batchReviewNewsMutation.isPending ||
-                              rerunAiMutation.isPending
-                            }
+                            isLoading={publishLoading}
+                            loadingText="处理中..."
+                            disabled={(rowBusy && !publishLoading) || disableOther}
                           >
                             {item.is_published ? (
                               <EyeOff className="h-4 w-4" />
@@ -1569,20 +1656,18 @@ export default function NewsManagePage() {
                           <Button
                             variant="outline"
                             size="sm"
-                            className="p-2 sm:px-3"
+                            className={rerunLoading ? "px-3 py-2" : "p-2 sm:px-3"}
                             title="重跑AI标注"
                             aria-label={`admin-news-ai-rerun-${item.id}`}
                             data-testid={`admin-news-ai-rerun-${item.id}`}
                             onClick={() => {
-                              if (rerunAiMutation.isPending) return;
+                              if (actionBusy) return;
                               if (!confirm("确认重跑该新闻的AI标注？")) return;
                               rerunAiMutation.mutate({ id: item.id });
                             }}
-                            disabled={
-                              reviewNewsMutation.isPending ||
-                              batchReviewNewsMutation.isPending ||
-                              rerunAiMutation.isPending
-                            }
+                            isLoading={rerunLoading}
+                            loadingText="重跑中..."
+                            disabled={(rowBusy && !rerunLoading) || disableOther}
                           >
                             <RotateCcw className="h-4 w-4" />
                             <span className="hidden sm:inline">重跑AI</span>
@@ -1595,28 +1680,27 @@ export default function NewsManagePage() {
                             aria-label={`admin-news-edit-${item.id}`}
                             data-testid={`admin-news-edit-${item.id}`}
                             onClick={() => openEdit(item.id)}
-                            disabled={
-                              reviewNewsMutation.isPending ||
-                              batchReviewNewsMutation.isPending
-                            }
+                            disabled={actionBusy}
                           >
                             <Edit className="h-4 w-4" />
                           </Button>
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="p-2 text-red-400 hover:text-red-300"
+                            className={`${deleteLoading ? 'px-3 py-2' : 'p-2'} text-red-400 hover:text-red-300`}
                             onClick={() => handleDelete(item.id)}
                             title="删除"
                             aria-label={`admin-news-delete-${item.id}`}
                             data-testid={`admin-news-delete-${item.id}`}
-                            disabled={
-                              reviewNewsMutation.isPending ||
-                              batchReviewNewsMutation.isPending
-                            }
+                            isLoading={deleteLoading}
+                            loadingText="删除中..."
+                            disabled={(rowBusy && !deleteLoading) || disableOther}
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
+                              </>
+                            );
+                          })()}
                         </div>
                       </td>
                     </tr>
@@ -1646,7 +1730,10 @@ export default function NewsManagePage() {
 
       <Modal
         isOpen={reviewReasonModalOpen}
-        onClose={closeReviewReasonModal}
+        onClose={() => {
+          if (reviewNewsMutation.isPending || batchReviewNewsMutation.isPending) return;
+          closeReviewReasonModal();
+        }}
         title={reviewTarget?.action === "pending" ? "设为待审核" : "驳回新闻"}
         description={
           reviewTarget?.action === "pending"
@@ -1662,6 +1749,9 @@ export default function NewsManagePage() {
             <Textarea
               value={reviewReasonDraft}
               onChange={(e) => setReviewReasonDraft(e.target.value)}
+              disabled={
+                reviewNewsMutation.isPending || batchReviewNewsMutation.isPending
+              }
               rows={4}
               placeholder="例如：来源不明 / 内容不准确 / 涉及敏感信息"
             />
@@ -1680,6 +1770,11 @@ export default function NewsManagePage() {
             <Button
               onClick={() => {
                 if (!reviewTarget) return;
+                if (
+                  reviewNewsMutation.isPending ||
+                  batchReviewNewsMutation.isPending
+                )
+                  return;
                 const reason = reviewReasonDraft.trim()
                   ? reviewReasonDraft.trim()
                   : null;
@@ -1697,16 +1792,17 @@ export default function NewsManagePage() {
                   reason,
                 });
               }}
+              isLoading={
+                reviewNewsMutation.isPending || batchReviewNewsMutation.isPending
+              }
+              loadingText="处理中..."
               disabled={
+                !reviewTarget ||
                 reviewNewsMutation.isPending ||
                 batchReviewNewsMutation.isPending
               }
             >
-              {reviewNewsMutation.isPending || batchReviewNewsMutation.isPending
-                ? "处理中..."
-                : reviewTarget?.action === "pending"
-                ? "确认设置"
-                : "确认驳回"}
+              {reviewTarget?.action === "pending" ? "确认设置" : "确认驳回"}
             </Button>
           </ModalActions>
         </div>
@@ -1714,7 +1810,10 @@ export default function NewsManagePage() {
 
       <Modal
         isOpen={showVersionsModal}
-        onClose={() => setShowVersionsModal(false)}
+        onClose={() => {
+          if (rollbackMutation.isPending) return;
+          setShowVersionsModal(false);
+        }}
         title="版本历史"
         description="查看历史快照并回滚"
         size="lg"
@@ -1722,7 +1821,13 @@ export default function NewsManagePage() {
       >
         <div className="space-y-4">
           {versionsQuery.isLoading ? (
-            <Loading text="加载中..." tone={actualTheme} />
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <Skeleton width="120px" height="14px" />
+                <Skeleton width="72px" height="28px" />
+              </div>
+              <ListSkeleton count={3} />
+            </div>
           ) : versionsQuery.isError ? (
             <div className="text-sm text-red-600 dark:text-red-300">
               {getApiErrorMessage(versionsQuery.error, "加载失败，请稍后重试")}
@@ -1771,9 +1876,11 @@ export default function NewsManagePage() {
                                 reason: rsn,
                               });
                             }}
+                            isLoading={rollbackMutation.isPending}
+                            loadingText="回滚中..."
                             disabled={rollbackMutation.isPending}
                           >
-                            {rollbackMutation.isPending ? "回滚中..." : "回滚"}
+                            回滚
                           </Button>
                         </div>
                       </div>
@@ -1792,6 +1899,8 @@ export default function NewsManagePage() {
       <Modal
         isOpen={showLinkCheckModal}
         onClose={() => {
+          if (linkCheckMutation.isPending || linkCheckFetchMutation.isPending)
+            return;
           setShowLinkCheckModal(false);
           setLinkCheckResult(null);
           setLinkCheckRunId("");
@@ -1807,12 +1916,18 @@ export default function NewsManagePage() {
               label="超时（秒）"
               value={linkCheckTimeoutSeconds}
               onChange={(e) => setLinkCheckTimeoutSeconds(e.target.value)}
+              disabled={
+                linkCheckMutation.isPending || linkCheckFetchMutation.isPending
+              }
               placeholder="6"
             />
             <Input
               label="最多链接数"
               value={linkCheckMaxUrls}
               onChange={(e) => setLinkCheckMaxUrls(e.target.value)}
+              disabled={
+                linkCheckMutation.isPending || linkCheckFetchMutation.isPending
+              }
               placeholder="50"
             />
             <div className="flex items-end justify-end gap-2">
@@ -1832,9 +1947,13 @@ export default function NewsManagePage() {
                     max_urls: Number.isFinite(m) ? m : 50,
                   });
                 }}
-                disabled={linkCheckMutation.isPending}
+                isLoading={linkCheckMutation.isPending}
+                loadingText="检查中..."
+                disabled={
+                  linkCheckMutation.isPending || linkCheckFetchMutation.isPending
+                }
               >
-                {linkCheckMutation.isPending ? "检查中..." : "开始检查"}
+                开始检查
               </Button>
             </div>
           </div>
@@ -1844,6 +1963,9 @@ export default function NewsManagePage() {
               label="run_id（可选）"
               value={linkCheckRunId}
               onChange={(e) => setLinkCheckRunId(e.target.value)}
+              disabled={
+                linkCheckMutation.isPending || linkCheckFetchMutation.isPending
+              }
               placeholder="粘贴 run_id 以加载历史结果"
             />
             <div className="flex items-end gap-2">
@@ -1854,11 +1976,15 @@ export default function NewsManagePage() {
                   if (!rid) return;
                   linkCheckFetchMutation.mutate({ run_id: rid });
                 }}
+                isLoading={linkCheckFetchMutation.isPending}
+                loadingText="获取中..."
                 disabled={
-                  linkCheckFetchMutation.isPending || !linkCheckRunId.trim()
+                  linkCheckMutation.isPending ||
+                  linkCheckFetchMutation.isPending ||
+                  !linkCheckRunId.trim()
                 }
               >
-                {linkCheckFetchMutation.isPending ? "加载中..." : "加载结果"}
+                加载结果
               </Button>
               {linkCheckResult?.run_id ? (
                 <Badge variant="info" size="sm">
@@ -1934,6 +2060,7 @@ export default function NewsManagePage() {
       <Modal
         isOpen={showWorkbenchModal}
         onClose={() => {
+          if (workbenchGenerateMutation.isPending) return;
           setShowWorkbenchModal(false);
           setWorkbenchOutput(null);
           setWorkbenchRaw("");
@@ -1953,6 +2080,7 @@ export default function NewsManagePage() {
                 className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none transition hover:border-slate-300 focus-visible:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white dark:hover:border-white/20 dark:focus-visible:ring-offset-slate-900"
                 value={workbenchTaskType}
                 onChange={(e) => setWorkbenchTaskType(e.target.value)}
+                disabled={workbenchGenerateMutation.isPending}
               >
                 <option value="rewrite">改写</option>
                 <option value="polish">润色</option>
@@ -1966,6 +2094,7 @@ export default function NewsManagePage() {
               label="风格（可选）"
               value={workbenchStyle}
               onChange={(e) => setWorkbenchStyle(e.target.value)}
+              disabled={workbenchGenerateMutation.isPending}
               placeholder="例如：简洁 / 口语化 / 严谨"
             />
           </div>
@@ -1974,12 +2103,14 @@ export default function NewsManagePage() {
               label="字数最小（可选）"
               value={workbenchWordMin}
               onChange={(e) => setWorkbenchWordMin(e.target.value)}
+              disabled={workbenchGenerateMutation.isPending}
               placeholder="800"
             />
             <Input
               label="字数最大（可选）"
               value={workbenchWordMax}
               onChange={(e) => setWorkbenchWordMax(e.target.value)}
+              disabled={workbenchGenerateMutation.isPending}
               placeholder="1200"
             />
             <div className="flex items-center gap-2 pt-7">
@@ -1987,6 +2118,7 @@ export default function NewsManagePage() {
                 type="checkbox"
                 checked={workbenchAppend}
                 onChange={(e) => setWorkbenchAppend(e.target.checked)}
+                disabled={workbenchGenerateMutation.isPending}
               />
               <span className="text-sm text-slate-700 dark:text-white/70">
                 追加到正文
@@ -2011,9 +2143,11 @@ export default function NewsManagePage() {
                   append: !!workbenchAppend,
                 });
               }}
+              isLoading={workbenchGenerateMutation.isPending}
+              loadingText="生成中..."
               disabled={workbenchGenerateMutation.isPending}
             >
-              {workbenchGenerateMutation.isPending ? "生成中..." : "生成"}
+              生成
             </Button>
           </div>
 
@@ -2057,6 +2191,9 @@ export default function NewsManagePage() {
                 variant="outline"
                 size="sm"
                 onClick={() => workbenchGenerationsQuery.refetch()}
+                icon={RotateCcw}
+                isLoading={workbenchGenerationsQuery.isFetching}
+                loadingText="刷新中..."
                 disabled={workbenchGenerationsQuery.isFetching}
               >
                 刷新
@@ -2064,9 +2201,7 @@ export default function NewsManagePage() {
             </div>
             <div className="mt-3 space-y-2">
               {workbenchGenerationsQuery.isLoading ? (
-                <div className="text-sm text-slate-500 dark:text-white/50">
-                  加载中...
-                </div>
+                <ListSkeleton count={2} />
               ) : workbenchGenerationsQuery.isError ? (
                 <div className="text-sm text-red-600 dark:text-red-300">
                   {getApiErrorMessage(
@@ -2142,6 +2277,7 @@ export default function NewsManagePage() {
       <Modal
         isOpen={showCreateModal}
         onClose={() => {
+          if (aiGenerateMutation.isPending || createMutation.isPending) return;
           setShowCreateModal(false);
           setCreateImages([]);
           setCreateContentMode("edit");
@@ -2162,12 +2298,14 @@ export default function NewsManagePage() {
                 placeholder="例如：普通人如何识别和防范电信网络诈骗"
                 value={aiTopic}
                 onChange={(e) => setAiTopic(e.target.value)}
+                disabled={aiGenerateMutation.isPending || createMutation.isPending}
               />
               <Textarea
                 label="要点（可选）"
                 placeholder="可填写关键要点/结构要求，例如：风险点、法律依据、常见话术、操作清单等"
                 value={aiHints}
                 onChange={(e) => setAiHints(e.target.value)}
+                disabled={aiGenerateMutation.isPending || createMutation.isPending}
                 rows={3}
               />
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2176,6 +2314,7 @@ export default function NewsManagePage() {
                     type="checkbox"
                     checked={aiAutoRerunNewsAi}
                     onChange={(e) => setAiAutoRerunNewsAi(e.target.checked)}
+                    disabled={aiGenerateMutation.isPending || createMutation.isPending}
                   />
                   发布后自动触发 News AI 标注
                 </label>
@@ -2183,23 +2322,26 @@ export default function NewsManagePage() {
                   <Button
                     variant="outline"
                     onClick={() => handleAiGenerateFill(false)}
+                    isLoading={aiGenerateMutation.isPending}
+                    loadingText="生成中..."
                     disabled={
                       aiGenerateMutation.isPending || createMutation.isPending
                     }
                   >
-                    {aiGenerateMutation.isPending ? "生成中..." : "AI生成填充"}
+                    AI生成填充
                   </Button>
                   <Button
                     onClick={() => handleAiGenerateFill(true)}
+                    isLoading={aiGenerateMutation.isPending || createMutation.isPending}
+                    loadingText={(() => {
+                      if (aiGenerateMutation.isPending) return "生成中...";
+                      return "发布中...";
+                    })()}
                     disabled={
                       aiGenerateMutation.isPending || createMutation.isPending
                     }
                   >
-                    {aiGenerateMutation.isPending
-                      ? "生成中..."
-                      : createMutation.isPending
-                      ? "发布中..."
-                      : "AI一键发布"}
+                    AI一键发布
                   </Button>
                 </div>
               </div>
@@ -2213,6 +2355,7 @@ export default function NewsManagePage() {
             onChange={(e) =>
               setCreateForm((prev) => ({ ...prev, title: e.target.value }))
             }
+            disabled={aiGenerateMutation.isPending || createMutation.isPending}
           />
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">
@@ -2224,6 +2367,7 @@ export default function NewsManagePage() {
               onChange={(e) =>
                 setCreateForm((prev) => ({ ...prev, category: e.target.value }))
               }
+              disabled={aiGenerateMutation.isPending || createMutation.isPending}
             >
               <option value="法律动态">法律动态</option>
               <option value="政策解读">政策解读</option>
@@ -2238,6 +2382,7 @@ export default function NewsManagePage() {
             onChange={(e) =>
               setCreateForm((prev) => ({ ...prev, summary: e.target.value }))
             }
+            disabled={aiGenerateMutation.isPending || createMutation.isPending}
           />
           <Input
             label="封面图URL"
@@ -2249,6 +2394,7 @@ export default function NewsManagePage() {
                 cover_image: e.target.value,
               }))
             }
+            disabled={aiGenerateMutation.isPending || createMutation.isPending}
           />
 
           {createForm.cover_image?.trim() ? (
@@ -2324,6 +2470,7 @@ export default function NewsManagePage() {
               onChange={(e) =>
                 setCreateForm((prev) => ({ ...prev, source: e.target.value }))
               }
+              disabled={aiGenerateMutation.isPending || createMutation.isPending}
             />
             <Input
               label="来源站点"
@@ -2335,6 +2482,7 @@ export default function NewsManagePage() {
                   source_site: e.target.value,
                 }))
               }
+              disabled={aiGenerateMutation.isPending || createMutation.isPending}
             />
             <Input
               label="来源链接"
@@ -2346,6 +2494,7 @@ export default function NewsManagePage() {
                   source_url: e.target.value,
                 }))
               }
+              disabled={aiGenerateMutation.isPending || createMutation.isPending}
             />
             <Input
               label="作者"
@@ -2354,6 +2503,7 @@ export default function NewsManagePage() {
               onChange={(e) =>
                 setCreateForm((prev) => ({ ...prev, author: e.target.value }))
               }
+              disabled={aiGenerateMutation.isPending || createMutation.isPending}
             />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -2370,6 +2520,7 @@ export default function NewsManagePage() {
                     review_status: e.target.value,
                   }))
                 }
+                disabled={aiGenerateMutation.isPending || createMutation.isPending}
               >
                 <option value="approved">已通过</option>
                 <option value="pending">待审核</option>
@@ -2388,6 +2539,7 @@ export default function NewsManagePage() {
                     review_reason: e.target.value,
                   }))
                 }
+                disabled={aiGenerateMutation.isPending || createMutation.isPending}
                 placeholder="可选"
               />
             </div>
@@ -2405,6 +2557,7 @@ export default function NewsManagePage() {
                   is_top: e.target.value === "top",
                 }))
               }
+              disabled={aiGenerateMutation.isPending || createMutation.isPending}
             >
               <option value="normal">普通</option>
               <option value="top">置顶</option>
@@ -2436,6 +2589,7 @@ export default function NewsManagePage() {
                       : prev.review_status,
                 }));
               }}
+              disabled={aiGenerateMutation.isPending || createMutation.isPending}
             >
               <option value="publish">立即发布</option>
               <option value="draft">保存草稿</option>
@@ -2487,6 +2641,7 @@ export default function NewsManagePage() {
                 variant={createContentMode === "edit" ? "primary" : "outline"}
                 size="sm"
                 onClick={() => setCreateContentMode("edit")}
+                disabled={aiGenerateMutation.isPending || createMutation.isPending}
               >
                 编辑
               </Button>
@@ -2503,17 +2658,25 @@ export default function NewsManagePage() {
             </div>
 
             {createContentMode === "edit" ? (
-              <RichTextEditor
-                value={createForm.content}
-                onChange={(v) => {
-                  setCreateForm((prev) => ({ ...prev, content: v }));
-                  setCreateImages(extractMarkdownImageUrls(v));
-                }}
-                images={createImages}
-                onImagesChange={setCreateImages}
-                placeholder="请输入内容，支持 Markdown、表情、图片链接..."
-                minHeight="260px"
-              />
+              <div
+                className={
+                  aiGenerateMutation.isPending || createMutation.isPending
+                    ? "pointer-events-none opacity-70"
+                    : ""
+                }
+              >
+                <RichTextEditor
+                  value={createForm.content}
+                  onChange={(v) => {
+                    setCreateForm((prev) => ({ ...prev, content: v }));
+                    setCreateImages(extractMarkdownImageUrls(v));
+                  }}
+                  images={createImages}
+                  onImagesChange={setCreateImages}
+                  placeholder="请输入内容，支持 Markdown、表情、图片链接..."
+                  minHeight="260px"
+                />
+              </div>
             ) : (
               <div className="rounded-2xl border border-slate-200/70 bg-white p-4 dark:border-white/10 dark:bg-white/5">
                 <div className="text-xl font-bold text-slate-900 dark:text-white">
@@ -2548,12 +2711,24 @@ export default function NewsManagePage() {
                 setShowCreateModal(false);
                 setCreateImages([]);
               }}
+              disabled={aiGenerateMutation.isPending || createMutation.isPending}
             >
               取消
             </Button>
             <Button
               onClick={handleCreate}
-              disabled={!createForm.title.trim() || !createForm.content.trim()}
+              isLoading={createMutation.isPending}
+              loadingText={(() => {
+                if (createPublishMode === "schedule") return "创建中...";
+                if (createPublishMode === "draft") return "保存中...";
+                return "发布中...";
+              })()}
+              disabled={
+                !createForm.title.trim() ||
+                !createForm.content.trim() ||
+                aiGenerateMutation.isPending ||
+                createMutation.isPending
+              }
             >
               {createPublishMode === "schedule"
                 ? "创建定时发布"
@@ -2568,6 +2743,15 @@ export default function NewsManagePage() {
       <Modal
         isOpen={showEditModal}
         onClose={() => {
+          if (
+            editMutation.isPending ||
+            rerunAiMutation.isPending ||
+            rollbackMutation.isPending ||
+            linkCheckMutation.isPending ||
+            linkCheckFetchMutation.isPending ||
+            workbenchGenerateMutation.isPending
+          )
+            return;
           setShowEditModal(false);
           setEditingId(null);
           setEditImages([]);
@@ -2605,9 +2789,11 @@ export default function NewsManagePage() {
                 if (!confirm("确认重跑该新闻的AI标注？")) return;
                 rerunAiMutation.mutate({ id: editingId });
               }}
-              disabled={!editingId || rerunAiMutation.isPending}
+              isLoading={rerunAiMutation.isPending}
+              loadingText="重跑中..."
+              disabled={!editingId || rerunAiMutation.isPending || editMutation.isPending}
             >
-              {rerunAiMutation.isPending ? "重跑中..." : "重跑AI标注"}
+              重跑AI标注
             </Button>
           </div>
           <div className="flex flex-wrap justify-end gap-2">
@@ -2615,7 +2801,7 @@ export default function NewsManagePage() {
               variant="outline"
               size="sm"
               onClick={() => setShowWorkbenchModal(true)}
-              disabled={!editingId}
+              disabled={!editingId || editMutation.isPending || rerunAiMutation.isPending}
             >
               <Sparkles className="h-4 w-4" />
               <span className="ml-2">AI工作台</span>
@@ -2624,7 +2810,7 @@ export default function NewsManagePage() {
               variant="outline"
               size="sm"
               onClick={() => setShowLinkCheckModal(true)}
-              disabled={!editingId}
+              disabled={!editingId || editMutation.isPending || rerunAiMutation.isPending}
             >
               <Link2 className="h-4 w-4" />
               <span className="ml-2">链接检查</span>
@@ -2633,7 +2819,7 @@ export default function NewsManagePage() {
               variant="outline"
               size="sm"
               onClick={() => setShowVersionsModal(true)}
-              disabled={!editingId}
+              disabled={!editingId || editMutation.isPending || rerunAiMutation.isPending}
             >
               <History className="h-4 w-4" />
               <span className="ml-2">版本历史</span>
@@ -2696,6 +2882,7 @@ export default function NewsManagePage() {
             onChange={(e) =>
               setEditForm((prev) => ({ ...prev, title: e.target.value }))
             }
+            disabled={editMutation.isPending}
           />
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">
@@ -2707,6 +2894,7 @@ export default function NewsManagePage() {
               onChange={(e) =>
                 setEditForm((prev) => ({ ...prev, category: e.target.value }))
               }
+              disabled={editMutation.isPending}
             >
               <option value="法律动态">法律动态</option>
               <option value="政策解读">政策解读</option>
@@ -2721,6 +2909,7 @@ export default function NewsManagePage() {
             onChange={(e) =>
               setEditForm((prev) => ({ ...prev, summary: e.target.value }))
             }
+            disabled={editMutation.isPending}
           />
           <Input
             label="封面图URL"
@@ -2729,6 +2918,7 @@ export default function NewsManagePage() {
             onChange={(e) =>
               setEditForm((prev) => ({ ...prev, cover_image: e.target.value }))
             }
+            disabled={editMutation.isPending}
           />
 
           {editForm.cover_image?.trim() ? (
@@ -2804,6 +2994,7 @@ export default function NewsManagePage() {
               onChange={(e) =>
                 setEditForm((prev) => ({ ...prev, source: e.target.value }))
               }
+              disabled={editMutation.isPending}
             />
             <Input
               label="来源站点"
@@ -2815,6 +3006,7 @@ export default function NewsManagePage() {
                   source_site: e.target.value,
                 }))
               }
+              disabled={editMutation.isPending}
             />
             <Input
               label="来源链接"
@@ -2823,6 +3015,7 @@ export default function NewsManagePage() {
               onChange={(e) =>
                 setEditForm((prev) => ({ ...prev, source_url: e.target.value }))
               }
+              disabled={editMutation.isPending}
             />
             <Input
               label="作者"
@@ -2831,6 +3024,7 @@ export default function NewsManagePage() {
               onChange={(e) =>
                 setEditForm((prev) => ({ ...prev, author: e.target.value }))
               }
+              disabled={editMutation.isPending}
             />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -2847,6 +3041,7 @@ export default function NewsManagePage() {
                     review_status: e.target.value,
                   }))
                 }
+                disabled={editMutation.isPending}
               >
                 <option value="approved">已通过</option>
                 <option value="pending">待审核</option>
@@ -2865,6 +3060,7 @@ export default function NewsManagePage() {
                     review_reason: e.target.value,
                   }))
                 }
+                disabled={editMutation.isPending}
                 placeholder="可选"
               />
             </div>
@@ -2882,6 +3078,7 @@ export default function NewsManagePage() {
                   is_top: e.target.value === "top",
                 }))
               }
+              disabled={editMutation.isPending}
             >
               <option value="normal">普通</option>
               <option value="top">置顶</option>
@@ -2900,6 +3097,7 @@ export default function NewsManagePage() {
                   is_published: e.target.value === "published",
                 }))
               }
+              disabled={editMutation.isPending}
             >
               <option value="published">发布</option>
               <option value="draft">草稿</option>
@@ -2920,6 +3118,7 @@ export default function NewsManagePage() {
                     scheduled_publish_at: e.target.value,
                   }))
                 }
+                disabled={editMutation.isPending}
               />
             </div>
             <div>
@@ -2936,6 +3135,7 @@ export default function NewsManagePage() {
                     scheduled_unpublish_at: e.target.value,
                   }))
                 }
+                disabled={editMutation.isPending}
               />
             </div>
           </div>
@@ -2948,6 +3148,7 @@ export default function NewsManagePage() {
                 variant={editContentMode === "edit" ? "primary" : "outline"}
                 size="sm"
                 onClick={() => setEditContentMode("edit")}
+                disabled={editMutation.isPending}
               >
                 编辑
               </Button>
@@ -2955,24 +3156,26 @@ export default function NewsManagePage() {
                 variant={editContentMode === "preview" ? "primary" : "outline"}
                 size="sm"
                 onClick={() => setEditContentMode("preview")}
-                disabled={!editForm.content.trim()}
+                disabled={!editForm.content.trim() || editMutation.isPending}
               >
                 预览
               </Button>
             </div>
 
             {editContentMode === "edit" ? (
-              <RichTextEditor
-                value={editForm.content}
-                onChange={(v) => {
-                  setEditForm((prev) => ({ ...prev, content: v }));
-                  setEditImages(extractMarkdownImageUrls(v));
-                }}
-                images={editImages}
-                onImagesChange={setEditImages}
-                placeholder="请输入内容，支持 Markdown、表情、图片链接..."
-                minHeight="260px"
-              />
+              <div className={editMutation.isPending ? "pointer-events-none opacity-70" : ""}>
+                <RichTextEditor
+                  value={editForm.content}
+                  onChange={(v) => {
+                    setEditForm((prev) => ({ ...prev, content: v }));
+                    setEditImages(extractMarkdownImageUrls(v));
+                  }}
+                  images={editImages}
+                  onImagesChange={setEditImages}
+                  placeholder="请输入内容，支持 Markdown、表情、图片链接..."
+                  minHeight="260px"
+                />
+              </div>
             ) : (
               <div className="rounded-2xl border border-slate-200/70 bg-white p-4 dark:border-white/10 dark:bg-white/5">
                 <div className="text-xl font-bold text-slate-900 dark:text-white">
@@ -3007,12 +3210,19 @@ export default function NewsManagePage() {
                 setEditingAi(null);
                 setEditingAiRisk("unknown");
               }}
+              disabled={editMutation.isPending}
             >
               取消
             </Button>
             <Button
               onClick={handleEdit}
-              disabled={!editForm.title.trim() || !editForm.content.trim()}
+              isLoading={editMutation.isPending}
+              loadingText="保存中..."
+              disabled={
+                !editForm.title.trim() ||
+                !editForm.content.trim() ||
+                editMutation.isPending
+              }
             >
               保存
             </Button>

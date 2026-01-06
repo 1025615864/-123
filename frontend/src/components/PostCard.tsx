@@ -20,11 +20,12 @@ export interface PostCardProps {
   post: Post
   onToggleFavorite?: (postId: number) => void
   favoriteDisabled?: boolean
+  favoriteLoading?: boolean
   showHeatScore?: boolean
   onPrefetch?: (postId: number) => void
 }
 
-export default function PostCard({ post, onToggleFavorite, favoriteDisabled, showHeatScore = false, onPrefetch }: PostCardProps) {
+export default function PostCard({ post, onToggleFavorite, favoriteDisabled, favoriteLoading, showHeatScore = false, onPrefetch }: PostCardProps) {
   const images = post.images || []
   const hasImages = images.length > 0
   const excerpt = getExcerpt(post.content ?? '', 120)
@@ -134,7 +135,7 @@ export default function PostCard({ post, onToggleFavorite, favoriteDisabled, sho
 
           <button
             type="button"
-            disabled={!onToggleFavorite || favoriteDisabled}
+            disabled={!onToggleFavorite || favoriteDisabled || favoriteLoading}
             onClick={(e) => {
               e.preventDefault()
               e.stopPropagation()
@@ -146,7 +147,11 @@ export default function PostCard({ post, onToggleFavorite, favoriteDisabled, sho
             aria-label={post.is_favorited ? '取消收藏' : '收藏'}
             title={post.is_favorited ? '取消收藏' : '收藏'}
           >
-            <Star className={`h-4 w-4 ${post.is_favorited ? 'fill-amber-400' : ''}`} />
+            {favoriteLoading ? (
+              <span className="h-4 w-4 rounded-full border-2 border-current border-t-transparent animate-spin" />
+            ) : (
+              <Star className={`h-4 w-4 ${post.is_favorited ? 'fill-amber-400' : ''}`} />
+            )}
             <span className="text-xs">{post.favorite_count ?? 0}</span>
           </button>
         </div>

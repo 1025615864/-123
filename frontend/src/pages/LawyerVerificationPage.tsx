@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { BadgeCheck, FileText, Shield, User as UserIcon } from 'lucide-react'
+import { BadgeCheck, FileText, Shield, User as UserIcon, RotateCcw } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
-import { Badge, Button, Card, EmptyState, Input, Loading } from '../components/ui'
+import { Badge, Button, Card, EmptyState, Input, ListSkeleton, Skeleton } from '../components/ui'
 import api from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 import { useTheme } from '../contexts/ThemeContext'
@@ -55,6 +55,8 @@ export default function LawyerVerificationPage() {
   const { user, isAuthenticated, refreshUser } = useAuth()
   const { actualTheme } = useTheme()
   const toast = useToast()
+
+  const [refreshing, setRefreshing] = useState(false)
 
   const [form, setForm] = useState<ApplyPayload>({
     real_name: '',
@@ -112,11 +114,15 @@ export default function LawyerVerificationPage() {
     return true
   }, [isAuthenticated, statusQuery.data?.status])
 
+  const actionBusy = applyMutation.isPending || refreshing || statusQuery.isFetching
+
   const handleSubmit = async () => {
     if (!isAuthenticated) {
       toast.error('请先登录')
       return
     }
+
+    if (!canApply) return
 
     if (!form.real_name.trim() || !form.id_card_no.trim() || !form.license_no.trim() || !form.firm_name.trim()) {
       toast.error('请填写必填项')
@@ -153,7 +159,38 @@ export default function LawyerVerificationPage() {
   }
 
   if (statusQuery.isLoading && !statusQuery.data) {
-    return <Loading text="加载中..." tone={actualTheme} />
+    return (
+      <div className="space-y-10">
+        <PageHeader
+          eyebrow="律所服务"
+          title="律师认证"
+          description="提交资质信息，审核通过后可进入律师工作台"
+          layout="mdStart"
+          tone={actualTheme}
+          right={<Skeleton width="90px" height="36px" />}
+        />
+
+        <Card variant="surface" padding="lg">
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Skeleton width="64px" height="22px" />
+                <Skeleton width="120px" height="14px" />
+              </div>
+              <Skeleton width="240px" height="14px" />
+            </div>
+            <Skeleton width="120px" height="22px" />
+          </div>
+        </Card>
+
+        <Card variant="surface" padding="lg">
+          <ListSkeleton count={2} />
+          <div className="pt-4 flex justify-end">
+            <Skeleton width="96px" height="36px" />
+          </div>
+        </Card>
+      </div>
+    )
   }
 
   const status = String(statusQuery.data?.status || 'none')
@@ -167,10 +204,23 @@ export default function LawyerVerificationPage() {
         layout="mdStart"
         tone={actualTheme}
         right={
-          <Button variant="outline" onClick={async () => {
-            await statusQuery.refetch()
-            await refreshUser()
-          }}>
+          <Button
+            variant="outline"
+            icon={RotateCcw}
+            isLoading={refreshing || statusQuery.isFetching}
+            loadingText="刷新中..."
+            disabled={actionBusy}
+            onClick={async () => {
+              if (actionBusy) return
+              setRefreshing(true)
+              try {
+                await statusQuery.refetch()
+                await refreshUser()
+              } finally {
+                setRefreshing(false)
+              }
+            }}
+          >
             刷新
           </Button>
         }
@@ -268,8 +318,9 @@ export default function LawyerVerificationPage() {
           <div className="flex items-center justify-end gap-3 pt-2">
             <Button
               onClick={handleSubmit}
-              disabled={!canApply}
+              disabled={!canApply || applyMutation.isPending}
               isLoading={applyMutation.isPending}
+              loadingText="提交中..."
             >
               提交申请
             </Button>

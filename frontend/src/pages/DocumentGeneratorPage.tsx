@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { FileText, Download, Copy, Check, ChevronRight, History, Trash2, Eye } from 'lucide-react'
-import { useQuery } from '@tanstack/react-query'
+import { FileText, Download, Copy, Check, ChevronRight, History, Trash2, Eye, RotateCcw } from 'lucide-react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '../api/client'
 import { useAppMutation, useToast } from '../hooks'
 import PageHeader from '../components/PageHeader'
 import { useTheme } from '../contexts/ThemeContext'
-import { Card, Button, Input, Modal, Pagination, EmptyState, Loading, Badge } from '../components/ui'
+import { Card, Button, Input, Modal, Pagination, EmptyState, Badge, ListSkeleton, Skeleton } from '../components/ui'
 import { getApiErrorMessage } from '../utils'
 import { queryKeys } from '../queryKeys'
 import { useAuth } from '../contexts/AuthContext'
@@ -57,6 +57,7 @@ export default function DocumentGeneratorPage() {
   const [generatedDocument, setGeneratedDocument] = useState<{title: string; content: string} | null>(null)
   const [copied, setCopied] = useState(false)
   const toast = useToast()
+  const queryClient = useQueryClient()
   const { actualTheme } = useTheme()
 
   const quotasQuery = useQuery({
@@ -92,6 +93,7 @@ export default function DocumentGeneratorPage() {
   const [historyPage, setHistoryPage] = useState(1)
   const historyPageSize = 10
   const [selectedDocId, setSelectedDocId] = useState<number | null>(null)
+  const [activeDeleteId, setActiveDeleteId] = useState<number | null>(null)
 
   type MyDocItem = { id: number; document_type: string; title: string; created_at: string }
   type MyDocListResponse = { items: MyDocItem[]; total: number }
@@ -129,7 +131,7 @@ export default function DocumentGeneratorPage() {
     [historyPage, historyPageSize]
   )
 
-  const myDocsQuery = useQuery({
+  const myDocsQuery = useQuery<MyDocListResponse>({
     queryKey: myDocsQueryKey,
     queryFn: async () => {
       const params = new URLSearchParams()
@@ -141,10 +143,10 @@ export default function DocumentGeneratorPage() {
     enabled: isAuthenticated && historyOpen,
     retry: 1,
     refetchOnWindowFocus: false,
-    placeholderData: (prev) => prev,
+    placeholderData: (prev) => prev ?? ({ items: [], total: 0 } satisfies MyDocListResponse),
   })
 
-  const myDocDetailQuery = useQuery({
+  const myDocDetailQuery = useQuery<MyDocDetail>({
     queryKey: useMemo(() => queryKeys.myDocumentDetail(selectedDocId), [selectedDocId]),
     queryFn: async () => {
       const res = await api.get(`/documents/my/${selectedDocId}`)
@@ -165,6 +167,9 @@ export default function DocumentGeneratorPage() {
     if (!myDocDetailQuery.error) return
     toast.error(getApiErrorMessage(myDocDetailQuery.error, '文书详情加载失败'))
   }, [myDocDetailQuery.error, toast])
+
+  const myDocsData: MyDocListResponse = myDocsQuery.data ?? ({ items: [], total: 0 } satisfies MyDocListResponse)
+  const myDocsItems = myDocsData.items ?? []
 
   const generateMutation = useAppMutation<{ title: string; content: string }, void>({
     mutationFn: async (_: void) => {
@@ -235,13 +240,40 @@ export default function DocumentGeneratorPage() {
     },
     errorMessageFallback: '删除失败，请稍后重试',
     invalidateQueryKeys: [myDocsQueryKey as any],
-    onSuccess: () => {
-      toast.success('已删除')
-      if (selectedDocId != null) {
+    onMutate: async (id) => {
+      setActiveDeleteId(id)
+      const previous = queryClient.getQueryData<MyDocListResponse>(myDocsQueryKey as any)
+      queryClient.setQueryData<MyDocListResponse>(myDocsQueryKey as any, (old) => {
+        if (!old) return old
+        return {
+          ...old,
+          items: (old.items ?? []).filter((it) => it.id !== id),
+          total: Math.max(0, Number(old.total || 0) - 1),
+        }
+      })
+      if (selectedDocId === id) {
         setSelectedDocId(null)
       }
+      return { previous }
+    },
+    onSuccess: () => {
+      toast.success('已删除')
+    },
+    onError: (err, _id, ctx) => {
+      if (ctx && typeof ctx === 'object') {
+        const anyCtx = ctx as any
+        if (anyCtx.previous !== undefined) {
+          queryClient.setQueryData(myDocsQueryKey as any, anyCtx.previous)
+        }
+      }
+      return err as any
+    },
+    onSettled: (_data, _err, id) => {
+      setActiveDeleteId((prev) => (prev === id ? null : prev))
     },
   })
+
+  const historyBusy = deleteMutation.isPending
 
   const handleGenerate = async () => {
     if (!selectedType) return
@@ -341,10 +373,35 @@ export default function DocumentGeneratorPage() {
                     开通 VIP
                   </Link>
                 )}
+                {isDocQuotaExhausted && (
+                  <Link
+                    to="/profile"
+                    className="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200"
+                  >
+                    购买次数包
+                  </Link>
+                )}
               </div>
-              <Button variant="outline" onClick={() => setHistoryOpen(true)} icon={History}>
-                我的文书
-              </Button>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  icon={RotateCcw}
+                  isLoading={quotasQuery.isFetching}
+                  loadingText="刷新中..."
+                  onClick={() => quotasQuery.refetch()}
+                >
+                  刷新配额
+                </Button>
+                <Link to="/profile">
+                  <Button variant="outline" size="sm">
+                    个人中心
+                  </Button>
+                </Link>
+                <Button variant="outline" size="sm" onClick={() => setHistoryOpen(true)} icon={History}>
+                  我的文书
+                </Button>
+              </div>
             </div>
           ) : undefined
         }
@@ -483,6 +540,7 @@ export default function DocumentGeneratorPage() {
                 onClick={handleGenerate} 
                 disabled={!formData.case_type || !formData.plaintiff_name || !formData.defendant_name || !formData.facts || !formData.claims || generateMutation.isPending || isDocQuotaExhausted}
                 isLoading={generateMutation.isPending}
+                loadingText="生成中..."
                 className="flex-1"
               >
                 生成文书
@@ -510,8 +568,13 @@ export default function DocumentGeneratorPage() {
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => saveMutation.mutate()}
+                  onClick={() => {
+                    if (saveMutation.isPending) return
+                    saveMutation.mutate()
+                  }}
                   disabled={saveMutation.isPending}
+                  isLoading={saveMutation.isPending}
+                  loadingText="保存中..."
                 >
                   保存
                 </Button>
@@ -539,10 +602,33 @@ export default function DocumentGeneratorPage() {
         </Card>
       )}
 
-      <Modal isOpen={historyOpen} onClose={() => { setHistoryOpen(false); setSelectedDocId(null) }} title="我的文书" size="lg">
-        {myDocsQuery.isLoading ? (
-          <Loading text="加载中..." tone={actualTheme} />
-        ) : (myDocsQuery.data?.items ?? []).length === 0 ? (
+      <Modal
+        isOpen={historyOpen}
+        onClose={() => {
+          if (historyBusy) return
+          setHistoryOpen(false)
+          setSelectedDocId(null)
+        }}
+        title="我的文书"
+        size="lg"
+      >
+        <div className="flex items-center justify-end mb-3">
+          <Button
+            variant="outline"
+            size="sm"
+            icon={RotateCcw}
+            isLoading={myDocsQuery.isFetching}
+            loadingText="刷新中..."
+            disabled={myDocsQuery.isFetching || historyBusy}
+            onClick={() => myDocsQuery.refetch()}
+          >
+            刷新
+          </Button>
+        </div>
+
+        {myDocsQuery.isLoading && myDocsItems.length === 0 ? (
+          <ListSkeleton count={3} />
+        ) : myDocsItems.length === 0 ? (
           <EmptyState
             icon={FileText}
             title="暂无保存的文书"
@@ -552,53 +638,75 @@ export default function DocumentGeneratorPage() {
         ) : (
           <div className="space-y-4">
             <div className="divide-y divide-slate-200/70 dark:divide-white/10">
-              {(myDocsQuery.data?.items ?? []).map((item) => (
-                <div key={item.id} className="py-3 flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-sm font-semibold text-slate-900 dark:text-white truncate">
-                      {item.title}
+              {myDocsItems.map((item) => {
+                const deleteLoading = deleteMutation.isPending && activeDeleteId === item.id
+                const disableOther = historyBusy && !deleteLoading
+                return (
+                  <div key={item.id} className="py-3 flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-900 dark:text-white truncate">
+                        {item.title}
+                      </div>
+                      <div className="text-xs text-slate-500 dark:text-white/45 mt-1">
+                        {new Date(item.created_at).toLocaleString()}
+                      </div>
                     </div>
-                    <div className="text-xs text-slate-500 dark:text-white/45 mt-1">
-                      {new Date(item.created_at).toLocaleString()}
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        icon={Eye}
+                        onClick={() => {
+                          if (historyBusy) return
+                          setSelectedDocId(item.id)
+                        }}
+                        disabled={disableOther}
+                      >
+                        查看
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        icon={Trash2}
+                        className="text-red-600"
+                        onClick={() => {
+                          if (historyBusy) return
+                          if (!confirm('确定删除该文书？')) return
+                          deleteMutation.mutate(item.id)
+                        }}
+                        isLoading={deleteLoading}
+                        loadingText="删除中..."
+                        disabled={disableOther || deleteLoading}
+                      >
+                        删除
+                      </Button>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      icon={Eye}
-                      onClick={() => setSelectedDocId(item.id)}
-                    >
-                      查看
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      icon={Trash2}
-                      className="text-red-600"
-                      onClick={() => {
-                        if (!confirm('确定删除该文书？')) return
-                        deleteMutation.mutate(item.id)
-                      }}
-                      disabled={deleteMutation.isPending}
-                    >
-                      删除
-                    </Button>
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
 
             <Pagination
               currentPage={historyPage}
               totalPages={Math.max(1, Math.ceil(Number(myDocsQuery.data?.total ?? 0) / historyPageSize))}
-              onPageChange={setHistoryPage}
+              onPageChange={(p) => {
+                if (historyBusy) return
+                setHistoryPage(p)
+              }}
             />
 
             {selectedDocId != null ? (
               <Card variant="surface" padding="md">
-                {myDocDetailQuery.isFetching ? (
-                  <div className="text-sm text-slate-500 dark:text-white/50">加载详情中...</div>
+                {myDocDetailQuery.isFetching && !myDocDetailQuery.data ? (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <Skeleton width="60%" height="16px" />
+                      <Skeleton width="72px" height="32px" />
+                    </div>
+                    <Skeleton width="100%" height="14px" />
+                    <Skeleton width="92%" height="14px" />
+                    <Skeleton width="86%" height="14px" />
+                  </div>
                 ) : myDocDetailQuery.data ? (
                   <div className="space-y-3">
                     <div className="flex items-center justify-between gap-3">

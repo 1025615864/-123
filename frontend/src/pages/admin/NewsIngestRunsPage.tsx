@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import api from "../../api/client";
 import { useToast } from "../../hooks";
 import { getApiErrorMessage } from "../../utils";
-import { Badge, Button, Card, Input, Loading, Pagination } from "../../components/ui";
+import { Badge, Button, Card, Input, ListSkeleton, Pagination } from "../../components/ui";
 
 interface NewsSource {
   id: number;
@@ -155,8 +155,14 @@ export default function NewsIngestRunsPage() {
             查看每次 RSS 抓取的运行状态与统计
           </p>
         </div>
-        <Button variant="outline" onClick={() => runsQuery.refetch()} disabled={busy}>
-          <RefreshCw className={`h-4 w-4 mr-2 ${busy ? "animate-spin" : ""}`} />
+        <Button
+          variant="outline"
+          icon={RefreshCw}
+          onClick={() => runsQuery.refetch()}
+          isLoading={busy}
+          loadingText="刷新中..."
+          disabled={busy}
+        >
           刷新
         </Button>
       </div>
@@ -242,9 +248,9 @@ export default function NewsIngestRunsPage() {
 
       {/* 列表 */}
       <Card variant="surface" padding="none">
-        {runsQuery.isLoading ? (
+        {runsQuery.isLoading && runs.length === 0 ? (
           <div className="p-6">
-            <Loading />
+            <ListSkeleton count={6} />
           </div>
         ) : (
           <div className="overflow-x-auto">

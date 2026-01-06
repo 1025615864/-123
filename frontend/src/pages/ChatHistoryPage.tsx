@@ -1,9 +1,21 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, Navigate, useLocation } from 'react-router-dom'
-import { MessageSquare, Clock, Trash2, Download, ArrowRight, Search, X, Share2 } from 'lucide-react'
+import {
+  MessageSquare,
+  Clock,
+  Trash2,
+  Download,
+  ArrowRight,
+  Search,
+  X,
+  Share2,
+  RotateCcw,
+  FileText,
+  Copy,
+} from 'lucide-react'
 import api from '../api/client'
 import { useAppMutation, useToast } from '../hooks'
-import { Card, Button, Loading, EmptyState, Input } from '../components/ui'
+import { Card, Button, EmptyState, Input, ListSkeleton, Modal, ModalActions } from '../components/ui'
 import PageHeader from '../components/PageHeader'
 import { useAuth } from '../contexts/AuthContext'
 import { useTheme } from '../contexts/ThemeContext'
@@ -61,6 +73,7 @@ interface ShareLinkResponse {
      } catch {
        return sanitizeDownloadFilename(raw) || null
      }
+
    }
 
    const m = s.match(/filename\s*=\s*([^;]+)/i)
@@ -79,6 +92,17 @@ export default function ChatHistoryPage() {
   const location = useLocation()
 
   const [q, setQ] = useState('')
+  const [rangeDays, setRangeDays] = useState<0 | 7 | 30>(0)
+  const [fromDate, setFromDate] = useState('')
+  const [toDate, setToDate] = useState('')
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc')
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewTarget, setPreviewTarget] = useState<ConsultationItem | null>(null)
+  const [previewData, setPreviewData] = useState<ExportData | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [activeShareId, setActiveShareId] = useState<string | null>(null)
+  const [activeDeleteId, setActiveDeleteId] = useState<string | null>(null)
+  const [exportingId, setExportingId] = useState<string | null>(null)
 
   const debouncedQ = useDebouncedValue(q, 300)
   const { query: consultationsQuery } = useAiConsultationsQuery(isAuthenticated, debouncedQ)
@@ -94,6 +118,160 @@ export default function ChatHistoryPage() {
 
   const qTrimmed = useMemo(() => String(q ?? '').trim(), [q])
 
+  const rangeStart = useMemo(() => {
+    if (rangeDays === 0) return null
+    const d = new Date()
+    d.setDate(d.getDate() - rangeDays)
+    return d
+  }, [rangeDays])
+
+  const fromDateTs = useMemo(() => {
+    const s = String(fromDate || '').trim()
+    if (!s) return null
+    const d = new Date(`${s}T00:00:00`)
+    const t = d.getTime()
+    return Number.isFinite(t) ? t : null
+  }, [fromDate])
+
+  const toDateTs = useMemo(() => {
+    const s = String(toDate || '').trim()
+    if (!s) return null
+    const d = new Date(`${s}T23:59:59.999`)
+    const t = d.getTime()
+    return Number.isFinite(t) ? t : null
+  }, [toDate])
+
+  const visibleConsultations = useMemo(() => {
+    const base = Array.isArray(consultations) ? consultations : []
+
+    const quickStartTs = rangeStart ? rangeStart.getTime() : null
+    const startTs = typeof fromDateTs === 'number' ? fromDateTs : quickStartTs
+    const endTs = typeof toDateTs === 'number' ? toDateTs : null
+
+    const filtered = base.filter((c) => {
+      const t = new Date(c.created_at).getTime()
+      if (!Number.isFinite(t)) return true
+      if (typeof startTs === 'number' && t < startTs) return false
+      if (typeof endTs === 'number' && t > endTs) return false
+      return true
+    })
+
+    const sorted = [...filtered].sort((a, b) => {
+      const ta = new Date(a.created_at).getTime()
+      const tb = new Date(b.created_at).getTime()
+      const va = Number.isFinite(ta) ? ta : 0
+      const vb = Number.isFinite(tb) ? tb : 0
+      return sortOrder === 'asc' ? va - vb : vb - va
+    })
+
+    return sorted
+  }, [consultations, fromDateTs, rangeStart, sortOrder, toDateTs])
+
+  const hasTimeFilter =
+    rangeDays !== 0 || Boolean(String(fromDate || '').trim()) || Boolean(String(toDate || '').trim())
+
+  const hasAnyFilter =
+    Boolean(String(qTrimmed || '').trim()) || hasTimeFilter || sortOrder !== 'desc'
+
+  const clearAllFilters = () => {
+    setQ('')
+    setRangeDays(0)
+    setFromDate('')
+    setToDate('')
+    setSortOrder('desc')
+  }
+
+  const closePreview = () => {
+    setPreviewOpen(false)
+    setPreviewTarget(null)
+    setPreviewData(null)
+    setPreviewLoading(false)
+  }
+
+  const openPreview = async (consultation: ConsultationItem) => {
+    setPreviewTarget(consultation)
+    setPreviewOpen(true)
+    setPreviewData(null)
+    setPreviewLoading(true)
+    try {
+      const res = await api.get(`/ai/consultations/${consultation.session_id}/export`)
+      setPreviewData(res.data as ExportData)
+    } catch (e) {
+      toast.error(getApiErrorMessage(e, '加载摘要失败，请稍后重试'))
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  const previewSummary = useMemo(() => {
+    const data = previewData
+    if (!data) return null
+
+    const msgs: ExportMessage[] = Array.isArray(data.messages) ? data.messages : []
+    const firstUser = msgs.find((m: ExportMessage) => String(m.role || '').toLowerCase() === 'user')
+    const firstAssistant = msgs.find(
+      (m: ExportMessage) => String(m.role || '').toLowerCase() === 'assistant'
+    )
+
+    const laws = new Map<string, string>()
+    for (const m of msgs) {
+      const refs = Array.isArray(m.references) ? m.references : []
+      for (const ref of refs) {
+        const lawName = String(ref.law_name || '').trim()
+        const article = String(ref.article || '').trim()
+        const content = String(ref.content || '').trim()
+        if (!lawName && !article) continue
+        const key = `${lawName} ${article}`.trim()
+        if (!laws.has(key)) {
+          laws.set(key, content)
+        }
+      }
+    }
+
+    return {
+      firstUser: String(firstUser?.content || '').trim(),
+      firstAssistant: String(firstAssistant?.content || '').trim(),
+      laws: Array.from(laws.entries()).map(([k, v]) => ({ title: k, content: v })),
+    }
+  }, [previewData])
+
+  const copyPreview = async () => {
+    const title = String(previewTarget?.title || previewData?.title || '法律咨询').trim() || '法律咨询'
+    const sid = String(previewTarget?.session_id || previewData?.session_id || '').trim()
+    const createdAt = previewTarget?.created_at
+      ? new Date(previewTarget.created_at).toLocaleString()
+      : previewData?.created_at
+      ? new Date(previewData.created_at).toLocaleString()
+      : ''
+
+    const userPart = previewSummary?.firstUser ? `用户首问：\n${previewSummary.firstUser}` : ''
+    const aiPart = previewSummary?.firstAssistant ? `AI首答：\n${previewSummary.firstAssistant}` : ''
+    const lawsPart =
+      previewSummary && previewSummary.laws.length > 0
+        ? `引用法条：\n${previewSummary.laws.map((l: { title: string }) => `- ${l.title}`).join('\n')}`
+        : ''
+
+    const parts = [
+      `标题：${title}`,
+      sid ? `咨询编号：${sid}` : '',
+      createdAt ? `时间：${createdAt}` : '',
+      '',
+      userPart,
+      '',
+      aiPart,
+      '',
+      lawsPart,
+    ].filter((p) => String(p).trim() !== '')
+
+    const text = parts.join('\n')
+    try {
+      await navigator.clipboard.writeText(text)
+      toast.success('已复制摘要')
+    } catch {
+      window.prompt('复制摘要', text)
+    }
+  }
+
   const deleteMutation = useAppMutation<void, string>({
     mutationFn: async (sid: string) => {
       await api.delete(`/ai/consultations/${sid}`)
@@ -101,6 +279,12 @@ export default function ChatHistoryPage() {
     successMessage: '删除成功',
     errorMessageFallback: '删除失败，请稍后重试',
     invalidateQueryKeys: [queryKeys.aiConsultationsBase()],
+    onMutate: async (sid) => {
+      setActiveDeleteId(sid)
+    },
+    onSettled: (_data, _err, sid) => {
+      setActiveDeleteId((prev) => (prev === sid ? null : prev))
+    },
   })
 
   const shareMutation = useAppMutation<ShareLinkResponse, string>({
@@ -111,15 +295,24 @@ export default function ChatHistoryPage() {
       return res.data as ShareLinkResponse
     },
     errorMessageFallback: '生成分享链接失败，请稍后重试',
+    onMutate: async (sid) => {
+      setActiveShareId(sid)
+    },
+    onSettled: (_data, _err, sid) => {
+      setActiveShareId((prev) => (prev === sid ? null : prev))
+    },
   })
+
+  const actionBusy = shareMutation.isPending || deleteMutation.isPending || exportingId != null
 
   const handleDelete = async (sessionId: string) => {
     if (!confirm('确定要删除这条咨询记录吗？')) return
+    if (actionBusy) return
     deleteMutation.mutate(sessionId)
   }
 
   const handleShare = async (sessionId: string) => {
-    if (shareMutation.isPending) return
+    if (actionBusy) return
     shareMutation.mutate(sessionId, {
       onSuccess: async (data) => {
         const sharePath = String(data?.share_path || '').trim()
@@ -138,6 +331,8 @@ export default function ChatHistoryPage() {
   }
 
   const handleExport = async (consultation: ConsultationItem) => {
+    if (actionBusy) return
+    setExportingId(consultation.session_id)
     try {
       const res = await api.get(`/ai/consultations/${consultation.session_id}/report`, {
         responseType: 'blob' as any,
@@ -199,8 +394,10 @@ export default function ChatHistoryPage() {
         a.download = `咨询记录_${consultation.session_id}.txt`
         a.click()
         URL.revokeObjectURL(url)
-        toast.success('导出成功')
+        toast.error('导出失败，请稍后重试')
       }
+    } finally {
+      setExportingId((prev) => (prev === consultation.session_id ? null : prev))
     }
   }
 
@@ -275,9 +472,8 @@ export default function ChatHistoryPage() {
     return <Navigate to={`/login?redirect=${encodeURIComponent(redirect)}`} replace />
   }
 
-  if (consultationsQuery.isLoading && consultations.length === 0) {
-    return <Loading text="加载中..." tone={actualTheme} />
-  }
+  const isInitialLoading = consultationsQuery.isLoading && consultations.length === 0
+  const showFetching = consultationsQuery.isFetching && !isInitialLoading
 
   return (
     <div className="space-y-12">
@@ -287,55 +483,206 @@ export default function ChatHistoryPage() {
         description="查看您的AI法律咨询历史记录"
         tone={actualTheme}
         right={
-          <Link to="/chat">
-            <Button icon={MessageSquare} className="px-6 bg-emerald-600 hover:bg-emerald-700 text-white focus-visible:ring-emerald-500/25">
-              新建咨询
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              icon={RotateCcw}
+              isLoading={consultationsQuery.isFetching}
+              loadingText="刷新中..."
+              onClick={() => {
+                if (actionBusy) return
+                consultationsQuery.refetch()
+              }}
+              className="px-4"
+              disabled={consultationsQuery.isFetching || actionBusy}
+            >
+              刷新
             </Button>
-          </Link>
+            <Link to="/chat">
+              <Button icon={MessageSquare} className="px-6 bg-emerald-600 hover:bg-emerald-700 text-white focus-visible:ring-emerald-500/25">
+                新建咨询
+              </Button>
+            </Link>
+          </div>
         }
       />
 
       <Card variant="surface" padding="lg">
-        <div className="max-w-2xl">
-          <Input
-            icon={Search}
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="搜索咨询记录（标题/内容）..."
-            right={
-              qTrimmed ? (
-                <button
-                  type="button"
-                  onClick={() => setQ('')}
-                  className="p-1 rounded-md text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors dark:text-white/60 dark:hover:text-white dark:hover:bg-slate-800"
-                  aria-label="清空搜索"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              ) : null
-            }
-          />
+        <div className="space-y-4">
+          <div className="max-w-2xl">
+            <Input
+              icon={Search}
+              value={q}
+              onChange={(e) => {
+                if (actionBusy) return
+                setQ(e.target.value)
+              }}
+              placeholder="搜索咨询记录（标题/内容）..."
+              disabled={actionBusy}
+              right={
+                qTrimmed ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (actionBusy) return
+                      setQ('')
+                    }}
+                    className="p-1 rounded-md text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors dark:text-white/60 dark:hover:text-white dark:hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed"
+                    aria-label="清空搜索"
+                    disabled={actionBusy}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                ) : null
+              }
+            />
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <Button
+                variant={rangeDays === 0 ? 'primary' : 'outline'}
+                size="sm"
+                onClick={() => {
+                  if (actionBusy) return
+                  setRangeDays(0)
+                  setFromDate('')
+                  setToDate('')
+                }}
+                disabled={actionBusy}
+              >
+                全部
+              </Button>
+              <Button
+                variant={rangeDays === 7 ? 'primary' : 'outline'}
+                size="sm"
+                onClick={() => {
+                  if (actionBusy) return
+                  setRangeDays(7)
+                  setFromDate('')
+                  setToDate('')
+                }}
+                disabled={actionBusy}
+              >
+                近7天
+              </Button>
+              <Button
+                variant={rangeDays === 30 ? 'primary' : 'outline'}
+                size="sm"
+                onClick={() => {
+                  if (actionBusy) return
+                  setRangeDays(30)
+                  setFromDate('')
+                  setToDate('')
+                }}
+                disabled={actionBusy}
+              >
+                近30天
+              </Button>
+            </div>
+
+            <div className="text-sm text-slate-600 dark:text-white/60">
+              {showFetching ? '更新中…' : null}
+              <span className={showFetching ? 'ml-2' : ''}>
+                {visibleConsultations.length} 条
+              </span>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="w-full sm:w-48">
+              <Input
+                label="开始日期"
+                type="date"
+                value={fromDate}
+                onChange={(e) => {
+                  if (actionBusy) return
+                  setFromDate(e.target.value)
+                  setRangeDays(0)
+                }}
+                disabled={actionBusy}
+              />
+            </div>
+            <div className="w-full sm:w-48">
+              <Input
+                label="结束日期"
+                type="date"
+                value={toDate}
+                onChange={(e) => {
+                  if (actionBusy) return
+                  setToDate(e.target.value)
+                  setRangeDays(0)
+                }}
+                disabled={actionBusy}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant={sortOrder === 'desc' ? 'primary' : 'outline'}
+                size="sm"
+                onClick={() => {
+                  if (actionBusy) return
+                  setSortOrder('desc')
+                }}
+                disabled={actionBusy}
+              >
+                最新
+              </Button>
+              <Button
+                variant={sortOrder === 'asc' ? 'primary' : 'outline'}
+                size="sm"
+                onClick={() => {
+                  if (actionBusy) return
+                  setSortOrder('asc')
+                }}
+                disabled={actionBusy}
+              >
+                最早
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (actionBusy) return
+                  clearAllFilters()
+                }}
+                disabled={actionBusy}
+              >
+                清空筛选
+              </Button>
+            </div>
+          </div>
         </div>
       </Card>
 
-      {consultations.length === 0 ? (
+      {isInitialLoading ? (
+        <Card variant="surface" padding="lg">
+          <ListSkeleton count={6} />
+        </Card>
+      ) : visibleConsultations.length === 0 ? (
         <EmptyState
           icon={MessageSquare}
-          title={qTrimmed ? '未找到匹配记录' : '暂无咨询记录'}
-          description={
+          title={
             qTrimmed
-              ? '请尝试更换关键词或清空搜索条件'
+              ? '未找到匹配记录'
+              : !hasTimeFilter
+              ? '暂无咨询记录'
+              : '该时间范围内暂无记录'
+          }
+          description={
+            hasAnyFilter
+              ? '请尝试调整筛选条件或清空筛选'
               : '开始一次新的AI法律咨询，您的对话将被保存在这里'
           }
           tone={actualTheme}
           action={
-            qTrimmed ? (
+            hasAnyFilter ? (
               <Button
                 icon={X}
                 className="bg-slate-900 hover:bg-slate-950 text-white focus-visible:ring-slate-900/25"
-                onClick={() => setQ('')}
+                onClick={clearAllFilters}
               >
-                清空搜索
+                清空筛选
               </Button>
             ) : (
               <Link to="/chat" className="mt-6 inline-block">
@@ -346,9 +693,9 @@ export default function ChatHistoryPage() {
         />
       ) : (
         <div className="grid gap-4">
-          {consultations.map((item) => (
+          {visibleConsultations.map((item) => (
             <Card
-              key={item.id}
+              key={item.session_id}
               variant="surface"
               hover
               padding="none"
@@ -372,12 +719,33 @@ export default function ChatHistoryPage() {
                 </div>
 
                 <div className="flex items-center gap-2">
+                  {(() => {
+                    const shareLoading = shareMutation.isPending && activeShareId === item.session_id
+                    const deleteLoading = deleteMutation.isPending && activeDeleteId === item.session_id
+                    const exportLoading = exportingId === item.session_id
+                    const actionBusy = shareMutation.isPending || deleteMutation.isPending || exportingId != null
+
+                    return (
+                      <>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    type="button"
+                    onClick={() => openPreview(item)}
+                    className="p-2 hover:text-slate-900 dark:hover:text-white"
+                    aria-label="查看摘要"
+                  >
+                    <FileText className="h-4 w-4" />
+                  </Button>
                   <Button
                     variant="ghost"
                     size="sm"
                     type="button"
                     onClick={() => handleExport(item)}
-                    className="p-2 hover:text-slate-900 dark:hover:text-white"
+                    isLoading={exportLoading}
+                    loadingText="导出中..."
+                    disabled={actionBusy && !exportLoading}
+                    className={`hover:text-slate-900 dark:hover:text-white ${exportLoading ? 'px-3 py-2' : 'p-2'}`}
                     aria-label="导出报告"
                   >
                     <Download className="h-4 w-4" />
@@ -387,7 +755,10 @@ export default function ChatHistoryPage() {
                     size="sm"
                     type="button"
                     onClick={() => handleShare(item.session_id)}
-                    className="p-2 hover:text-slate-900 dark:hover:text-white"
+                    isLoading={shareLoading}
+                    loadingText="生成中..."
+                    disabled={actionBusy && !shareLoading}
+                    className={`hover:text-slate-900 dark:hover:text-white ${shareLoading ? 'px-3 py-2' : 'p-2'}`}
                     aria-label="分享链接"
                   >
                     <Share2 className="h-4 w-4" />
@@ -397,7 +768,10 @@ export default function ChatHistoryPage() {
                     size="sm"
                     type="button"
                     onClick={() => handleDelete(item.session_id)}
-                    className="p-2 hover:text-red-600 dark:hover:text-red-400"
+                    isLoading={deleteLoading}
+                    loadingText="删除中..."
+                    disabled={actionBusy && !deleteLoading}
+                    className={`hover:text-red-600 dark:hover:text-red-400 ${deleteLoading ? 'px-3 py-2' : 'p-2'}`}
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>
@@ -410,12 +784,88 @@ export default function ChatHistoryPage() {
                       查看详情
                     </Button>
                   </Link>
+                      </>
+                    )
+                  })()}
                 </div>
               </div>
             </Card>
           ))}
         </div>
       )}
+
+      <Modal
+        isOpen={previewOpen}
+        onClose={() => {
+          if (previewLoading) return
+          closePreview()
+        }}
+        title={String(previewTarget?.title || previewData?.title || '咨询摘要')}
+        description={
+          previewTarget?.created_at
+            ? `咨询时间：${new Date(previewTarget.created_at).toLocaleString()}`
+            : previewData?.created_at
+            ? `咨询时间：${new Date(previewData.created_at).toLocaleString()}`
+            : undefined
+        }
+        size="lg"
+      >
+        {previewLoading ? (
+          <ListSkeleton count={4} />
+        ) : previewData && previewSummary ? (
+          <div className="space-y-6">
+            <div>
+              <div className="text-sm font-semibold text-slate-900 dark:text-white">用户首问</div>
+              <div className="mt-2 whitespace-pre-wrap break-words text-sm text-slate-700 dark:text-white/70">
+                {previewSummary.firstUser || '（无）'}
+              </div>
+            </div>
+            <div>
+              <div className="text-sm font-semibold text-slate-900 dark:text-white">AI首答</div>
+              <div className="mt-2 whitespace-pre-wrap break-words text-sm text-slate-700 dark:text-white/70">
+                {previewSummary.firstAssistant || '（无）'}
+              </div>
+            </div>
+            <div>
+              <div className="text-sm font-semibold text-slate-900 dark:text-white">引用法条</div>
+              {previewSummary.laws.length === 0 ? (
+                <div className="mt-2 text-sm text-slate-600 dark:text-white/60">（无）</div>
+              ) : (
+                <div className="mt-2 space-y-3">
+                  {previewSummary.laws.map((l) => (
+                    <div key={l.title} className="rounded-xl border border-slate-200/70 p-4 dark:border-white/10">
+                      <div className="text-sm font-medium text-slate-900 dark:text-white">{l.title}</div>
+                      {l.content ? (
+                        <div className="mt-2 whitespace-pre-wrap break-words text-xs text-slate-600 dark:text-white/60">
+                          {l.content}
+                        </div>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <ModalActions>
+              <Button variant="outline" onClick={closePreview}>
+                关闭
+              </Button>
+              <Button icon={Copy} onClick={copyPreview}>
+                复制摘要
+              </Button>
+            </ModalActions>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="text-sm text-slate-600 dark:text-white/60">暂无可展示的摘要内容</div>
+            <ModalActions>
+              <Button variant="outline" onClick={closePreview}>
+                关闭
+              </Button>
+            </ModalActions>
+          </div>
+        )}
+      </Modal>
     </div>
   )
 }

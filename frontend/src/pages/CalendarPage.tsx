@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Calendar, CheckCircle2, Pencil, Plus, Trash2 } from 'lucide-react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Calendar, CheckCircle2, Pencil, Plus, Trash2, RefreshCw } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
-import { Button, Card, Chip, EmptyState, Input, Loading, Modal, Pagination, Textarea } from '../components/ui'
+import { Button, Card, Chip, EmptyState, Input, ListSkeleton, Modal, Pagination, Textarea } from '../components/ui'
 import api from '../api/client'
 import { useAuth } from '../contexts/AuthContext'
 import { useTheme } from '../contexts/ThemeContext'
@@ -60,6 +60,7 @@ export default function CalendarPage() {
   const { isAuthenticated } = useAuth()
   const { actualTheme } = useTheme()
   const toast = useToast()
+  const queryClient = useQueryClient()
 
   const [page, setPage] = useState(1)
   const pageSize = 20
@@ -74,6 +75,9 @@ export default function CalendarPage() {
     dueAtLocal: '',
     remindAtLocal: '',
   }))
+
+  const [pendingToggle, setPendingToggle] = useState<Record<number, boolean>>({})
+  const [pendingDelete, setPendingDelete] = useState<Record<number, boolean>>({})
 
   const doneParam: boolean | null = useMemo(() => {
     if (doneFilter === 'all') return null
@@ -141,84 +145,265 @@ export default function CalendarPage() {
     setModalOpen(false)
   }
 
-  const createMutation = useAppMutation<unknown, ReminderFormState>({
+  const createMutation = useAppMutation<Reminder, ReminderFormState, { previous?: ReminderListResponse; tempId?: number }>({
     mutationFn: async (payload) => {
       const due_at = localInputToIso(payload.dueAtLocal)
-      if (!due_at) throw new Error('INVALID_DUE_AT')
+      if (!due_at) throw new Error('请选择到期时间')
       const remind_at = localInputToIso(payload.remindAtLocal)
-      await api.post('/calendar/reminders', {
+      const res = await api.post('/calendar/reminders', {
         title: payload.title,
         note: payload.note || null,
         due_at,
         remind_at,
       })
+      return res.data as Reminder
     },
     errorMessageFallback: '创建失败，请稍后重试',
     invalidateQueryKeys: [remindersQueryKey as any],
+    onMutate: async (payload) => {
+      const due_at = localInputToIso(payload.dueAtLocal)
+      if (!due_at) return {}
+
+      const shouldShow = doneParam !== true
+      if (!shouldShow) return {}
+
+      await queryClient.cancelQueries({ queryKey: remindersQueryKey })
+      const previous = queryClient.getQueryData<ReminderListResponse>(remindersQueryKey)
+
+      const nowIso = new Date().toISOString()
+      const tempId = -Math.trunc(Date.now())
+      const optimistic: Reminder = {
+        id: tempId,
+        user_id: 0,
+        title: payload.title,
+        note: payload.note || null,
+        due_at,
+        remind_at: localInputToIso(payload.remindAtLocal),
+        is_done: false,
+        done_at: null,
+        created_at: nowIso,
+        updated_at: nowIso,
+      }
+
+      queryClient.setQueryData<ReminderListResponse>(remindersQueryKey, (old) => {
+        if (!old) return old as any
+        const items = Array.isArray(old.items) ? old.items : []
+        const nextItems = [...items, optimistic]
+          .sort((a, b) => {
+            const ta = new Date(a.due_at).getTime()
+            const tb = new Date(b.due_at).getTime()
+            if (ta !== tb) return ta - tb
+            return a.id - b.id
+          })
+          .slice(0, pageSize)
+        return { ...old, items: nextItems, total: Math.max(0, Number(old.total || 0) + 1) }
+      })
+
+      return { previous, tempId }
+    },
     onSuccess: () => {
       toast.success('已创建提醒')
       closeModal()
     },
-    onError: (err) => {
-      const msg = String(err instanceof Error ? err.message : '')
-      if (msg === 'INVALID_DUE_AT') {
-        toast.error('请选择到期时间')
+    onError: (err, _vars, ctx) => {
+      const anyCtx = ctx as any
+      if (anyCtx?.previous) {
+        queryClient.setQueryData(remindersQueryKey, anyCtx.previous)
       }
+      return err as any
+    },
+    onSettled: (data, _err, _vars, ctx) => {
+      const anyCtx = ctx as any
+      const tempId = Number(anyCtx?.tempId)
+      if (!data || !Number.isFinite(tempId) || tempId >= 0) return
+      queryClient.setQueryData<ReminderListResponse>(remindersQueryKey, (old) => {
+        if (!old) return old as any
+        const items = Array.isArray(old.items) ? old.items : []
+        const idx = items.findIndex((x) => x.id === tempId)
+        if (idx < 0) return old
+        const nextItems = [...items]
+        nextItems[idx] = data
+        return { ...old, items: nextItems }
+      })
     },
   })
 
-  const updateMutation = useAppMutation<unknown, { id: number; payload: ReminderFormState }>({
+  const updateMutation = useAppMutation<
+    Reminder,
+    { id: number; payload: ReminderFormState },
+    { previous?: ReminderListResponse }
+  >({
     mutationFn: async ({ id, payload }) => {
       const due_at = localInputToIso(payload.dueAtLocal)
-      if (!due_at) throw new Error('INVALID_DUE_AT')
+      if (!due_at) throw new Error('请选择到期时间')
       const remind_at = localInputToIso(payload.remindAtLocal)
-      await api.put(`/calendar/reminders/${id}`, {
+      const res = await api.put(`/calendar/reminders/${id}`, {
         title: payload.title,
         note: payload.note || null,
         due_at,
         remind_at,
       })
+      return res.data as Reminder
     },
     errorMessageFallback: '更新失败，请稍后重试',
     invalidateQueryKeys: [remindersQueryKey as any],
+    onMutate: async ({ id, payload }) => {
+      const due_at = localInputToIso(payload.dueAtLocal)
+      if (!due_at) return {}
+
+      await queryClient.cancelQueries({ queryKey: remindersQueryKey })
+      const previous = queryClient.getQueryData<ReminderListResponse>(remindersQueryKey)
+
+      queryClient.setQueryData<ReminderListResponse>(remindersQueryKey, (old) => {
+        if (!old) return old as any
+        const items = Array.isArray(old.items) ? old.items : []
+        const nextItems = items.map((r) => {
+          if (r.id !== id) return r
+          return {
+            ...r,
+            title: payload.title,
+            note: payload.note || null,
+            due_at,
+            remind_at: localInputToIso(payload.remindAtLocal),
+            updated_at: new Date().toISOString(),
+          }
+        })
+        return { ...old, items: nextItems }
+      })
+
+      return { previous }
+    },
     onSuccess: () => {
       toast.success('已更新提醒')
       closeModal()
     },
-    onError: (err) => {
-      const msg = String(err instanceof Error ? err.message : '')
-      if (msg === 'INVALID_DUE_AT') {
-        toast.error('请选择到期时间')
+    onSettled: (data, _err, vars, ctx) => {
+      if (!data) {
+        const anyCtx = ctx as any
+        if (anyCtx?.previous) queryClient.setQueryData(remindersQueryKey, anyCtx.previous)
+        return
       }
+      queryClient.setQueryData<ReminderListResponse>(remindersQueryKey, (old) => {
+        if (!old) return old as any
+        const items = Array.isArray(old.items) ? old.items : []
+        const nextItems = items.map((r) => (r.id === vars.id ? data : r))
+        return { ...old, items: nextItems }
+      })
     },
   })
 
-  const deleteMutation = useAppMutation<unknown, number>({
+  const deleteMutation = useAppMutation<unknown, number, { previous?: ReminderListResponse }>({
     mutationFn: async (id) => {
       await api.delete(`/calendar/reminders/${id}`)
     },
     errorMessageFallback: '删除失败，请稍后重试',
     invalidateQueryKeys: [remindersQueryKey as any],
+    onMutate: async (id) => {
+      setPendingDelete((prev) => ({ ...prev, [id]: true }))
+      await queryClient.cancelQueries({ queryKey: remindersQueryKey })
+      const previous = queryClient.getQueryData<ReminderListResponse>(remindersQueryKey)
+      queryClient.setQueryData<ReminderListResponse>(remindersQueryKey, (old) => {
+        if (!old) return old as any
+        const items = Array.isArray(old.items) ? old.items : []
+        const nextItems = items.filter((r) => r.id !== id)
+        return { ...old, items: nextItems, total: Math.max(0, Number(old.total || 0) - 1) }
+      })
+      return { previous }
+    },
     onSuccess: () => {
       toast.success('已删除')
     },
+    onError: (err, id, ctx) => {
+      setPendingDelete((prev) => {
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
+      const anyCtx = ctx as any
+      if (anyCtx?.previous) queryClient.setQueryData(remindersQueryKey, anyCtx.previous)
+      return err as any
+    },
+    onSettled: (_data, _err, id) => {
+      setPendingDelete((prev) => {
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
+    },
   })
 
-  const toggleDoneMutation = useAppMutation<unknown, { id: number; nextDone: boolean }>({
+  const toggleDoneMutation = useAppMutation<
+    Reminder,
+    { id: number; nextDone: boolean },
+    { previous?: ReminderListResponse }
+  >({
     mutationFn: async ({ id, nextDone }) => {
-      await api.put(`/calendar/reminders/${id}`, { is_done: nextDone })
+      const res = await api.put(`/calendar/reminders/${id}`, { is_done: nextDone })
+      return res.data as Reminder
     },
     errorMessageFallback: '操作失败，请稍后重试',
     invalidateQueryKeys: [remindersQueryKey as any],
+    onMutate: async ({ id, nextDone }) => {
+      setPendingToggle((prev) => ({ ...prev, [id]: true }))
+      await queryClient.cancelQueries({ queryKey: remindersQueryKey })
+      const previous = queryClient.getQueryData<ReminderListResponse>(remindersQueryKey)
+
+      queryClient.setQueryData<ReminderListResponse>(remindersQueryKey, (old) => {
+        if (!old) return old as any
+        const items = Array.isArray(old.items) ? old.items : []
+        const nextItems = items
+          .map((r) => {
+            if (r.id !== id) return r
+            return {
+              ...r,
+              is_done: nextDone,
+              done_at: nextDone ? new Date().toISOString() : null,
+              updated_at: new Date().toISOString(),
+            }
+          })
+          .filter((r) => {
+            if (doneParam === null) return true
+            return doneParam ? Boolean(r.is_done) : !r.is_done
+          })
+        return { ...old, items: nextItems }
+      })
+
+      return { previous }
+    },
     onSuccess: (_res, vars) => {
       toast.success(vars.nextDone ? '已标记完成' : '已标记未完成')
+    },
+    onError: (err, vars, ctx) => {
+      setPendingToggle((prev) => {
+        const next = { ...prev }
+        delete next[vars.id]
+        return next
+      })
+      const anyCtx = ctx as any
+      if (anyCtx?.previous) queryClient.setQueryData(remindersQueryKey, anyCtx.previous)
+      return err as any
+    },
+    onSettled: (_data, _err, vars) => {
+      setPendingToggle((prev) => {
+        const next = { ...prev }
+        delete next[vars.id]
+        return next
+      })
     },
   })
 
   const handleSubmit = () => {
+    if (createMutation.isPending || updateMutation.isPending) return
+
     const title = form.title.trim()
     if (!title) {
       toast.error('请输入标题')
+      return
+    }
+
+    const due_at = localInputToIso(form.dueAtLocal)
+    if (!due_at) {
+      toast.error('请选择到期时间')
       return
     }
 
@@ -229,12 +414,8 @@ export default function CalendarPage() {
     }
   }
 
-  const isBusy =
-    remindersQuery.isFetching ||
-    createMutation.isPending ||
-    updateMutation.isPending ||
-    deleteMutation.isPending ||
-    toggleDoneMutation.isPending
+  const isBusy = createMutation.isPending || updateMutation.isPending
+  const actionBusy = isBusy || toggleDoneMutation.isPending || deleteMutation.isPending
 
   if (!isAuthenticated) {
     return (
@@ -267,10 +448,17 @@ export default function CalendarPage() {
         tone={actualTheme}
         right={
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" onClick={() => remindersQuery.refetch()} disabled={remindersQuery.isFetching}>
+            <Button
+              variant="outline"
+              icon={RefreshCw}
+              isLoading={remindersQuery.isFetching}
+              loadingText="刷新中..."
+              onClick={() => remindersQuery.refetch()}
+              disabled={remindersQuery.isFetching || actionBusy}
+            >
               刷新
             </Button>
-            <Button onClick={openCreate} icon={Plus} disabled={isBusy}>
+            <Button onClick={openCreate} icon={Plus} disabled={actionBusy}>
               新建提醒
             </Button>
           </div>
@@ -278,26 +466,48 @@ export default function CalendarPage() {
       />
 
       <div className="flex flex-wrap items-center gap-2">
-        <Chip active={doneFilter === 'todo'} onClick={() => setDoneFilter('todo')}>
+        <Chip
+          active={doneFilter === 'todo'}
+          onClick={() => {
+            if (actionBusy) return
+            setDoneFilter('todo')
+          }}
+        >
           未完成
         </Chip>
-        <Chip active={doneFilter === 'done'} onClick={() => setDoneFilter('done')}>
+        <Chip
+          active={doneFilter === 'done'}
+          onClick={() => {
+            if (actionBusy) return
+            setDoneFilter('done')
+          }}
+        >
           已完成
         </Chip>
-        <Chip active={doneFilter === 'all'} onClick={() => setDoneFilter('all')}>
+        <Chip
+          active={doneFilter === 'all'}
+          onClick={() => {
+            if (actionBusy) return
+            setDoneFilter('all')
+          }}
+        >
           全部
         </Chip>
       </div>
 
       {remindersQuery.isLoading && items.length === 0 ? (
-        <Loading text="加载中..." tone={actualTheme} />
+        <ListSkeleton count={4} />
       ) : items.length === 0 ? (
         <EmptyState
           icon={Calendar}
           title="暂无提醒"
           description="点击右上角新建提醒开始使用"
           tone={actualTheme}
-          action={<Button onClick={openCreate}>新建提醒</Button>}
+          action={
+            <Button onClick={openCreate} disabled={actionBusy}>
+              新建提醒
+            </Button>
+          }
         />
       ) : (
         <Card variant="surface" padding="none">
@@ -305,6 +515,9 @@ export default function CalendarPage() {
             {items.map((r) => {
               const dueText = new Date(r.due_at).toLocaleString()
               const remindText = r.remind_at ? new Date(r.remind_at).toLocaleString() : ''
+              const toggleLoading = Boolean(pendingToggle[r.id])
+              const deleteLoading = Boolean(pendingDelete[r.id])
+              const rowPending = Boolean(toggleLoading || deleteLoading)
 
               return (
                 <div key={r.id} className="p-5 flex flex-col gap-3">
@@ -346,8 +559,13 @@ export default function CalendarPage() {
                         variant="ghost"
                         size="sm"
                         icon={CheckCircle2}
-                        disabled={isBusy}
-                        onClick={() => toggleDoneMutation.mutate({ id: r.id, nextDone: !r.is_done })}
+                        isLoading={toggleLoading}
+                        loadingText="处理中..."
+                        disabled={rowPending || actionBusy}
+                        onClick={() => {
+                          if (actionBusy) return
+                          toggleDoneMutation.mutate({ id: r.id, nextDone: !r.is_done })
+                        }}
                       >
                         {r.is_done ? '未完成' : '完成'}
                       </Button>
@@ -355,8 +573,11 @@ export default function CalendarPage() {
                         variant="ghost"
                         size="sm"
                         icon={Pencil}
-                        disabled={isBusy}
-                        onClick={() => openEdit(r)}
+                        disabled={rowPending || actionBusy}
+                        onClick={() => {
+                          if (actionBusy) return
+                          openEdit(r)
+                        }}
                       >
                         编辑
                       </Button>
@@ -364,8 +585,13 @@ export default function CalendarPage() {
                         variant="ghost"
                         size="sm"
                         icon={Trash2}
-                        disabled={isBusy}
-                        onClick={() => deleteMutation.mutate(r.id)}
+                        isLoading={deleteLoading}
+                        loadingText="删除中..."
+                        disabled={rowPending || actionBusy}
+                        onClick={() => {
+                          if (actionBusy) return
+                          deleteMutation.mutate(r.id)
+                        }}
                         className="text-red-600"
                       >
                         删除
@@ -379,11 +605,21 @@ export default function CalendarPage() {
         </Card>
       )}
 
-      <Pagination currentPage={page} totalPages={totalPages} onPageChange={setPage} />
+      <Pagination
+        currentPage={page}
+        totalPages={totalPages}
+        onPageChange={(p) => {
+          if (actionBusy) return
+          setPage(p)
+        }}
+      />
 
       <Modal
         isOpen={modalOpen}
-        onClose={closeModal}
+        onClose={() => {
+          if (isBusy) return
+          closeModal()
+        }}
         title={editing ? '编辑提醒' : '新建提醒'}
         size="md"
       >
@@ -393,6 +629,7 @@ export default function CalendarPage() {
             value={form.title}
             onChange={(e) => setForm((prev) => ({ ...prev, title: e.target.value }))}
             placeholder="例如：提交仲裁材料"
+            disabled={isBusy}
           />
 
           <Input
@@ -400,6 +637,7 @@ export default function CalendarPage() {
             type="datetime-local"
             value={form.dueAtLocal}
             onChange={(e) => setForm((prev) => ({ ...prev, dueAtLocal: e.target.value }))}
+            disabled={isBusy}
           />
 
           <Input
@@ -407,6 +645,7 @@ export default function CalendarPage() {
             type="datetime-local"
             value={form.remindAtLocal}
             onChange={(e) => setForm((prev) => ({ ...prev, remindAtLocal: e.target.value }))}
+            disabled={isBusy}
           />
 
           <Textarea
@@ -415,13 +654,19 @@ export default function CalendarPage() {
             onChange={(e) => setForm((prev) => ({ ...prev, note: e.target.value }))}
             placeholder="可填写关键材料、截止节点、联系人等"
             rows={5}
+            disabled={isBusy}
           />
 
           <div className="flex items-center justify-end gap-3">
             <Button variant="outline" onClick={closeModal} disabled={isBusy}>
               取消
             </Button>
-            <Button onClick={handleSubmit} isLoading={createMutation.isPending || updateMutation.isPending}>
+            <Button
+              onClick={handleSubmit}
+              isLoading={createMutation.isPending || updateMutation.isPending}
+              loadingText="保存中..."
+              disabled={isBusy}
+            >
               保存
             </Button>
           </div>

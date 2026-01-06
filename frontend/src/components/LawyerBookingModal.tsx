@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { X, Calendar, Phone, FileText, Send } from "lucide-react";
 import api from "../api/client";
@@ -53,6 +54,13 @@ export default function LawyerBookingModal({
   const toast = useToast();
   const navigate = useNavigate();
 
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const [formData, setFormData] = useState({
     subject: "",
     category: "",
@@ -60,6 +68,8 @@ export default function LawyerBookingModal({
     contact_phone: "",
     preferred_time: "",
   });
+
+  const [flowBusy, setFlowBusy] = useState(false);
 
   const submitMutation = useAppMutation<ConsultationCreateResponse, void>({
     mutationFn: async (_: void) => {
@@ -76,6 +86,9 @@ export default function LawyerBookingModal({
       return (res.data || {}) as ConsultationCreateResponse;
     },
     errorMessageFallback: "预约失败，请稍后重试",
+    onMutate: async () => {
+      setFlowBusy(true);
+    },
     onSuccess: async (data) => {
       const orderNo = String(data?.payment_order_no || "").trim();
       const paymentStatus = String(data?.payment_status || "")
@@ -88,6 +101,7 @@ export default function LawyerBookingModal({
       if (!needPayNow) {
         toast.success("预约成功！律师会尽快与您联系");
         const go = window.confirm("预约成功！去查看我的预约吗？");
+        if (mountedRef.current) setFlowBusy(false);
         onClose();
         if (go) {
           navigate("/orders?tab=consultations");
@@ -100,6 +114,7 @@ export default function LawyerBookingModal({
       );
       if (!goPay) {
         toast.success("预约已提交，请尽快完成支付以确认预约");
+        if (mountedRef.current) setFlowBusy(false);
         onClose();
         navigate("/orders?tab=consultations");
         return;
@@ -115,10 +130,12 @@ export default function LawyerBookingModal({
             payment_method: "balance",
           });
           toast.success("支付成功，等待律师确认");
+          if (mountedRef.current) setFlowBusy(false);
           onClose();
           navigate("/orders?tab=consultations");
         } catch (err: any) {
           toast.error(getApiErrorMessage(err, "支付失败，请稍后重试"));
+          if (mountedRef.current) setFlowBusy(false);
           onClose();
           navigate("/orders?tab=consultations");
         }
@@ -137,19 +154,27 @@ export default function LawyerBookingModal({
         ).trim();
         if (!payUrl) {
           toast.error("未获取到支付链接");
+          if (mountedRef.current) setFlowBusy(false);
           onClose();
           navigate("/orders?tab=consultations");
           return;
         }
         window.open(payUrl, "_blank", "noopener,noreferrer");
         toast.success("已打开支付宝支付页面，请支付后等待律师确认");
+        if (mountedRef.current) setFlowBusy(false);
         onClose();
         navigate("/orders?tab=consultations");
       } catch (err: any) {
         toast.error(getApiErrorMessage(err, "获取支付链接失败，请稍后重试"));
+        if (mountedRef.current) setFlowBusy(false);
         onClose();
         navigate("/orders?tab=consultations");
       }
+    },
+    onError: (err) => {
+      toast.error(getApiErrorMessage(err, "预约失败，请稍后重试"));
+      if (mountedRef.current) setFlowBusy(false);
+      return err as any;
     },
   });
 
@@ -164,7 +189,7 @@ export default function LawyerBookingModal({
       return;
     }
 
-    if (submitMutation.isPending) return;
+    if (flowBusy || submitMutation.isPending) return;
     submitMutation.mutate();
   };
 
@@ -186,8 +211,12 @@ export default function LawyerBookingModal({
             </p>
           </div>
           <button
-            onClick={onClose}
-            className="p-2 hover:bg-slate-900/5 rounded-lg transition-colors dark:hover:bg-white/10"
+            onClick={() => {
+              if (flowBusy) return;
+              onClose();
+            }}
+            disabled={flowBusy}
+            className="p-2 hover:bg-slate-900/5 rounded-lg transition-colors dark:hover:bg-white/10 disabled:opacity-60 disabled:cursor-not-allowed"
           >
             <X className="h-5 w-5 text-slate-500 dark:text-white/50" />
           </button>
@@ -213,6 +242,7 @@ export default function LawyerBookingModal({
             }
             placeholder="简要描述您的问题"
             icon={FileText}
+            disabled={flowBusy}
           />
 
           {/* 案件类型 */}
@@ -226,11 +256,12 @@ export default function LawyerBookingModal({
                   key={type}
                   type="button"
                   onClick={() => setFormData({ ...formData, category: type })}
+                  disabled={flowBusy}
                   className={`px-3 py-1.5 rounded-full text-sm transition-all ${
                     formData.category === type
                       ? "bg-amber-600 text-white dark:bg-amber-500"
                       : "bg-slate-900/5 text-slate-700 hover:bg-slate-50 dark:bg-white/5 dark:text-white/70 dark:hover:bg-white/10"
-                  }`}
+                  } disabled:opacity-60 disabled:cursor-not-allowed`}
                 >
                   {type}
                 </button>
@@ -248,6 +279,7 @@ export default function LawyerBookingModal({
               onChange={(e) =>
                 setFormData({ ...formData, description: e.target.value })
               }
+              disabled={flowBusy}
               rows={3}
               className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none resize-none focus:border-amber-600/50 dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white dark:focus:border-amber-500/50"
               placeholder="详细描述您的情况和问题..."
@@ -263,6 +295,7 @@ export default function LawyerBookingModal({
             }
             placeholder="请输入您的手机号"
             icon={Phone}
+            disabled={flowBusy}
           />
 
           {/* 期望时间 */}
@@ -277,6 +310,7 @@ export default function LawyerBookingModal({
               onChange={(e) =>
                 setFormData({ ...formData, preferred_time: e.target.value })
               }
+              disabled={flowBusy}
               className="w-full px-4 py-3 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none focus:border-amber-600/50 dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white dark:focus:border-amber-500/50"
             />
           </div>
@@ -296,13 +330,22 @@ export default function LawyerBookingModal({
 
         {/* 底部按钮 */}
         <div className="flex gap-3 px-6 py-4 border-t border-slate-200/70 dark:border-white/10">
-          <Button variant="outline" onClick={onClose} className="flex-1">
+          <Button
+            variant="outline"
+            onClick={() => {
+              if (flowBusy) return;
+              onClose();
+            }}
+            disabled={flowBusy}
+            className="flex-1"
+          >
             取消
           </Button>
           <Button
             onClick={handleSubmit}
-            disabled={submitMutation.isPending || !isAuthenticated}
-            isLoading={submitMutation.isPending}
+            disabled={flowBusy || submitMutation.isPending || !isAuthenticated}
+            isLoading={flowBusy || submitMutation.isPending}
+            loadingText="处理中..."
             className="flex-1"
           >
             <Send className="h-4 w-4 mr-2" />

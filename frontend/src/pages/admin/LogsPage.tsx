@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { FileText, User, Calendar, Filter, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react'
-import { Card, Button, Badge } from '../../components/ui'
+import { Card, Button, Badge, ListSkeleton } from '../../components/ui'
 import { useQuery } from '@tanstack/react-query'
 import api from '../../api/client'
 import { useToast } from '../../hooks'
@@ -119,8 +119,14 @@ export default function LogsPage() {
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white">操作日志</h1>
           <p className="text-slate-600 mt-1 dark:text-white/50">查看管理员操作记录</p>
         </div>
-        <Button variant="outline" onClick={() => logsQuery.refetch()} disabled={loading}>
-          <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+        <Button
+          variant="outline"
+          icon={RefreshCw}
+          onClick={() => logsQuery.refetch()}
+          isLoading={loading}
+          loadingText="刷新中..."
+          disabled={loading}
+        >
           刷新
         </Button>
       </div>
@@ -162,123 +168,131 @@ export default function LogsPage() {
 
       {/* 日志列表 */}
       <Card variant="surface" padding="none">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-slate-200/70 dark:border-white/10">
-                <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">时间</th>
-                <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">操作员</th>
-                <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">模块</th>
-                <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">操作</th>
-                <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">描述</th>
-                <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">IP地址</th>
-              </tr>
-            </thead>
-            <tbody>
-              {logs.map((log) => (
-                <tr key={log.id} className="border-b border-slate-200/50 hover:bg-slate-50 dark:border-white/5 dark:hover:bg-white/5">
-                  <td className="py-3 px-4">
-                    <div className="flex items-center gap-2 text-slate-600 text-sm dark:text-white/60">
-                      <Calendar className="h-4 w-4" />
-                      {formatTime(log.created_at)}
-                    </div>
-                  </td>
-                  <td className="py-3 px-4">
-                    <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 flex items-center justify-center">
-                        <User className="h-4 w-4 text-white" />
-                      </div>
-                      <span className="text-slate-900 text-sm dark:text-white">{log.user_name || `用户#${log.user_id}`}</span>
-                    </div>
-                  </td>
-                  <td className="py-3 px-4">
-                    <span className="text-slate-700 text-sm dark:text-white/70">
-                      {moduleLabels[log.module] || log.module}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4">
-                    <Badge 
-                      variant={actionLabels[log.action]?.color || 'info'} 
-                      size="sm"
-                    >
-                      {actionLabels[log.action]?.label || log.action}
-                    </Badge>
-                  </td>
-                  <td className="py-3 px-4">
-                    <div className="max-w-xl">
-                      <span className="text-slate-600 text-sm truncate block dark:text-white/60">
-                        {log.description || '-'}
-                      </span>
-                      {log.extra_data ? (
-                        <div className="mt-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="px-2 py-1"
-                            onClick={() => toggleExpanded(log.id)}
-                          >
-                            {expandedIds.has(log.id) ? (
-                              <>
-                                <ChevronUp className="h-4 w-4" />
-                                收起详情
-                              </>
-                            ) : (
-                              <>
-                                <ChevronDown className="h-4 w-4" />
-                                查看详情
-                              </>
-                            )}
-                          </Button>
-                          {expandedIds.has(log.id) && (
-                            <pre className="mt-2 whitespace-pre-wrap break-words rounded-xl border border-slate-200/70 bg-slate-50 p-3 text-xs text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/70">
-                              {JSON.stringify(log.extra_data, null, 2)}
-                            </pre>
-                          )}
+        {logsQuery.isLoading && logs.length === 0 ? (
+          <div className="p-6">
+            <ListSkeleton count={8} />
+          </div>
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-slate-200/70 dark:border-white/10">
+                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">时间</th>
+                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">操作员</th>
+                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">模块</th>
+                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">操作</th>
+                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">描述</th>
+                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">IP地址</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {logs.map((log) => (
+                    <tr key={log.id} className="border-b border-slate-200/50 hover:bg-slate-50 dark:border-white/5 dark:hover:bg-white/5">
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-2 text-slate-600 text-sm dark:text-white/60">
+                          <Calendar className="h-4 w-4" />
+                          {formatTime(log.created_at)}
                         </div>
-                      ) : null}
-                    </div>
-                  </td>
-                  <td className="py-3 px-4">
-                    <span className="text-slate-500 text-sm font-mono dark:text-white/40">
-                      {log.ip_address || '-'}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                      </td>
+                      <td className="py-3 px-4">
+                        <div className="flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-full bg-gradient-to-r from-amber-500 to-orange-500 flex items-center justify-center">
+                            <User className="h-4 w-4 text-white" />
+                          </div>
+                          <span className="text-slate-900 text-sm dark:text-white">{log.user_name || `用户#${log.user_id}`}</span>
+                        </div>
+                      </td>
+                      <td className="py-3 px-4">
+                        <span className="text-slate-700 text-sm dark:text-white/70">
+                          {moduleLabels[log.module] || log.module}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4">
+                        <Badge 
+                          variant={actionLabels[log.action]?.color || 'info'} 
+                          size="sm"
+                        >
+                          {actionLabels[log.action]?.label || log.action}
+                        </Badge>
+                      </td>
+                      <td className="py-3 px-4">
+                        <div className="max-w-xl">
+                          <span className="text-slate-600 text-sm truncate block dark:text-white/60">
+                            {log.description || '-'}
+                          </span>
+                          {log.extra_data ? (
+                            <div className="mt-2">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="px-2 py-1"
+                                onClick={() => toggleExpanded(log.id)}
+                              >
+                                {expandedIds.has(log.id) ? (
+                                  <>
+                                    <ChevronUp className="h-4 w-4" />
+                                    收起详情
+                                  </>
+                                ) : (
+                                  <>
+                                    <ChevronDown className="h-4 w-4" />
+                                    查看详情
+                                  </>
+                                )}
+                              </Button>
+                              {expandedIds.has(log.id) && (
+                                <pre className="mt-2 whitespace-pre-wrap break-words rounded-xl border border-slate-200/70 bg-slate-50 p-3 text-xs text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-white/70">
+                                  {JSON.stringify(log.extra_data, null, 2)}
+                                </pre>
+                              )}
+                            </div>
+                          ) : null}
+                        </div>
+                      </td>
+                      <td className="py-3 px-4">
+                        <span className="text-slate-500 text-sm font-mono dark:text-white/40">
+                          {log.ip_address || '-'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
-        {logs.length === 0 && !loading && (
-          <div className="text-center py-12 text-slate-500 dark:text-white/40">
-            <FileText className="h-8 w-8 mx-auto mb-2 opacity-50" />
-            <p>暂无操作日志</p>
-          </div>
-        )}
+            {logs.length === 0 && !logsQuery.isFetching && (
+              <div className="text-center py-12 text-slate-500 dark:text-white/40">
+                <FileText className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                <p>暂无操作日志</p>
+              </div>
+            )}
 
-        {/* 分页 */}
-        {totalPages > 1 && (
-          <div className="flex items-center justify-center gap-4 p-4 border-t border-slate-200/70 dark:border-white/10">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setPage(p => Math.max(1, p - 1))}
-              disabled={page <= 1}
-            >
-              上一页
-            </Button>
-            <span className="text-slate-600 text-sm dark:text-white/60">
-              第 {page} / {totalPages} 页（共 {total} 条）
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setPage(p => p + 1)}
-              disabled={page >= totalPages}
-            >
-              下一页
-            </Button>
-          </div>
+            {/* 分页 */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-center gap-4 p-4 border-t border-slate-200/70 dark:border-white/10">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={page <= 1}
+                >
+                  上一页
+                </Button>
+                <span className="text-slate-600 text-sm dark:text-white/60">
+                  第 {page} / {totalPages} 页（共 {total} 条）
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage(p => p + 1)}
+                  disabled={page >= totalPages}
+                >
+                  下一页
+                </Button>
+              </div>
+            )}
+          </>
         )}
       </Card>
     </div>

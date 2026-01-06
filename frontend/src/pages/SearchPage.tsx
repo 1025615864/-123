@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Search, TrendingUp, Trash2, History, ArrowRight, Sparkles } from "lucide-react";
+import {
+  Search,
+  TrendingUp,
+  Trash2,
+  History,
+  ArrowRight,
+  Sparkles,
+  RefreshCw,
+} from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import PageHeader from "../components/PageHeader";
 import {
@@ -9,7 +17,7 @@ import {
   Button,
   Badge,
   EmptyState,
-  Loading,
+  ListSkeleton,
   VirtualWindowList,
 } from "../components/ui";
 import api from "../api/client";
@@ -201,6 +209,7 @@ export default function SearchPage() {
       toast.error("请先登录");
       return;
     }
+    if (clearHistoryMutation.isPending) return;
     clearHistoryMutation.mutate();
   }, [clearHistoryMutation, isAuthenticated, toast]);
 
@@ -334,7 +343,12 @@ export default function SearchPage() {
           )}
 
           <div className="flex gap-3 mt-4">
-            <Button onClick={() => performSearch()} disabled={searching}>
+            <Button
+              onClick={() => performSearch()}
+              disabled={searching}
+              isLoading={searching}
+              loadingText="搜索中..."
+            >
               搜索
             </Button>
             <Button
@@ -345,7 +359,14 @@ export default function SearchPage() {
               清空条件
             </Button>
             {isAuthenticated && (
-              <Button variant="outline" icon={Trash2} onClick={clearHistory}>
+              <Button
+                variant="outline"
+                icon={Trash2}
+                onClick={clearHistory}
+                isLoading={clearHistoryMutation.isPending}
+                loadingText="清空中..."
+                disabled={searching || clearHistoryMutation.isPending}
+              >
                 清空历史
               </Button>
             )}
@@ -425,12 +446,28 @@ export default function SearchPage() {
       </div>
 
       <Card variant="surface" padding="lg">
-        <h3 className="text-lg font-semibold text-slate-900 mb-6 dark:text-white">
-          搜索结果
-        </h3>
+        <div className="flex items-center justify-between gap-3 mb-6">
+          <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
+            搜索结果
+          </h3>
+          <Button
+            variant="outline"
+            size="sm"
+            icon={RefreshCw}
+            isLoading={searching}
+            loadingText="搜索中..."
+            onClick={() => {
+              if (submittedQuery.trim().length < 2) return;
+              void searchQuery.refetch();
+            }}
+            disabled={searching || submittedQuery.trim().length < 2}
+          >
+            刷新
+          </Button>
+        </div>
 
-        {searching ? (
-          <Loading text="搜索中..." tone={actualTheme} />
+        {searching && !results ? (
+          <ListSkeleton count={4} />
         ) : !results ? (
           <EmptyState
             icon={Search}
@@ -539,6 +576,12 @@ export default function SearchPage() {
           />
         ) : (
           <div className="space-y-8">
+            {searching ? (
+              <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-white/45">
+                <div className="h-4 w-4 rounded-full border-2 border-slate-400 border-t-transparent animate-spin dark:border-white/30" />
+                <span>搜索中…</span>
+              </div>
+            ) : null}
             {categoryCounts && (
               <div className="flex flex-wrap items-center gap-2">
                 <Badge variant="info">共 {categoryCounts.total} 条</Badge>

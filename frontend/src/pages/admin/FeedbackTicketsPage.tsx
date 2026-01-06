@@ -7,10 +7,11 @@ import {
   Card,
   EmptyState,
   Input,
-  Loading,
   Modal,
   Pagination,
   Textarea,
+  ListSkeleton,
+  Skeleton,
 } from "../../components/ui";
 import api from "../../api/client";
 import { useAppMutation, useToast } from "../../hooks";
@@ -154,8 +155,38 @@ export default function FeedbackTicketsPage() {
     setEditOpen(true);
   };
 
+  const closeEdit = () => {
+    setEditOpen(false);
+    setEditing(null);
+    setReply("");
+    setNextStatus("");
+  };
+
   if (listQuery.isLoading && items.length === 0) {
-    return <Loading text="加载中..." />;
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <Skeleton width="120px" height="20px" />
+            <div className="mt-2">
+              <Skeleton width="240px" height="14px" />
+            </div>
+          </div>
+          <Skeleton width="90px" height="36px" />
+        </div>
+
+        <Card variant="surface" padding="lg">
+          <div className="flex flex-wrap items-center gap-2 mb-4">
+            {Array.from({ length: 4 }).map((_, idx) => (
+              <Skeleton key={idx} width="64px" height="32px" />
+            ))}
+            <div className="flex-1" />
+            <Skeleton width="220px" height="40px" />
+          </div>
+          <ListSkeleton count={4} />
+        </Card>
+      </div>
+    );
   }
 
   return (
@@ -173,6 +204,8 @@ export default function FeedbackTicketsPage() {
           variant="outline"
           icon={RefreshCw}
           onClick={() => listQuery.refetch()}
+          isLoading={listQuery.isFetching}
+          loadingText="刷新中..."
           disabled={listQuery.isFetching}
         >
           刷新
@@ -237,7 +270,9 @@ export default function FeedbackTicketsPage() {
           </div>
         </div>
 
-        {items.length === 0 ? (
+        {listQuery.isLoading && items.length === 0 ? (
+          <ListSkeleton count={4} />
+        ) : items.length === 0 ? (
           <EmptyState
             icon={MessageSquare}
             title="暂无工单"
@@ -312,7 +347,10 @@ export default function FeedbackTicketsPage() {
 
       <Modal
         isOpen={editOpen}
-        onClose={() => setEditOpen(false)}
+        onClose={() => {
+          if (updateMutation.isPending) return
+          closeEdit()
+        }}
         title="处理工单"
         description={
           editing
@@ -328,6 +366,7 @@ export default function FeedbackTicketsPage() {
                 variant={nextStatus === "open" ? "primary" : "outline"}
                 size="sm"
                 onClick={() => setNextStatus("open")}
+                disabled={updateMutation.isPending}
               >
                 待处理
               </Button>
@@ -335,6 +374,7 @@ export default function FeedbackTicketsPage() {
                 variant={nextStatus === "processing" ? "primary" : "outline"}
                 size="sm"
                 onClick={() => setNextStatus("processing")}
+                disabled={updateMutation.isPending}
               >
                 处理中
               </Button>
@@ -342,6 +382,7 @@ export default function FeedbackTicketsPage() {
                 variant={nextStatus === "closed" ? "primary" : "outline"}
                 size="sm"
                 onClick={() => setNextStatus("closed")}
+                disabled={updateMutation.isPending}
               >
                 已关闭
               </Button>
@@ -353,16 +394,26 @@ export default function FeedbackTicketsPage() {
               onChange={(e) => setReply(e.target.value)}
               rows={8}
               placeholder="填写客服回复"
+              disabled={updateMutation.isPending}
             />
 
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setEditOpen(false)}>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  if (updateMutation.isPending) return
+                  closeEdit()
+                }}
+                disabled={updateMutation.isPending}
+              >
                 取消
               </Button>
               <Button
                 icon={Send}
                 isLoading={updateMutation.isPending}
+                loadingText="保存中..."
                 onClick={() => {
+                  if (updateMutation.isPending) return
                   const s = nextStatus || null;
                   const r = reply.trim() ? reply.trim() : null;
                   updateMutation.mutate({

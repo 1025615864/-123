@@ -17,6 +17,8 @@ import {
   Badge,
   Pagination,
   Textarea,
+  ListSkeleton,
+  Skeleton,
 } from "../../components/ui";
 import { useAppMutation, useToast } from "../../hooks";
 import { getApiErrorMessage } from "../../utils";
@@ -359,12 +361,20 @@ export default function PaymentCallbacksPage() {
         <div className="flex items-center gap-3">
           <Button
             variant="outline"
+            icon={RefreshCw}
             onClick={() => {
               listQuery.refetch();
               statsQuery.refetch();
               platformCertsQuery.refetch();
               channelStatusQuery.refetch();
             }}
+            isLoading={
+              listQuery.isFetching ||
+              statsQuery.isFetching ||
+              platformCertsQuery.isFetching ||
+              channelStatusQuery.isFetching
+            }
+            loadingText="刷新中..."
             disabled={
               listQuery.isFetching ||
               statsQuery.isFetching ||
@@ -372,13 +382,6 @@ export default function PaymentCallbacksPage() {
               channelStatusQuery.isFetching
             }
           >
-            <RefreshCw
-              className={`h-4 w-4 mr-2 ${
-                listQuery.isFetching || statsQuery.isFetching
-                  ? "animate-spin"
-                  : ""
-              }`}
-            />
             刷新
           </Button>
         </div>
@@ -401,9 +404,7 @@ export default function PaymentCallbacksPage() {
             <div className="text-xs text-slate-500 dark:text-white/40">支付宝</div>
             <div className="mt-1">
               {channelStatusQuery.isLoading ? (
-                <span className="text-slate-500 text-sm dark:text-white/50">
-                  加载中...
-                </span>
+                <Skeleton width="72px" height="18px" />
               ) : channelStatusQuery.data?.alipay_configured ? (
                 <Badge variant="success" size="sm">
                   已配置
@@ -420,9 +421,7 @@ export default function PaymentCallbacksPage() {
             <div className="text-xs text-slate-500 dark:text-white/40">微信支付</div>
             <div className="mt-1">
               {channelStatusQuery.isLoading ? (
-                <span className="text-slate-500 text-sm dark:text-white/50">
-                  加载中...
-                </span>
+                <Skeleton width="72px" height="18px" />
               ) : channelStatusQuery.data?.wechatpay_configured ? (
                 <Badge variant="success" size="sm">
                   已配置
@@ -439,9 +438,7 @@ export default function PaymentCallbacksPage() {
             <div className="text-xs text-slate-500 dark:text-white/40">平台证书缓存</div>
             <div className="mt-1">
               {channelStatusQuery.isLoading ? (
-                <span className="text-slate-500 text-sm dark:text-white/50">
-                  加载中...
-                </span>
+                <Skeleton width="72px" height="18px" />
               ) : channelStatusQuery.data?.wechatpay_platform_certs_cached ? (
                 <Badge variant="success" size="sm">
                   {channelStatusQuery.data?.wechatpay_platform_certs_total ?? 0} 条
@@ -458,9 +455,7 @@ export default function PaymentCallbacksPage() {
             <div className="text-xs text-slate-500 dark:text-white/40">证书自动刷新</div>
             <div className="mt-1">
               {channelStatusQuery.isLoading ? (
-                <span className="text-slate-500 text-sm dark:text-white/50">
-                  加载中...
-                </span>
+                <Skeleton width="72px" height="18px" />
               ) : channelStatusQuery.data?.wechatpay_cert_refresh_enabled ? (
                 <Badge variant="success" size="sm">
                   已启用
@@ -660,7 +655,9 @@ export default function PaymentCallbacksPage() {
                     colSpan={7}
                     className="py-10 text-center text-slate-500 dark:text-white/50"
                   >
-                    加载中...
+                    <div className="px-4">
+                      <ListSkeleton count={6} />
+                    </div>
                   </td>
                 </tr>
               ) : items.length === 0 ? (
@@ -739,17 +736,17 @@ export default function PaymentCallbacksPage() {
             <Button
               icon={KeyRound}
               onClick={() => refreshCertsMutation.mutate()}
+              isLoading={refreshCertsMutation.isPending}
+              loadingText="刷新中..."
               disabled={refreshCertsMutation.isPending}
             >
-              {refreshCertsMutation.isPending ? "刷新中..." : "刷新证书"}
+              刷新证书
             </Button>
           </div>
 
           <div className="mt-4 space-y-2">
             {platformCertsQuery.isLoading ? (
-              <div className="text-center py-8 text-slate-500 dark:text-white/50">
-                加载中...
-              </div>
+              <ListSkeleton count={3} />
             ) : (platformCertsQuery.data?.items?.length ?? 0) === 0 ? (
               <div className="text-center py-8 text-slate-500 dark:text-white/50">
                 暂无证书
@@ -785,6 +782,7 @@ export default function PaymentCallbacksPage() {
               <Textarea
                 value={platformCertImportJson}
                 onChange={(e) => setPlatformCertImportJson(e.target.value)}
+                disabled={importCertsMutation.isPending}
                 rows={5}
                 placeholder='平台证书 JSON（示例：{"updated_at":...,"certs":[{"serial_no":"...","pem":"-----BEGIN CERTIFICATE-----...","expire_time":"..."}]})'
               />
@@ -792,6 +790,7 @@ export default function PaymentCallbacksPage() {
               <Textarea
                 value={platformCertImportPem}
                 onChange={(e) => setPlatformCertImportPem(e.target.value)}
+                disabled={importCertsMutation.isPending}
                 rows={5}
                 placeholder="单个证书 PEM（-----BEGIN CERTIFICATE----- ... -----END CERTIFICATE-----）"
               />
@@ -800,11 +799,13 @@ export default function PaymentCallbacksPage() {
                 <Input
                   value={platformCertImportSerialNo}
                   onChange={(e) => setPlatformCertImportSerialNo(e.target.value)}
+                  disabled={importCertsMutation.isPending}
                   placeholder="serial_no（可选）"
                 />
                 <Input
                   value={platformCertImportExpireTime}
                   onChange={(e) => setPlatformCertImportExpireTime(e.target.value)}
+                  disabled={importCertsMutation.isPending}
                   placeholder="expire_time（可选，ISO8601）"
                 />
               </div>
@@ -814,6 +815,7 @@ export default function PaymentCallbacksPage() {
                   type="checkbox"
                   checked={platformCertImportMerge}
                   onChange={(e) => setPlatformCertImportMerge(e.target.checked)}
+                  disabled={importCertsMutation.isPending}
                 />
                 合并导入（保留已有证书）
               </label>
@@ -845,9 +847,11 @@ export default function PaymentCallbacksPage() {
                     }
                     importCertsMutation.mutate(payload);
                   }}
+                  isLoading={importCertsMutation.isPending}
+                  loadingText="导入中..."
                   disabled={importCertsMutation.isPending}
                 >
-                  {importCertsMutation.isPending ? "导入中..." : "导入证书"}
+                  导入证书
                 </Button>
                 <Button
                   variant="ghost"
@@ -857,6 +861,7 @@ export default function PaymentCallbacksPage() {
                     setPlatformCertImportSerialNo("");
                     setPlatformCertImportExpireTime("");
                   }}
+                  disabled={importCertsMutation.isPending}
                 >
                   清空
                 </Button>
@@ -882,15 +887,18 @@ export default function PaymentCallbacksPage() {
               <Input
                 value={reconcileOrderNo}
                 onChange={(e) => setReconcileOrderNo(e.target.value)}
+                disabled={reconcileMutation.isPending}
                 placeholder="请输入订单号"
               />
             </div>
             <Button
               icon={Search}
               onClick={doReconcile}
+              isLoading={reconcileMutation.isPending}
+              loadingText="查询中..."
               disabled={reconcileMutation.isPending}
             >
-              {reconcileMutation.isPending ? "查询中..." : "对账"}
+              对账
             </Button>
           </div>
 

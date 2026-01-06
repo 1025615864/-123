@@ -16,10 +16,11 @@ import {
   Card,
   EmptyState,
   Input,
-  Loading,
   Modal,
   Pagination,
   Textarea,
+  ListSkeleton,
+  Skeleton,
 } from "../../components/ui";
 import api from "../../api/client";
 import { useAppMutation, useToast } from "../../hooks";
@@ -284,8 +285,40 @@ export default function WithdrawalsPage() {
   });
 
   if (listQuery.isLoading && items.length === 0) {
-    return <Loading text="加载中..." />;
+    return (
+      <div className="space-y-6">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <Skeleton width="96px" height="20px" />
+            <div className="mt-2">
+              <Skeleton width="220px" height="14px" />
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Skeleton width="86px" height="36px" />
+            <Skeleton width="86px" height="36px" />
+          </div>
+        </div>
+
+        <Card variant="surface" padding="lg">
+          <div className="flex flex-wrap items-center gap-2 mb-4">
+            {Array.from({ length: 4 }).map((_, idx) => (
+              <Skeleton key={idx} width="64px" height="32px" />
+            ))}
+            <div className="flex-1" />
+            <Skeleton width="220px" height="40px" />
+          </div>
+          <ListSkeleton count={4} />
+        </Card>
+      </div>
+    );
   }
+
+  const detailActionBusy =
+    approveMutation.isPending ||
+    rejectMutation.isPending ||
+    completeMutation.isPending ||
+    failMutation.isPending;
 
   return (
     <div className="space-y-6">
@@ -304,6 +337,7 @@ export default function WithdrawalsPage() {
             icon={Download}
             onClick={exportWithdrawals}
             isLoading={exporting}
+            loadingText="导出中..."
           >
             导出
           </Button>
@@ -311,6 +345,8 @@ export default function WithdrawalsPage() {
             variant="outline"
             icon={RefreshCw}
             onClick={() => listQuery.refetch()}
+            isLoading={listQuery.isFetching}
+            loadingText="刷新中..."
             disabled={listQuery.isFetching}
           >
             刷新
@@ -458,13 +494,27 @@ export default function WithdrawalsPage() {
 
       <Modal
         isOpen={detailOpen}
-        onClose={() => setDetailOpen(false)}
+        onClose={() => {
+          if (detailActionBusy) return;
+          setDetailOpen(false);
+        }}
         title="提现审核"
         description={detail ? `申请单号：${detail.request_no}` : undefined}
         size="lg"
       >
         {!detail ? (
-          <Loading text="加载中..." />
+          <div className="space-y-3">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <Skeleton width="120px" height="18px" />
+              <Skeleton width="80px" height="22px" />
+            </div>
+            <Skeleton width="100%" height="14px" />
+            <Skeleton width="92%" height="14px" />
+            <Skeleton width="86%" height="14px" />
+            <div className="pt-2">
+              <Skeleton width="100%" height="96px" />
+            </div>
+          </div>
         ) : (
           <div className="space-y-4">
             <Card variant="surface" padding="md">
@@ -505,12 +555,14 @@ export default function WithdrawalsPage() {
               label="备注（可选）"
               value={remark}
               onChange={(e) => setRemark(e.target.value)}
+              disabled={detailActionBusy}
               rows={4}
             />
             <Textarea
               label="驳回原因（驳回时必填）"
               value={rejectReason}
               onChange={(e) => setRejectReason(e.target.value)}
+              disabled={detailActionBusy}
               rows={3}
             />
 
@@ -519,10 +571,11 @@ export default function WithdrawalsPage() {
                 variant="outline"
                 icon={ShieldCheck}
                 isLoading={approveMutation.isPending}
+                loadingText="处理中..."
                 onClick={() => {
                   approveMutation.mutate({ id: detail.id, remark });
                 }}
-                disabled={String(detail.status).toLowerCase() !== "pending"}
+                disabled={String(detail.status).toLowerCase() !== "pending" || detailActionBusy}
               >
                 通过
               </Button>
@@ -530,6 +583,7 @@ export default function WithdrawalsPage() {
                 variant="danger"
                 icon={ShieldX}
                 isLoading={rejectMutation.isPending}
+                loadingText="处理中..."
                 onClick={() => {
                   if (!rejectReason.trim()) {
                     toast.error("请填写驳回原因");
@@ -541,7 +595,7 @@ export default function WithdrawalsPage() {
                     remark,
                   });
                 }}
-                disabled={String(detail.status).toLowerCase() !== "pending"}
+                disabled={String(detail.status).toLowerCase() !== "pending" || detailActionBusy}
               >
                 驳回
               </Button>
@@ -549,10 +603,11 @@ export default function WithdrawalsPage() {
                 variant="outline"
                 icon={CheckCircle2}
                 isLoading={completeMutation.isPending}
+                loadingText="处理中..."
                 onClick={() => {
                   completeMutation.mutate({ id: detail.id, remark });
                 }}
-                disabled={String(detail.status).toLowerCase() !== "approved"}
+                disabled={String(detail.status).toLowerCase() !== "approved" || detailActionBusy}
               >
                 标记完成
               </Button>
@@ -560,10 +615,11 @@ export default function WithdrawalsPage() {
                 variant="danger"
                 icon={XCircle}
                 isLoading={failMutation.isPending}
+                loadingText="处理中..."
                 onClick={() => {
                   failMutation.mutate({ id: detail.id, remark });
                 }}
-                disabled={String(detail.status).toLowerCase() !== "approved"}
+                disabled={String(detail.status).toLowerCase() !== "approved" || detailActionBusy}
               >
                 标记失败
               </Button>

@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { CheckCircle, Clock, Shield, XCircle } from 'lucide-react'
-import { Card, Button, Badge, Loading, Input, Modal } from '../../components/ui'
+import { CheckCircle, Clock, RotateCcw, Shield, XCircle } from 'lucide-react'
+import { Card, Button, Badge, Input, ListSkeleton, Modal, Skeleton } from '../../components/ui'
 import api from '../../api/client'
-import { useTheme } from '../../contexts/ThemeContext'
 import { useAppMutation, useToast } from '../../hooks'
 import { getApiErrorMessage } from '../../utils'
 
@@ -49,7 +48,6 @@ function statusToLabel(status: string): string {
 }
 
 export default function LawyerVerificationsPage() {
-  const { actualTheme } = useTheme()
   const toast = useToast()
 
   const [statusFilter, setStatusFilter] = useState<string>('pending')
@@ -148,7 +146,14 @@ export default function LawyerVerificationsPage() {
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white">律师认证审核</h1>
           <p className="text-slate-600 mt-1 dark:text-white/50">审核用户提交的律师认证申请</p>
         </div>
-        <Button variant="outline" onClick={() => listQuery.refetch()} disabled={listQuery.isFetching}>
+        <Button
+          variant="outline"
+          icon={RotateCcw}
+          onClick={() => listQuery.refetch()}
+          isLoading={listQuery.isFetching}
+          loadingText="刷新中..."
+          disabled={listQuery.isFetching}
+        >
           刷新
         </Button>
       </div>
@@ -198,8 +203,14 @@ export default function LawyerVerificationsPage() {
       </Card>
 
       <Card variant="surface" padding="lg">
-        {listQuery.isLoading ? (
-          <Loading text="加载中..." tone={actualTheme} />
+        {listQuery.isLoading && items.length === 0 ? (
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Skeleton width="120px" height="16px" />
+              <Skeleton width="240px" height="12px" />
+            </div>
+            <ListSkeleton count={5} />
+          </div>
         ) : (
           <div className="space-y-4">
             {filtered.length === 0 ? (
@@ -271,6 +282,7 @@ export default function LawyerVerificationsPage() {
       <Modal
         isOpen={reviewOpen}
         onClose={() => {
+          if (reviewMutation.isPending) return
           setReviewOpen(false)
           setReviewTarget(null)
           setRejectReason('')
@@ -303,6 +315,7 @@ export default function LawyerVerificationsPage() {
                 variant="danger"
                 icon={XCircle}
                 isLoading={reviewMutation.isPending}
+                loadingText="处理中..."
                 onClick={submitReject}
               >
                 驳回
@@ -311,6 +324,7 @@ export default function LawyerVerificationsPage() {
                 variant="primary"
                 icon={CheckCircle}
                 isLoading={reviewMutation.isPending}
+                loadingText="处理中..."
                 onClick={submitApprove}
               >
                 通过

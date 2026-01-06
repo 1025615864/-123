@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import {
   Copy,
+  Loader2,
   MoreVertical,
   RotateCcw,
   Star,
@@ -123,8 +124,12 @@ export default function MessageActionsBar({
         className={goodClassName}
         aria-label="好评"
       >
-        <ThumbsUp className="h-3.5 w-3.5" />
-        <span className="hidden sm:inline">好评</span>
+        {rateLoading ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <ThumbsUp className="h-3.5 w-3.5" />
+        )}
+        <span className="hidden sm:inline">{rateLoading ? "评价中..." : "好评"}</span>
       </button>
 
       <button
@@ -134,8 +139,12 @@ export default function MessageActionsBar({
         className={badClassName}
         aria-label="差评"
       >
-        <ThumbsDown className="h-3.5 w-3.5" />
-        <span className="hidden sm:inline">差评</span>
+        {rateLoading ? (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        ) : (
+          <ThumbsDown className="h-3.5 w-3.5" />
+        )}
+        <span className="hidden sm:inline">{rateLoading ? "评价中..." : "差评"}</span>
       </button>
 
       <button

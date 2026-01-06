@@ -1,7 +1,7 @@
 import { useEffect, useMemo } from 'react'
-import { Users, Newspaper, MessageSquare, Building2, TrendingUp, Eye, Activity, BarChart3, PieChart, Sparkles } from 'lucide-react'
+import { Users, Newspaper, MessageSquare, Building2, TrendingUp, Eye, Activity, BarChart3, PieChart, Sparkles, RotateCcw } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
-import { Card, Button, Loading, EmptyState } from '../../components/ui'
+import { Card, Button, EmptyState, ListSkeleton, Skeleton } from '../../components/ui'
 import api from '../../api/client'
 import { useToast } from '../../hooks'
 import { useTheme } from '../../contexts/ThemeContext'
@@ -330,6 +330,15 @@ export default function DashboardPage() {
   const aiFeedbackLoading = aiFeedbackQuery.isLoading
   const aiFeedbackError = aiFeedbackQuery.isError ? getApiErrorMessage(aiFeedbackQuery.error, 'AI反馈统计加载失败') : null
 
+  const refreshing =
+    statsQuery.isFetching ||
+    trendsQuery.isFetching ||
+    categoryQuery.isFetching ||
+    activityQuery.isFetching ||
+    hotQuery.isFetching ||
+    newsStatsQuery.isFetching ||
+    aiFeedbackQuery.isFetching
+
   // 统一错误 toast（不影响原有错误区域展示）
   useEffect(() => {
     const err = statsQuery.error || trendsQuery.error || categoryQuery.error || activityQuery.error || hotQuery.error || newsStatsQuery.error || aiFeedbackQuery.error
@@ -366,9 +375,29 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900 dark:text-white">仪表盘</h1>
-        <p className="text-slate-600 mt-1 dark:text-white/50">欢迎回来，这是系统的整体概览</p>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900 dark:text-white">仪表盘</h1>
+          <p className="text-slate-600 mt-1 dark:text-white/50">欢迎回来，这是系统的整体概览</p>
+        </div>
+        <Button
+          variant="outline"
+          icon={RotateCcw}
+          isLoading={refreshing}
+          loadingText="刷新中..."
+          disabled={refreshing}
+          onClick={() => {
+            statsQuery.refetch()
+            trendsQuery.refetch()
+            categoryQuery.refetch()
+            activityQuery.refetch()
+            hotQuery.refetch()
+            newsStatsQuery.refetch()
+            aiFeedbackQuery.refetch()
+          }}
+        >
+          刷新
+        </Button>
       </div>
 
       {/* 统计卡片 */}
@@ -393,7 +422,22 @@ export default function DashboardPage() {
       </div>
 
       {statsLoading ? (
-        <Loading text="加载统计中..." tone={actualTheme} />
+        <div className="rounded-xl border border-slate-200/70 bg-white/60 px-4 py-3 dark:border-white/10 dark:bg-white/5">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <Skeleton width="140px" height="14px" />
+            <Skeleton width="72px" height="28px" />
+          </div>
+          <div className="mt-3 grid sm:grid-cols-4 gap-3">
+            {Array.from({ length: 4 }).map((_, idx) => (
+              <div key={idx} className="rounded-xl bg-slate-900/5 px-4 py-4 dark:bg-white/5">
+                <Skeleton width="72px" height="12px" />
+                <div className="mt-2">
+                  <Skeleton width="90px" height="24px" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       ) : statsError ? (
         <div className="flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
           <div>{statsError}</div>
@@ -412,7 +456,16 @@ export default function DashboardPage() {
             <span className="text-xs text-slate-500 dark:text-white/40">最近7天</span>
           </div>
           {weeklyLoading ? (
-            <Loading text="加载中..." tone={actualTheme} />
+            <div className="space-y-4">
+              <div className="flex items-end justify-between gap-2 h-40">
+                {Array.from({ length: 7 }).map((_, idx) => (
+                  <div key={idx} className="flex-1 flex flex-col items-center gap-2">
+                    <Skeleton width="100%" height={`${48 + (idx % 4) * 18}px`} />
+                    <Skeleton width="28px" height="10px" />
+                  </div>
+                ))}
+              </div>
+            </div>
           ) : weeklyError ? (
             <div className="flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
               <div>{weeklyError}</div>
@@ -441,7 +494,18 @@ export default function DashboardPage() {
             </h3>
           </div>
           {categoryLoading ? (
-            <Loading text="加载中..." tone={actualTheme} />
+            <div className="flex items-center gap-6 flex-wrap">
+              <Skeleton variant="circular" width="128px" height="128px" />
+              <div className="flex flex-col gap-2">
+                {Array.from({ length: 5 }).map((_, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <Skeleton variant="circular" width="12px" height="12px" />
+                    <Skeleton width="110px" height="12px" />
+                    <Skeleton width="40px" height="12px" />
+                  </div>
+                ))}
+              </div>
+            </div>
           ) : categoryError ? (
             <div className="flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
               <div>{categoryError}</div>
@@ -467,7 +531,14 @@ export default function DashboardPage() {
               <Newspaper className="h-5 w-5 text-amber-600 dark:text-amber-400" />
               新闻发布趋势
             </h3>
-            <Button variant="outline" onClick={() => newsStatsQuery.refetch()} disabled={newsStatsQuery.isFetching}>
+            <Button
+              variant="outline"
+              icon={RotateCcw}
+              isLoading={newsStatsQuery.isFetching}
+              loadingText="刷新中..."
+              onClick={() => newsStatsQuery.refetch()}
+              disabled={newsStatsQuery.isFetching}
+            >
               刷新
             </Button>
           </div>
@@ -488,7 +559,16 @@ export default function DashboardPage() {
           </div>
 
           {newsStatsLoading ? (
-            <Loading text="加载中..." tone={actualTheme} />
+            <div className="space-y-4">
+              <div className="flex items-end justify-between gap-2 h-36">
+                {Array.from({ length: 7 }).map((_, idx) => (
+                  <div key={idx} className="flex-1 flex flex-col items-center gap-2">
+                    <Skeleton width="100%" height={`${44 + (idx % 3) * 16}px`} />
+                    <Skeleton width="28px" height="10px" />
+                  </div>
+                ))}
+              </div>
+            </div>
           ) : newsStatsError ? (
             <div className="flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
               <div>{newsStatsError}</div>
@@ -515,7 +595,18 @@ export default function DashboardPage() {
           </div>
 
           {newsStatsLoading ? (
-            <Loading text="加载中..." tone={actualTheme} />
+            <div className="flex items-center gap-6 flex-wrap">
+              <Skeleton variant="circular" width="128px" height="128px" />
+              <div className="flex flex-col gap-2">
+                {Array.from({ length: 5 }).map((_, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <Skeleton variant="circular" width="12px" height="12px" />
+                    <Skeleton width="110px" height="12px" />
+                    <Skeleton width="40px" height="12px" />
+                  </div>
+                ))}
+              </div>
+            </div>
           ) : newsStatsError ? (
             <div className="flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
               <div>{newsStatsError}</div>
@@ -540,13 +631,20 @@ export default function DashboardPage() {
             <Eye className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
             热门新闻
           </h3>
-          <Button variant="outline" onClick={() => newsStatsQuery.refetch()} disabled={newsStatsQuery.isFetching}>
+          <Button
+            variant="outline"
+            icon={RotateCcw}
+            isLoading={newsStatsQuery.isFetching}
+            loadingText="刷新中..."
+            onClick={() => newsStatsQuery.refetch()}
+            disabled={newsStatsQuery.isFetching}
+          >
             刷新
           </Button>
         </div>
 
         {newsStatsLoading ? (
-          <Loading text="加载中..." tone={actualTheme} />
+          <ListSkeleton count={3} />
         ) : newsStatsError ? (
           <div className="flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
             <div>{newsStatsError}</div>
@@ -580,13 +678,32 @@ export default function DashboardPage() {
             <Sparkles className="h-5 w-5 text-purple-600 dark:text-purple-400" />
             AI 质量
           </h3>
-          <Button variant="outline" onClick={() => aiFeedbackQuery.refetch()} disabled={aiFeedbackQuery.isFetching}>
+          <Button
+            variant="outline"
+            icon={RotateCcw}
+            isLoading={aiFeedbackQuery.isFetching}
+            loadingText="刷新中..."
+            onClick={() => aiFeedbackQuery.refetch()}
+            disabled={aiFeedbackQuery.isFetching}
+          >
             刷新
           </Button>
         </div>
 
         {aiFeedbackLoading ? (
-          <Loading text="加载中..." tone={actualTheme} />
+          <div className="space-y-4">
+            <div className="grid sm:grid-cols-3 gap-3">
+              {Array.from({ length: 3 }).map((_, idx) => (
+                <div key={idx} className="rounded-xl bg-slate-900/5 px-4 py-3 dark:bg-white/5">
+                  <Skeleton width="60px" height="12px" />
+                  <div className="mt-2">
+                    <Skeleton width="80px" height="20px" />
+                  </div>
+                </div>
+              ))}
+            </div>
+            <ListSkeleton count={3} />
+          </div>
         ) : aiFeedbackError ? (
           <div className="flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
             <div>{aiFeedbackError}</div>
@@ -672,7 +789,7 @@ export default function DashboardPage() {
             最近活动
           </h3>
           {activityLoading ? (
-            <Loading text="加载中..." tone={actualTheme} />
+            <ListSkeleton count={3} />
           ) : activityError ? (
             <div className="flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
               <div>{activityError}</div>
@@ -700,7 +817,7 @@ export default function DashboardPage() {
         <Card variant="surface" padding="lg">
           <h3 className="text-lg font-semibold text-slate-900 mb-4 dark:text-white">热门内容</h3>
           {hotLoading ? (
-            <Loading text="加载中..." tone={actualTheme} />
+            <ListSkeleton count={3} />
           ) : hotError ? (
             <div className="flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
               <div>{hotError}</div>

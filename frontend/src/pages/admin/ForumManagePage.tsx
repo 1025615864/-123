@@ -12,7 +12,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { Card, Input, Button, Badge, Modal, ModalActions, Textarea } from "../../components/ui";
+import { Card, Input, Button, Badge, ListSkeleton, Modal, ModalActions, Textarea } from "../../components/ui";
 import api from "../../api/client";
 import { useAppMutation, useToast } from "../../hooks";
 import { getApiErrorMessage } from "../../utils";
@@ -178,6 +178,21 @@ export default function ForumManagePage() {
   const [adWordsThresholdDraft, setAdWordsThresholdDraft] = useState<number>(2);
   const [checkUrlDraft, setCheckUrlDraft] = useState(true);
   const [checkPhoneDraft, setCheckPhoneDraft] = useState(true);
+  const [activePostAction, setActivePostAction] = useState<
+    | {
+        postId: number;
+        kind: "pin" | "hot" | "essence" | "delete" | "restore" | "purge";
+      }
+    | null
+  >(null);
+  const [activeReviewAction, setActiveReviewAction] = useState<
+    | {
+        kind: "post" | "comment";
+        id: number;
+        action: "approve" | "reject" | "delete";
+      }
+    | null
+  >(null);
   const statsQuery = useQuery({
     queryKey: queryKeys.forumStats(),
     queryFn: async () => {
@@ -499,6 +514,9 @@ export default function ForumManagePage() {
       });
     },
     errorMessageFallback: "操作失败，请稍后重试",
+    onMutate: async (payload) => {
+      setActiveReviewAction({ kind: "post", id: payload.postId, action: payload.action });
+    },
     onSuccess: async () => {
       closeReasonModal();
       await Promise.all([
@@ -507,6 +525,9 @@ export default function ForumManagePage() {
         statsQuery.refetch(),
         postsQuery.refetch(),
       ]);
+    },
+    onSettled: () => {
+      setActiveReviewAction(null);
     },
   });
 
@@ -543,6 +564,9 @@ export default function ForumManagePage() {
       });
     },
     errorMessageFallback: "操作失败，请稍后重试",
+    onMutate: async (payload) => {
+      setActiveReviewAction({ kind: "comment", id: payload.commentId, action: payload.action });
+    },
     onSuccess: async () => {
       closeReasonModal();
       await Promise.all([
@@ -551,6 +575,9 @@ export default function ForumManagePage() {
         statsQuery.refetch(),
         postsQuery.refetch(),
       ]);
+    },
+    onSettled: () => {
+      setActiveReviewAction(null);
     },
   });
 
@@ -647,6 +674,12 @@ export default function ForumManagePage() {
     },
     errorMessageFallback: "操作失败，请稍后重试",
     invalidateQueryKeys: [postsQueryKey as any],
+    onMutate: async (payload) => {
+      setActivePostAction({ postId: payload.postId, kind: "pin" });
+    },
+    onSettled: () => {
+      setActivePostAction(null);
+    },
   });
 
   const hotMutation = useAppMutation<void, { postId: number; is_hot: boolean }>({
@@ -655,6 +688,12 @@ export default function ForumManagePage() {
     },
     errorMessageFallback: "操作失败，请稍后重试",
     invalidateQueryKeys: [postsQueryKey as any, queryKeys.forumStats() as any],
+    onMutate: async (payload) => {
+      setActivePostAction({ postId: payload.postId, kind: "hot" });
+    },
+    onSettled: () => {
+      setActivePostAction(null);
+    },
   });
 
   const essenceMutation = useAppMutation<void, { postId: number; is_essence: boolean }>({
@@ -663,6 +702,12 @@ export default function ForumManagePage() {
     },
     errorMessageFallback: "操作失败，请稍后重试",
     invalidateQueryKeys: [postsQueryKey as any, queryKeys.forumStats() as any],
+    onMutate: async (payload) => {
+      setActivePostAction({ postId: payload.postId, kind: "essence" });
+    },
+    onSettled: () => {
+      setActivePostAction(null);
+    },
   });
 
   const deletePostMutation = useAppMutation<{ message?: string }, number>({
@@ -672,8 +717,14 @@ export default function ForumManagePage() {
     },
     errorMessageFallback: "操作失败，请稍后重试",
     invalidateQueryKeys: [["admin-forum-posts"] as any, queryKeys.forumStats() as any],
+    onMutate: async (postId) => {
+      setActivePostAction({ postId, kind: "delete" });
+    },
     onSuccess: async (data) => {
       toast.success(data?.message || "删除成功");
+    },
+    onSettled: () => {
+      setActivePostAction(null);
     },
   });
 
@@ -684,8 +735,14 @@ export default function ForumManagePage() {
     },
     errorMessageFallback: "永久删除失败，请稍后重试",
     invalidateQueryKeys: [["admin-forum-posts"] as any, queryKeys.forumStats() as any],
+    onMutate: async (postId) => {
+      setActivePostAction({ postId, kind: "purge" });
+    },
     onSuccess: async (data) => {
       toast.success(data?.message || "已永久删除");
+    },
+    onSettled: () => {
+      setActivePostAction(null);
     },
   });
 
@@ -696,8 +753,14 @@ export default function ForumManagePage() {
     },
     errorMessageFallback: "恢复失败，请稍后重试",
     invalidateQueryKeys: [["admin-forum-posts"] as any, queryKeys.forumStats() as any],
+    onMutate: async (postId) => {
+      setActivePostAction({ postId, kind: "restore" });
+    },
     onSuccess: async (data) => {
       toast.success(data?.message || "已恢复");
+    },
+    onSettled: () => {
+      setActivePostAction(null);
     },
   });
 
@@ -1026,6 +1089,7 @@ export default function ForumManagePage() {
                 if (reasonModalLoading) return;
                 closeReasonModal();
               }}
+              disabled={reasonModalLoading}
             >
               取消
             </Button>
@@ -1033,7 +1097,8 @@ export default function ForumManagePage() {
               variant={reasonModalTarget?.action === "delete" ? "danger" : "primary"}
               onClick={handleConfirmReasonModal}
               isLoading={reasonModalLoading}
-              disabled={!reasonModalTarget}
+              loadingText="处理中..."
+              disabled={!reasonModalTarget || reasonModalLoading}
             >
               确认
             </Button>
@@ -1069,6 +1134,9 @@ export default function ForumManagePage() {
             variant="outline"
             icon={BarChart3}
             onClick={handleUpdateHeatScores}
+            isLoading={updateHeatMutation.isPending}
+            loadingText="更新中..."
+            disabled={updateHeatMutation.isPending}
           >
             更新热度
           </Button>
@@ -1173,11 +1241,28 @@ export default function ForumManagePage() {
             <div className="flex items-center gap-2">
               <span className="text-sm text-slate-600 dark:text-white/60">已选 {selectedIds.size} 条</span>
 
+              <Button
+                variant="outline"
+                size="sm"
+                icon={RotateCcw}
+                onClick={() => {
+                  postsQuery.refetch();
+                  statsQuery.refetch();
+                }}
+                isLoading={postsQuery.isFetching}
+                loadingText="刷新中..."
+                disabled={postsQuery.isFetching}
+              >
+                刷新
+              </Button>
+
               {!deleted ? (
                 <Button
                   variant="danger"
                   size="sm"
                   onClick={handleBatchDelete}
+                  isLoading={batchDeleteMutation.isPending}
+                  loadingText="处理中..."
                   disabled={selectedIds.size === 0 || batchDeleteMutation.isPending}
                 >
                   批量删除
@@ -1189,6 +1274,8 @@ export default function ForumManagePage() {
                     size="sm"
                     icon={RotateCcw}
                     onClick={handleBatchRestore}
+                    isLoading={batchRestoreMutation.isPending}
+                    loadingText="处理中..."
                     disabled={selectedIds.size === 0 || batchRestoreMutation.isPending}
                   >
                     批量恢复
@@ -1197,6 +1284,8 @@ export default function ForumManagePage() {
                     variant="danger"
                     size="sm"
                     onClick={handleBatchPurge}
+                    isLoading={batchPurgeMutation.isPending}
+                    loadingText="处理中..."
                     disabled={selectedIds.size === 0 || batchPurgeMutation.isPending}
                   >
                     批量永久删除
@@ -1207,215 +1296,268 @@ export default function ForumManagePage() {
           </div>
 
           {/* 表格 */}
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-slate-200/70 dark:border-white/10">
-                  <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
-                    <input
-                      type="checkbox"
-                      checked={posts.length > 0 && posts.every((x) => selectedIds.has(x.id))}
-                      onChange={() => {
-                        const ids = posts.map((x) => x.id);
-                        setSelectedIds((prev) => {
-                          const next = new Set(prev);
-                          const all = ids.length > 0 && ids.every((id) => next.has(id));
-                          if (all) ids.forEach((id) => next.delete(id));
-                          else ids.forEach((id) => next.add(id));
-                          return next;
-                        });
-                      }}
-                    />
-                  </th>
-                  <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
-                    标题
-                  </th>
-                  <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
-                    作者
-                  </th>
-                  <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
-                    分类
-                  </th>
-                  <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
-                    数据
-                  </th>
-                  <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
-                    热度
-                  </th>
-                  <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
-                    标签
-                  </th>
-                  <th className="text-right py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
-                    操作
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {posts.map((item) => (
-                  <tr
-                    key={item.id}
-                    className={`border-b border-slate-200/50 hover:bg-slate-50 dark:border-white/5 dark:hover:bg-white/5 ${
-                      item.is_deleted ? "opacity-60" : ""
-                    }`}
-                  >
-                    <td className="py-4 px-4">
+          {postsQuery.isLoading && posts.length === 0 ? (
+            <ListSkeleton count={6} />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-slate-200/70 dark:border-white/10">
+                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
                       <input
                         type="checkbox"
-                        checked={selectedIds.has(item.id)}
+                        checked={posts.length > 0 && posts.every((x) => selectedIds.has(x.id))}
                         onChange={() => {
+                          const ids = posts.map((x) => x.id);
                           setSelectedIds((prev) => {
                             const next = new Set(prev);
-                            if (next.has(item.id)) next.delete(item.id);
-                            else next.add(item.id);
+                            const all = ids.length > 0 && ids.every((id) => next.has(id));
+                            if (all) ids.forEach((id) => next.delete(id));
+                            else ids.forEach((id) => next.add(id));
                             return next;
                           });
                         }}
                       />
-                    </td>
-                    <td className="py-4 px-4">
-                      <p className="text-slate-900 font-medium truncate max-w-xs dark:text-white">
-                        {item.title}
-                      </p>
-                      <p className="text-slate-500 text-xs mt-1 dark:text-white/40">
-                        {new Date(item.created_at).toLocaleDateString()}
-                      </p>
-                    </td>
-                    <td className="py-4 px-4 text-slate-700 text-sm dark:text-white/70">
-                      {item.author?.nickname || item.author?.username || "匿名"}
-                    </td>
-                    <td className="py-4 px-4">
-                      <Badge variant="info" size="sm">
-                        {item.category}
-                      </Badge>
-                    </td>
-                    <td className="py-4 px-4">
-                      <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-white/50">
-                        <span className="flex items-center gap-1">
-                          <Eye className="h-3.5 w-3.5" />
-                          {item.view_count}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <ThumbsUp className="h-3.5 w-3.5" />
-                          {item.like_count}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          <MessageSquare className="h-3.5 w-3.5" />
-                          {item.comment_count}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="py-4 px-4">
-                      <span className="text-orange-400 font-medium">
-                        {item.heat_score.toFixed(0)}
-                      </span>
-                    </td>
-                    <td className="py-4 px-4">
-                      <div className="flex items-center gap-1">
-                        {!item.is_deleted && item.review_status === "pending" && (
-                          <Badge variant="warning" size="sm" title={item.review_reason || undefined}>
-                            审核中
-                          </Badge>
-                        )}
-                        {!item.is_deleted && item.review_status === "rejected" && (
-                          <Badge variant="danger" size="sm" title={item.review_reason || undefined}>
-                            已驳回
-                          </Badge>
-                        )}
-                        {item.is_deleted && (
-                          <Badge variant="default" size="sm">
-                            已删除
-                          </Badge>
-                        )}
-                        {item.is_pinned && (
-                          <Badge variant="warning" size="sm">
-                            置顶
-                          </Badge>
-                        )}
-                        {item.is_hot && (
-                          <Badge variant="danger" size="sm">
-                            热门
-                          </Badge>
-                        )}
-                        {item.is_essence && (
-                          <Badge variant="success" size="sm">
-                            精华
-                          </Badge>
-                        )}
-                      </div>
-                    </td>
-                    <td className="py-4 px-4">
-                      <div className="flex items-center justify-end gap-1">
-                        {!deleted ? (
-                          <>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className={`p-2 ${
-                                item.is_pinned ? "text-amber-400" : ""
-                              }`}
-                              onClick={() =>
-                                handleTogglePin(item.id, item.is_pinned)
-                              }
-                              title={item.is_pinned ? "取消置顶" : "置顶"}
-                            >
-                              <Pin className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className={`p-2 ${
-                                item.is_hot ? "text-orange-400" : ""
-                              }`}
-                              onClick={() => handleToggleHot(item.id, item.is_hot)}
-                              title={item.is_hot ? "取消热门" : "设为热门"}
-                            >
-                              <Flame className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className={`p-2 ${
-                                item.is_essence ? "text-green-400" : ""
-                              }`}
-                              onClick={() =>
-                                handleToggleEssence(item.id, item.is_essence)
-                              }
-                              title={item.is_essence ? "取消精华" : "设为精华"}
-                            >
-                              <Award className="h-4 w-4" />
-                            </Button>
-                          </>
-                        ) : (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="p-2"
-                            onClick={() => handleRestore(item.id)}
-                            title="恢复"
-                            disabled={restorePostMutation.isPending}
-                          >
-                            <RotateCcw className="h-4 w-4" />
-                          </Button>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="p-2 text-red-400 hover:text-red-300"
-                          onClick={() => {
-                            handleDelete(item.id)
-                          }}
-                          title="删除"
-                          disabled={deletePostMutation.isPending || purgePostMutation.isPending}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </td>
+                    </th>
+                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
+                      标题
+                    </th>
+                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
+                      作者
+                    </th>
+                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
+                      分类
+                    </th>
+                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
+                      数据
+                    </th>
+                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
+                      热度
+                    </th>
+                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
+                      标签
+                    </th>
+                    <th className="text-right py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
+                      操作
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {posts.map((item) => {
+                    const rowBusy =
+                      activePostAction?.postId === item.id &&
+                      (pinMutation.isPending ||
+                        hotMutation.isPending ||
+                        essenceMutation.isPending ||
+                        deletePostMutation.isPending ||
+                        purgePostMutation.isPending ||
+                        restorePostMutation.isPending);
+                    const pinLoading =
+                      pinMutation.isPending &&
+                      activePostAction?.postId === item.id &&
+                      activePostAction?.kind === "pin";
+                    const hotLoading =
+                      hotMutation.isPending &&
+                      activePostAction?.postId === item.id &&
+                      activePostAction?.kind === "hot";
+                    const essenceLoading =
+                      essenceMutation.isPending &&
+                      activePostAction?.postId === item.id &&
+                      activePostAction?.kind === "essence";
+                    const restoreLoading =
+                      restorePostMutation.isPending &&
+                      activePostAction?.postId === item.id &&
+                      activePostAction?.kind === "restore";
+                    const deleteLoading =
+                      deletePostMutation.isPending &&
+                      activePostAction?.postId === item.id &&
+                      activePostAction?.kind === "delete";
+                    const purgeLoading =
+                      purgePostMutation.isPending &&
+                      activePostAction?.postId === item.id &&
+                      activePostAction?.kind === "purge";
+                    const deleteBusy = deleteLoading || purgeLoading;
+
+                    return (
+                      <tr
+                        key={item.id}
+                        className={`border-b border-slate-200/50 hover:bg-slate-50 dark:border-white/5 dark:hover:bg-white/5 ${
+                          item.is_deleted ? "opacity-60" : ""
+                        }`}
+                      >
+                        <td className="py-4 px-4">
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(item.id)}
+                            onChange={() => {
+                              setSelectedIds((prev) => {
+                                const next = new Set(prev);
+                                if (next.has(item.id)) next.delete(item.id);
+                                else next.add(item.id);
+                                return next;
+                              });
+                            }}
+                          />
+                        </td>
+                        <td className="py-4 px-4">
+                          <p className="text-slate-900 font-medium truncate max-w-xs dark:text-white">
+                            {item.title}
+                          </p>
+                          <p className="text-slate-500 text-xs mt-1 dark:text-white/40">
+                            {new Date(item.created_at).toLocaleDateString()}
+                          </p>
+                        </td>
+                        <td className="py-4 px-4 text-slate-700 text-sm dark:text-white/70">
+                          {item.author?.nickname || item.author?.username || "匿名"}
+                        </td>
+                        <td className="py-4 px-4">
+                          <Badge variant="info" size="sm">
+                            {item.category}
+                          </Badge>
+                        </td>
+                        <td className="py-4 px-4">
+                          <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-white/50">
+                            <span className="flex items-center gap-1">
+                              <Eye className="h-3.5 w-3.5" />
+                              {item.view_count}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <ThumbsUp className="h-3.5 w-3.5" />
+                              {item.like_count}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <MessageSquare className="h-3.5 w-3.5" />
+                              {item.comment_count}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="py-4 px-4">
+                          <span className="text-orange-400 font-medium">
+                            {item.heat_score.toFixed(0)}
+                          </span>
+                        </td>
+                        <td className="py-4 px-4">
+                          <div className="flex items-center gap-1">
+                            {!item.is_deleted && item.review_status === "pending" && (
+                              <Badge variant="warning" size="sm" title={item.review_reason || undefined}>
+                                审核中
+                              </Badge>
+                            )}
+                            {!item.is_deleted && item.review_status === "rejected" && (
+                              <Badge variant="danger" size="sm" title={item.review_reason || undefined}>
+                                已驳回
+                              </Badge>
+                            )}
+                            {item.is_deleted && (
+                              <Badge variant="default" size="sm">
+                                已删除
+                              </Badge>
+                            )}
+                            {item.is_pinned && (
+                              <Badge variant="warning" size="sm">
+                                置顶
+                              </Badge>
+                            )}
+                            {item.is_hot && (
+                              <Badge variant="danger" size="sm">
+                                热门
+                              </Badge>
+                            )}
+                            {item.is_essence && (
+                              <Badge variant="success" size="sm">
+                                精华
+                              </Badge>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-4 px-4">
+                          <div className="flex items-center justify-end gap-1">
+                            {!deleted ? (
+                              <>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className={`${pinLoading ? 'px-3 py-2' : 'p-2'} ${
+                                    item.is_pinned ? 'text-amber-400' : ''
+                                  }`}
+                                  onClick={() =>
+                                    handleTogglePin(item.id, item.is_pinned)
+                                  }
+                                  title={item.is_pinned ? "取消置顶" : "置顶"}
+                                  isLoading={pinLoading}
+                                  loadingText="处理中..."
+                                  disabled={(rowBusy && !pinLoading) || pinLoading}
+                                >
+                                  <Pin className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className={`${hotLoading ? 'px-3 py-2' : 'p-2'} ${
+                                    item.is_hot ? 'text-orange-400' : ''
+                                  }`}
+                                  onClick={() => handleToggleHot(item.id, item.is_hot)}
+                                  title={item.is_hot ? "取消热门" : "设为热门"}
+                                  isLoading={hotLoading}
+                                  loadingText="处理中..."
+                                  disabled={(rowBusy && !hotLoading) || hotLoading}
+                                >
+                                  <Flame className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className={`${essenceLoading ? 'px-3 py-2' : 'p-2'} ${
+                                    item.is_essence ? 'text-green-400' : ''
+                                  }`}
+                                  onClick={() =>
+                                    handleToggleEssence(item.id, item.is_essence)
+                                  }
+                                  title={item.is_essence ? "取消精华" : "设为精华"}
+                                  isLoading={essenceLoading}
+                                  loadingText="处理中..."
+                                  disabled={(rowBusy && !essenceLoading) || essenceLoading}
+                                >
+                                  <Award className="h-4 w-4" />
+                                </Button>
+                              </>
+                            ) : (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className={restoreLoading ? 'px-3 py-2' : 'p-2'}
+                                onClick={() => handleRestore(item.id)}
+                                title="恢复"
+                                isLoading={restoreLoading}
+                                loadingText="恢复中..."
+                                disabled={(rowBusy && !restoreLoading) || restoreLoading}
+                              >
+                                <RotateCcw className="h-4 w-4" />
+                              </Button>
+                            )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className={`${deleteBusy ? 'px-3 py-2' : 'p-2'} text-red-400 hover:text-red-300`}
+                              onClick={() => {
+                                handleDelete(item.id)
+                              }}
+                              title="删除"
+                              isLoading={deleteBusy}
+                              loadingText="删除中..."
+                              disabled={(rowBusy && !deleteBusy) || deleteBusy}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           {posts.length === 0 && !loading && (
             <div className="text-center py-12 text-slate-500 dark:text-white/40">暂无帖子</div>
@@ -1544,6 +1686,20 @@ export default function ForumManagePage() {
                     statsQuery.refetch();
                     postReviewConfigQuery.refetch();
                   }}
+                  icon={RotateCcw}
+                  isLoading={
+                    pendingPostsQuery.isFetching ||
+                    contentStatsQuery.isFetching ||
+                    statsQuery.isFetching ||
+                    postReviewConfigQuery.isFetching
+                  }
+                  loadingText="刷新中..."
+                  disabled={
+                    pendingPostsQuery.isFetching ||
+                    contentStatsQuery.isFetching ||
+                    statsQuery.isFetching ||
+                    postReviewConfigQuery.isFetching
+                  }
                 >
                   刷新
                 </Button>
@@ -1563,6 +1719,8 @@ export default function ForumManagePage() {
                   variant="outline"
                   size="sm"
                   onClick={() => handleBatchReviewPosts("approve")}
+                  isLoading={batchReviewPostsMutation.isPending}
+                  loadingText="处理中..."
                   disabled={
                     selectedPendingPostIds.size === 0 ||
                     pendingPostsQuery.isFetching ||
@@ -1575,6 +1733,8 @@ export default function ForumManagePage() {
                   variant="outline"
                   size="sm"
                   onClick={() => handleBatchReviewPosts("reject")}
+                  isLoading={batchReviewPostsMutation.isPending}
+                  loadingText="处理中..."
                   disabled={
                     selectedPendingPostIds.size === 0 ||
                     pendingPostsQuery.isFetching ||
@@ -1588,6 +1748,8 @@ export default function ForumManagePage() {
                   size="sm"
                   className="text-red-400 hover:text-red-300"
                   onClick={() => handleBatchReviewPosts("delete")}
+                  isLoading={batchReviewPostsMutation.isPending}
+                  loadingText="处理中..."
                   disabled={
                     selectedPendingPostIds.size === 0 ||
                     pendingPostsQuery.isFetching ||
@@ -1600,107 +1762,121 @@ export default function ForumManagePage() {
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-slate-200/70 dark:border-white/10">
-                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
-                      <input
-                        type="checkbox"
-                        checked={
-                          pendingPosts.length > 0 &&
-                          pendingPosts.every((x) => selectedPendingPostIds.has(x.id))
-                        }
-                        onChange={() => {
-                          const ids = pendingPosts.map((x) => x.id);
-                          setSelectedPendingPostIds((prev) => {
-                            const next = new Set(prev);
-                            const all = ids.length > 0 && ids.every((id) => next.has(id));
-                            if (all) ids.forEach((id) => next.delete(id));
-                            else ids.forEach((id) => next.add(id));
-                            return next;
-                          });
-                        }}
-                      />
-                    </th>
-                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">标题</th>
-                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">用户</th>
-                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">分类</th>
-                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">原因</th>
-                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">时间</th>
-                    <th className="text-right py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pendingPosts.map((p) => (
-                    <tr
-                      key={p.id}
-                      className="border-b border-slate-200/50 hover:bg-slate-50 dark:border-white/5 dark:hover:bg-white/5"
-                    >
-                      <td className="py-4 px-4">
+            {pendingPostsQuery.isFetching && pendingPosts.length === 0 ? (
+              <ListSkeleton count={6} />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-slate-200/70 dark:border-white/10">
+                      <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
                         <input
                           type="checkbox"
-                          checked={selectedPendingPostIds.has(p.id)}
+                          checked={
+                            pendingPosts.length > 0 &&
+                            pendingPosts.every((x) => selectedPendingPostIds.has(x.id))
+                          }
                           onChange={() => {
+                            const ids = pendingPosts.map((x) => x.id);
                             setSelectedPendingPostIds((prev) => {
                               const next = new Set(prev);
-                              if (next.has(p.id)) next.delete(p.id);
-                              else next.add(p.id);
+                              const all = ids.length > 0 && ids.every((id) => next.has(id));
+                              if (all) ids.forEach((id) => next.delete(id));
+                              else ids.forEach((id) => next.add(id));
                               return next;
                             });
                           }}
                         />
-                      </td>
-                      <td className="py-4 px-4">
-                        <p className="text-slate-700 text-sm line-clamp-2 max-w-xl dark:text-white/80">{p.title}</p>
-                        <p className="text-xs text-slate-500 mt-1 dark:text-white/40">ID: {p.id}</p>
-                      </td>
-                      <td className="py-4 px-4 text-slate-700 text-sm dark:text-white/70">{p.username || `用户#${p.user_id}`}</td>
-                      <td className="py-4 px-4">
-                        <Badge variant="info" size="sm">
-                          {p.category || "-"}
-                        </Badge>
-                      </td>
-                      <td className="py-4 px-4 text-slate-500 text-sm dark:text-white/50">
-                        {p.review_reason || "-"}
-                      </td>
-                      <td className="py-4 px-4 text-slate-500 text-sm dark:text-white/50">
-                        {new Date(p.created_at).toLocaleString()}
-                      </td>
-                      <td className="py-4 px-4">
-                        <div className="flex items-center justify-end gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleReviewPost(p.id, "approve")}
-                            disabled={pendingPostsQuery.isFetching || reviewPostMutation.isPending}
-                          >
-                            通过
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleReviewPost(p.id, "reject")}
-                            disabled={pendingPostsQuery.isFetching || reviewPostMutation.isPending}
-                          >
-                            驳回
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-red-400 hover:text-red-300"
-                            onClick={() => handleReviewPost(p.id, "delete")}
-                            disabled={pendingPostsQuery.isFetching || reviewPostMutation.isPending}
-                          >
-                            删除
-                          </Button>
-                        </div>
-                      </td>
+                      </th>
+                      <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">标题</th>
+                      <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">用户</th>
+                      <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">分类</th>
+                      <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">原因</th>
+                      <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">时间</th>
+                      <th className="text-right py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">操作</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {pendingPosts.map((p) => {
+                      const rowBusy =
+                        reviewPostMutation.isPending &&
+                        activeReviewAction?.kind === "post" &&
+                        activeReviewAction?.id === p.id;
+                      const approveLoading = rowBusy && activeReviewAction?.action === "approve";
+
+                      return (
+                        <tr
+                          key={p.id}
+                          className="border-b border-slate-200/50 hover:bg-slate-50 dark:border-white/5 dark:hover:bg-white/5"
+                        >
+                          <td className="py-4 px-4">
+                            <input
+                              type="checkbox"
+                              checked={selectedPendingPostIds.has(p.id)}
+                              onChange={() => {
+                                setSelectedPendingPostIds((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(p.id)) next.delete(p.id);
+                                  else next.add(p.id);
+                                  return next;
+                                });
+                              }}
+                            />
+                          </td>
+                          <td className="py-4 px-4">
+                            <p className="text-slate-700 text-sm line-clamp-2 max-w-xl dark:text-white/80">{p.title}</p>
+                            <p className="text-xs text-slate-500 mt-1 dark:text-white/40">ID: {p.id}</p>
+                          </td>
+                          <td className="py-4 px-4 text-slate-700 text-sm dark:text-white/70">{p.username || `用户#${p.user_id}`}</td>
+                          <td className="py-4 px-4">
+                            <Badge variant="info" size="sm">
+                              {p.category || "-"}
+                            </Badge>
+                          </td>
+                          <td className="py-4 px-4 text-slate-500 text-sm dark:text-white/50">
+                            {p.review_reason || "-"}
+                          </td>
+                          <td className="py-4 px-4 text-slate-500 text-sm dark:text-white/50">
+                            {new Date(p.created_at).toLocaleString()}
+                          </td>
+                          <td className="py-4 px-4">
+                            <div className="flex items-center justify-end gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleReviewPost(p.id, "approve")}
+                                isLoading={approveLoading}
+                                loadingText="处理中..."
+                                disabled={(rowBusy && !approveLoading) || pendingPostsQuery.isFetching}
+                              >
+                                通过
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleReviewPost(p.id, "reject")}
+                                disabled={pendingPostsQuery.isFetching || reviewPostMutation.isPending}
+                              >
+                                驳回
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-red-400 hover:text-red-300"
+                                onClick={() => handleReviewPost(p.id, "delete")}
+                                disabled={pendingPostsQuery.isFetching || reviewPostMutation.isPending}
+                              >
+                                删除
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             {pendingPosts.length === 0 && !pendingPostsQuery.isFetching && (
               <div className="text-center py-12 text-slate-500 dark:text-white/40">暂无待审核帖子</div>
@@ -1770,6 +1946,20 @@ export default function ForumManagePage() {
                     statsQuery.refetch();
                     reviewConfigQuery.refetch();
                   }}
+                  icon={RotateCcw}
+                  isLoading={
+                    pendingLoading ||
+                    contentStatsQuery.isFetching ||
+                    statsQuery.isFetching ||
+                    reviewConfigQuery.isFetching
+                  }
+                  loadingText="刷新中..."
+                  disabled={
+                    pendingLoading ||
+                    contentStatsQuery.isFetching ||
+                    statsQuery.isFetching ||
+                    reviewConfigQuery.isFetching
+                  }
                 >
                   刷新
                 </Button>
@@ -1783,6 +1973,8 @@ export default function ForumManagePage() {
                   variant="outline"
                   size="sm"
                   onClick={() => handleBatchReviewComments("approve")}
+                  isLoading={batchReviewCommentsMutation.isPending}
+                  loadingText="处理中..."
                   disabled={
                     selectedPendingCommentIds.size === 0 ||
                     pendingLoading ||
@@ -1795,6 +1987,8 @@ export default function ForumManagePage() {
                   variant="outline"
                   size="sm"
                   onClick={() => handleBatchReviewComments("reject")}
+                  isLoading={batchReviewCommentsMutation.isPending}
+                  loadingText="处理中..."
                   disabled={
                     selectedPendingCommentIds.size === 0 ||
                     pendingLoading ||
@@ -1808,6 +2002,8 @@ export default function ForumManagePage() {
                   size="sm"
                   className="text-red-400 hover:text-red-300"
                   onClick={() => handleBatchReviewComments("delete")}
+                  isLoading={batchReviewCommentsMutation.isPending}
+                  loadingText="处理中..."
                   disabled={
                     selectedPendingCommentIds.size === 0 ||
                     pendingLoading ||
@@ -1820,116 +2016,130 @@ export default function ForumManagePage() {
               <div className="text-sm text-slate-600 dark:text-white/60">共 {pendingTotal} 条</div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-slate-200/70 dark:border-white/10">
-                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
-                      <input
-                        type="checkbox"
-                        checked={
-                          pendingComments.length > 0 &&
-                          pendingComments.every((x) => selectedPendingCommentIds.has(x.id))
-                        }
-                        onChange={() => {
-                          const ids = pendingComments.map((x) => x.id);
-                          setSelectedPendingCommentIds((prev) => {
-                            const next = new Set(prev);
-                            const all = ids.length > 0 && ids.every((id) => next.has(id));
-                            if (all) ids.forEach((id) => next.delete(id));
-                            else ids.forEach((id) => next.add(id));
-                            return next;
-                          });
-                        }}
-                      />
-                    </th>
-                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
-                      评论内容
-                    </th>
-                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
-                      用户
-                    </th>
-                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
-                      帖子
-                    </th>
-                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
-                      时间
-                    </th>
-                    <th className="text-right py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
-                      操作
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pendingComments.map((c) => (
-                    <tr
-                      key={c.id}
-                      className="border-b border-slate-200/50 hover:bg-slate-50 dark:border-white/5 dark:hover:bg-white/5"
-                    >
-                      <td className="py-4 px-4">
+            {pendingLoading && pendingComments.length === 0 ? (
+              <ListSkeleton count={6} />
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-slate-200/70 dark:border-white/10">
+                      <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
                         <input
                           type="checkbox"
-                          checked={selectedPendingCommentIds.has(c.id)}
+                          checked={
+                            pendingComments.length > 0 &&
+                            pendingComments.every((x) => selectedPendingCommentIds.has(x.id))
+                          }
                           onChange={() => {
+                            const ids = pendingComments.map((x) => x.id);
                             setSelectedPendingCommentIds((prev) => {
                               const next = new Set(prev);
-                              if (next.has(c.id)) next.delete(c.id);
-                              else next.add(c.id);
+                              const all = ids.length > 0 && ids.every((id) => next.has(id));
+                              if (all) ids.forEach((id) => next.delete(id));
+                              else ids.forEach((id) => next.add(id));
                               return next;
                             });
                           }}
                         />
-                      </td>
-                      <td className="py-4 px-4">
-                        <p className="text-slate-700 text-sm line-clamp-2 max-w-xl dark:text-white/80">
-                          {c.content}
-                        </p>
-                      </td>
-                      <td className="py-4 px-4 text-slate-700 text-sm dark:text-white/70">
-                        {c.username || `用户#${c.user_id}`}
-                      </td>
-                      <td className="py-4 px-4">
-                        <p className="text-slate-700 text-sm truncate max-w-xs dark:text-white/70">
-                          {c.post_title || `帖子#${c.post_id}`}
-                        </p>
-                      </td>
-                      <td className="py-4 px-4 text-slate-500 text-sm dark:text-white/50">
-                        {new Date(c.created_at).toLocaleString()}
-                      </td>
-                      <td className="py-4 px-4">
-                        <div className="flex items-center justify-end gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleReviewComment(c.id, "approve")}
-                            disabled={pendingLoading || reviewCommentMutation.isPending}
-                          >
-                            通过
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleReviewComment(c.id, "reject")}
-                            disabled={pendingLoading || reviewCommentMutation.isPending}
-                          >
-                            驳回
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-red-400 hover:text-red-300"
-                            onClick={() => handleReviewComment(c.id, "delete")}
-                            disabled={pendingLoading || reviewCommentMutation.isPending}
-                          >
-                            删除
-                          </Button>
-                        </div>
-                      </td>
+                      </th>
+                      <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
+                        评论内容
+                      </th>
+                      <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
+                        用户
+                      </th>
+                      <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
+                        帖子
+                      </th>
+                      <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
+                        时间
+                      </th>
+                      <th className="text-right py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
+                        操作
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {pendingComments.map((c) => {
+                      const rowBusy =
+                        reviewCommentMutation.isPending &&
+                        activeReviewAction?.kind === "comment" &&
+                        activeReviewAction?.id === c.id;
+                      const approveLoading = rowBusy && activeReviewAction?.action === "approve";
+
+                      return (
+                        <tr
+                          key={c.id}
+                          className="border-b border-slate-200/50 hover:bg-slate-50 dark:border-white/5 dark:hover:bg-white/5"
+                        >
+                          <td className="py-4 px-4">
+                            <input
+                              type="checkbox"
+                              checked={selectedPendingCommentIds.has(c.id)}
+                              onChange={() => {
+                                setSelectedPendingCommentIds((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(c.id)) next.delete(c.id);
+                                  else next.add(c.id);
+                                  return next;
+                                });
+                              }}
+                            />
+                          </td>
+                          <td className="py-4 px-4">
+                            <p className="text-slate-700 text-sm line-clamp-2 max-w-xl dark:text-white/80">
+                              {c.content}
+                            </p>
+                          </td>
+                          <td className="py-4 px-4 text-slate-700 text-sm dark:text-white/70">
+                            {c.username || `用户#${c.user_id}`}
+                          </td>
+                          <td className="py-4 px-4">
+                            <p className="text-slate-700 text-sm truncate max-w-xs dark:text-white/70">
+                              {c.post_title || `帖子#${c.post_id}`}
+                            </p>
+                          </td>
+                          <td className="py-4 px-4 text-slate-500 text-sm dark:text-white/50">
+                            {new Date(c.created_at).toLocaleString()}
+                          </td>
+                          <td className="py-4 px-4">
+                            <div className="flex items-center justify-end gap-2">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleReviewComment(c.id, "approve")}
+                                isLoading={approveLoading}
+                                loadingText="处理中..."
+                                disabled={(rowBusy && !approveLoading) || pendingLoading}
+                              >
+                                通过
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleReviewComment(c.id, "reject")}
+                                disabled={pendingLoading || reviewCommentMutation.isPending}
+                              >
+                                驳回
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="text-red-400 hover:text-red-300"
+                                onClick={() => handleReviewComment(c.id, "delete")}
+                                disabled={pendingLoading || reviewCommentMutation.isPending}
+                              >
+                                删除
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
 
             {pendingComments.length === 0 && !pendingLoading && (
               <div className="text-center py-12 text-slate-500 dark:text-white/40">
@@ -2020,6 +2230,9 @@ export default function ForumManagePage() {
                 <Button
                   variant="outline"
                   onClick={() => contentFilterConfigQuery.refetch()}
+                  icon={RotateCcw}
+                  isLoading={contentFilterConfigQuery.isFetching}
+                  loadingText="刷新中..."
                   disabled={contentFilterConfigQuery.isFetching}
                 >
                   刷新
@@ -2027,6 +2240,8 @@ export default function ForumManagePage() {
                 <Button
                   variant="primary"
                   onClick={handleSaveContentFilterRules}
+                  isLoading={updateContentFilterRulesMutation.isPending}
+                  loadingText="保存中..."
                   disabled={
                     contentFilterConfigQuery.isFetching ||
                     updateContentFilterRulesMutation.isPending
@@ -2103,6 +2318,9 @@ export default function ForumManagePage() {
                   contentFilterConfigQuery.refetch();
                   contentStatsQuery.refetch();
                 }}
+                icon={RotateCcw}
+                isLoading={wordsLoading}
+                loadingText="刷新中..."
                 disabled={wordsLoading}
               >
                 刷新

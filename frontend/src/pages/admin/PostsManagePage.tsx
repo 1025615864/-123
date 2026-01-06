@@ -1,11 +1,10 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Search, Trash2, Eye, Pin, PinOff, Flame, Award } from 'lucide-react'
-import { Card, Input, Button, Badge, Loading } from '../../components/ui'
+import { Search, Trash2, Eye, Pin, PinOff, Flame, Award, RotateCcw } from 'lucide-react'
+import { Card, Input, Button, Badge, ListSkeleton } from '../../components/ui'
 import { useQuery } from '@tanstack/react-query'
 import api from '../../api/client'
 import { useAppMutation } from '../../hooks'
-import { useTheme } from '../../contexts/ThemeContext'
 import { getApiErrorMessage } from '../../utils'
 
 interface Post {
@@ -26,9 +25,9 @@ interface Post {
 }
 
 export default function PostsManagePage() {
-  const { actualTheme } = useTheme()
   const [keyword, setKeyword] = useState('')
   const navigate = useNavigate()
+  const [activeAction, setActiveAction] = useState<{ id: number; kind: 'pin' | 'hot' | 'essence' | 'delete' } | null>(null)
 
   const postsQueryKey = useMemo(() => ['admin-posts', { keyword: keyword.trim() }] as const, [keyword])
 
@@ -57,6 +56,12 @@ export default function PostsManagePage() {
     },
     errorMessageFallback: '操作失败，请稍后重试',
     invalidateQueryKeys: [postsQueryKey as any],
+    onMutate: async (id) => {
+      setActiveAction({ id, kind: 'delete' })
+    },
+    onSettled: (_data, _err, id) => {
+      setActiveAction((prev) => (prev && prev.id === id && prev.kind === 'delete' ? null : prev))
+    },
   })
 
   const pinMutation = useAppMutation<void, { id: number; is_pinned: boolean }>({
@@ -65,6 +70,12 @@ export default function PostsManagePage() {
     },
     errorMessageFallback: '操作失败，请稍后重试',
     invalidateQueryKeys: [postsQueryKey as any],
+    onMutate: async (payload) => {
+      setActiveAction({ id: payload.id, kind: 'pin' })
+    },
+    onSettled: (_data, _err, payload) => {
+      setActiveAction((prev) => (prev && prev.id === payload?.id && prev.kind === 'pin' ? null : prev))
+    },
   })
 
   const hotMutation = useAppMutation<void, { id: number; is_hot: boolean }>({
@@ -73,6 +84,12 @@ export default function PostsManagePage() {
     },
     errorMessageFallback: '操作失败，请稍后重试',
     invalidateQueryKeys: [postsQueryKey as any],
+    onMutate: async (payload) => {
+      setActiveAction({ id: payload.id, kind: 'hot' })
+    },
+    onSettled: (_data, _err, payload) => {
+      setActiveAction((prev) => (prev && prev.id === payload?.id && prev.kind === 'hot' ? null : prev))
+    },
   })
 
   const essenceMutation = useAppMutation<void, { id: number; is_essence: boolean }>({
@@ -81,6 +98,12 @@ export default function PostsManagePage() {
     },
     errorMessageFallback: '操作失败，请稍后重试',
     invalidateQueryKeys: [postsQueryKey as any],
+    onMutate: async (payload) => {
+      setActiveAction({ id: payload.id, kind: 'essence' })
+    },
+    onSettled: (_data, _err, payload) => {
+      setActiveAction((prev) => (prev && prev.id === payload?.id && prev.kind === 'essence' ? null : prev))
+    },
   })
 
   const handleDelete = async (id: number) => {
@@ -104,6 +127,8 @@ export default function PostsManagePage() {
     essenceMutation.mutate({ id, is_essence: !isEssence })
   }
 
+  const actionBusy = deleteMutation.isPending || pinMutation.isPending || hotMutation.isPending || essenceMutation.isPending
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -111,6 +136,16 @@ export default function PostsManagePage() {
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white">帖子管理</h1>
           <p className="text-slate-600 mt-1 dark:text-white/50">管理论坛帖子内容</p>
         </div>
+        <Button
+          variant="outline"
+          icon={RotateCcw}
+          isLoading={postsQuery.isFetching}
+          loadingText="刷新中..."
+          disabled={postsQuery.isFetching}
+          onClick={() => postsQuery.refetch()}
+        >
+          刷新
+        </Button>
       </div>
 
       <Card variant="surface" padding="md">
@@ -125,8 +160,8 @@ export default function PostsManagePage() {
           </div>
         </div>
 
-        {loading ? (
-          <Loading text="加载中..." tone={actualTheme} />
+        {loading && posts.length === 0 ? (
+          <ListSkeleton count={6} />
         ) : loadError ? (
           <div className="flex items-center justify-between gap-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
             <div>{loadError}</div>
@@ -134,21 +169,21 @@ export default function PostsManagePage() {
           </div>
         ) : (
           <>
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-slate-200/70 dark:border-white/10">
-                <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">标题</th>
-                <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">分类</th>
-                <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">作者</th>
-                <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">互动</th>
-                <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">发布时间</th>
-                <th className="text-right py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {posts.map((item) => (
-                <tr key={item.id} className="border-b border-slate-200/50 hover:bg-slate-50 dark:border-white/5 dark:hover:bg-white/5">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-slate-200/70 dark:border-white/10">
+                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">标题</th>
+                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">分类</th>
+                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">作者</th>
+                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">互动</th>
+                    <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">发布时间</th>
+                    <th className="text-right py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {posts.map((item) => (
+                    <tr key={item.id} className="border-b border-slate-200/50 hover:bg-slate-50 dark:border-white/5 dark:hover:bg-white/5">
                   <td className="py-4 px-4">
                     <div className="flex items-center gap-2">
                       {item.is_pinned && (
@@ -179,67 +214,90 @@ export default function PostsManagePage() {
                   </td>
                   <td className="py-4 px-4">
                     <div className="flex items-center justify-end gap-2">
-                      <Button 
-                        variant="ghost" 
-                        size="sm" 
-                        className="p-2"
-                        onClick={() => togglePin(item.id, item.is_pinned)}
-                        title={item.is_pinned ? '取消置顶' : '置顶'}
-                      >
-                        {item.is_pinned ? (
-                          <PinOff className="h-4 w-4" />
-                        ) : (
-                          <Pin className="h-4 w-4" />
-                        )}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className={`p-2 ${item.is_hot ? 'text-red-300' : ''}`}
-                        onClick={() => toggleHot(item.id, !!item.is_hot)}
-                        title={item.is_hot ? '取消热门' : '设为热门'}
-                      >
-                        <Flame className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className={`p-2 ${item.is_essence ? 'text-emerald-300' : ''}`}
-                        onClick={() => toggleEssence(item.id, !!item.is_essence)}
-                        title={item.is_essence ? '取消精华' : '设为精华'}
-                      >
-                        <Award className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="p-2"
-                        title="查看"
-                        onClick={() => navigate(`/forum/post/${item.id}`)}
-                      >
-                        <Eye className="h-4 w-4" />
-                      </Button>
-                      <Button 
-                        variant="ghost" 
-                        size="sm" 
-                        className="p-2 text-red-400 hover:text-red-300"
-                        onClick={() => handleDelete(item.id)}
-                        title="删除"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                      {(() => {
+                        const isActive = activeAction?.id === item.id
+                        const disableOther = actionBusy && !isActive
+                        const pinLoading = pinMutation.isPending && isActive && activeAction?.kind === 'pin'
+                        const hotLoading = hotMutation.isPending && isActive && activeAction?.kind === 'hot'
+                        const essenceLoading = essenceMutation.isPending && isActive && activeAction?.kind === 'essence'
+                        const deleteLoading = deleteMutation.isPending && isActive && activeAction?.kind === 'delete'
 
-        {posts.length === 0 && (
-          <div className="text-center py-12 text-slate-500 dark:text-white/40">暂无帖子</div>
-        )}
-
+                            return (
+                              <>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className={`${pinLoading ? 'px-3 py-2' : 'p-2'} ${item.is_pinned ? 'text-amber-400' : ''}`}
+                                  onClick={() => togglePin(item.id, item.is_pinned)}
+                                  title={item.is_pinned ? '取消置顶' : '置顶'}
+                                  isLoading={pinLoading}
+                                  loadingText="处理中..."
+                                  disabled={disableOther || pinLoading}
+                                >
+                                  {item.is_pinned ? (
+                                    <PinOff className="h-4 w-4" />
+                                  ) : (
+                                    <Pin className="h-4 w-4" />
+                                  )}
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className={`${hotLoading ? 'px-3 py-2' : 'p-2'} ${item.is_hot ? 'text-orange-400' : ''}`}
+                                  onClick={() => toggleHot(item.id, !!item.is_hot)}
+                                  title={item.is_hot ? '取消热门' : '设为热门'}
+                                  isLoading={hotLoading}
+                                  loadingText="处理中..."
+                                  disabled={disableOther || hotLoading}
+                                >
+                                  <Flame className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className={`${essenceLoading ? 'px-3 py-2' : 'p-2'} ${item.is_essence ? 'text-green-400' : ''}`}
+                                  onClick={() => toggleEssence(item.id, !!item.is_essence)}
+                                  title={item.is_essence ? '取消精华' : '设为精华'}
+                                  isLoading={essenceLoading}
+                                  loadingText="处理中..."
+                                  disabled={disableOther || essenceLoading}
+                                >
+                                  <Award className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="p-2"
+                                  title="查看"
+                                  onClick={() => navigate(`/forum/post/${item.id}`)}
+                                >
+                                  <Eye className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className={`${deleteLoading ? 'px-3 py-2' : 'p-2'} text-red-400 hover:text-red-300`}
+                                  onClick={() => handleDelete(item.id)}
+                                  title="删除"
+                                  isLoading={deleteLoading}
+                                  loadingText="删除中..."
+                                  disabled={disableOther || deleteLoading}
+                                >
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                              </>
+                            )
+                          })()}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {posts.length === 0 && (
+              <div className="text-center py-12 text-slate-500 dark:text-white/40">暂无帖子</div>
+            )}
           </>
         )}
       </Card>

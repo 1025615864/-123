@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, MapPin, Phone, Mail, Star, Users, BadgeCheck } from 'lucide-react'
+import { ArrowLeft, MapPin, Phone, Mail, Star, Users, BadgeCheck, RotateCcw } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
-import { Card, Button, Loading, Badge, EmptyState } from '../components/ui'
+import { Card, Button, Badge, EmptyState, Skeleton } from '../components/ui'
 // import { useAuth } from '../contexts/AuthContext'
 import api from '../api/client'
 import { useToast } from '../hooks'
@@ -56,6 +56,7 @@ interface LawyerItem {
     enabled: !!firmId,
     retry: 1,
     refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
   })
 
   const lawyersQuery = useQuery({
@@ -86,12 +87,87 @@ interface LawyerItem {
     toast.error(getApiErrorMessage(lawyersQuery.error, '律师列表加载失败，请稍后重试'))
   }, [lawyersQuery.error, toast])
 
-  if (firmQuery.isLoading) {
-    return <Loading text="加载中..." tone={actualTheme} />
+  const firm = firmQuery.data ?? null
+  const lawyers = lawyersQuery.data ?? []
+  const loadError = firmQuery.isError ? getApiErrorMessage(firmQuery.error, '律所信息加载失败，请稍后重试') : null
+
+  const handleRefreshAll = () => {
+    void Promise.all([firmQuery.refetch(), lawyersQuery.refetch()])
   }
 
-  const firm = firmQuery.data ?? null
-  const loadError = firmQuery.isError ? getApiErrorMessage(firmQuery.error, '律所信息加载失败，请稍后重试') : null
+  const isRefreshing = firmQuery.isFetching || lawyersQuery.isFetching
+
+  if (firmQuery.isLoading && !firm) {
+    return (
+      <div className="space-y-8">
+        <div className="flex items-center justify-between gap-4">
+          <div className="inline-flex items-center gap-2 text-slate-600 dark:text-white/60">
+            <ArrowLeft className="h-4 w-4 opacity-40" />
+            <Skeleton width="96px" height="16px" />
+          </div>
+          <Skeleton width="92px" height="34px" />
+        </div>
+
+        <div className="grid lg:grid-cols-3 gap-8">
+          <div className="lg:col-span-2 space-y-6">
+            <div className="rounded-2xl border border-slate-200/70 bg-white p-6 dark:border-white/10 dark:bg-white/[0.02]">
+              <div className="space-y-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-2 w-full">
+                    <Skeleton width="60%" height="26px" />
+                    <Skeleton width="140px" height="16px" />
+                  </div>
+                  <div className="space-y-2 text-right">
+                    <Skeleton width="80px" height="24px" />
+                    <Skeleton width="90px" height="14px" />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Skeleton width="88%" height="14px" />
+                  <Skeleton width="76%" height="14px" />
+                </div>
+                <div className="grid sm:grid-cols-2 gap-4 pt-2">
+                  {Array.from({ length: 4 }).map((_, idx) => (
+                    <div
+                      key={idx}
+                      className="p-4 rounded-xl bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10"
+                    >
+                      <Skeleton width="72px" height="12px" />
+                      <div className="mt-2">
+                        <Skeleton width="80%" height="14px" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="lg:col-span-1">
+            <div className="rounded-2xl border border-slate-200/70 bg-white p-6 dark:border-white/10 dark:bg-white/[0.02]">
+              <div className="space-y-4">
+                <Skeleton width="120px" height="18px" />
+                {Array.from({ length: 3 }).map((_, idx) => (
+                  <div
+                    key={idx}
+                    className="p-3 rounded-xl bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-2 w-full">
+                        <Skeleton width="60%" height="14px" />
+                        <Skeleton width="45%" height="12px" />
+                      </div>
+                      <Skeleton width="70px" height="28px" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   if (!firm) {
     return (
@@ -106,10 +182,7 @@ interface LawyerItem {
               <Button variant="outline">返回律所列表</Button>
             </Link>
             {loadError && (
-              <Button onClick={() => {
-                firmQuery.refetch()
-                lawyersQuery.refetch()
-              }}>
+              <Button onClick={handleRefreshAll}>
                 重试
               </Button>
             )}
@@ -121,14 +194,27 @@ interface LawyerItem {
 
   return (
     <div className="space-y-8">
-      {/* 返回按钮 */}
-      <Link 
-        to="/lawfirm" 
-        className="inline-flex items-center gap-2 text-slate-600 hover:text-slate-900 transition-colors dark:text-white/60 dark:hover:text-white"
-      >
-        <ArrowLeft className="h-4 w-4" />
-        返回律所列表
-      </Link>
+      <div className="flex items-center justify-between gap-4">
+        <Link 
+          to="/lawfirm" 
+          className="inline-flex items-center gap-2 text-slate-600 hover:text-slate-900 transition-colors dark:text-white/60 dark:hover:text-white"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          返回律所列表
+        </Link>
+
+        <Button
+          variant="outline"
+          size="sm"
+          icon={RotateCcw}
+          isLoading={isRefreshing}
+          loadingText="刷新中..."
+          disabled={isRefreshing}
+          onClick={handleRefreshAll}
+        >
+          刷新
+        </Button>
+      </div>
 
       <div className="grid lg:grid-cols-3 gap-8">
         {/* 左侧：律所信息 */}
@@ -217,8 +303,23 @@ interface LawyerItem {
           <Card variant="surface" padding="lg" className="sticky top-24">
             <h3 className="text-lg font-semibold text-slate-900 mb-4 dark:text-white">律师团队</h3>
 
-            {lawyersQuery.isLoading ? (
-              <div className="text-slate-500 text-sm dark:text-white/50">加载中...</div>
+            {lawyersQuery.isLoading && lawyers.length === 0 ? (
+              <div className="space-y-3">
+                {Array.from({ length: 3 }).map((_, idx) => (
+                  <div
+                    key={idx}
+                    className="p-3 rounded-xl bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-2 w-full">
+                        <Skeleton width="60%" height="14px" />
+                        <Skeleton width="45%" height="12px" />
+                      </div>
+                      <Skeleton width="70px" height="28px" />
+                    </div>
+                  </div>
+                ))}
+              </div>
             ) : lawyersQuery.isError ? (
               <div className="space-y-4">
                 <p className="text-slate-600 text-sm dark:text-white/60">{getApiErrorMessage(lawyersQuery.error, '律师列表加载失败，请稍后重试')}</p>
@@ -231,7 +332,7 @@ interface LawyerItem {
                   重试
                 </Button>
               </div>
-            ) : (lawyersQuery.data ?? []).length === 0 ? (
+            ) : lawyers.length === 0 ? (
               <div className="space-y-4">
                 <p className="text-slate-600 text-sm dark:text-white/50">暂无可预约律师</p>
                 {firm.phone && (
@@ -244,7 +345,7 @@ interface LawyerItem {
               </div>
             ) : (
               <div className="space-y-3">
-                {(lawyersQuery.data ?? []).slice(0, 8).map((lawyer) => (
+                {lawyers.slice(0, 8).map((lawyer) => (
                   <div key={lawyer.id} className="p-3 rounded-xl bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">

@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Bell, Check, Trash2, RefreshCw, MessageSquare, Heart, Bookmark, AlertCircle, Newspaper } from 'lucide-react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import PageHeader from '../components/PageHeader'
-import { Button, Card, EmptyState, Loading, Pagination } from '../components/ui'
+import { Button, Card, EmptyState, ListSkeleton, Pagination } from '../components/ui'
 import api from '../api/client'
 import { useToast } from '../hooks'
 import { useAuth } from '../contexts/AuthContext'
@@ -17,6 +17,9 @@ export default function NotificationsPage() {
   const toast = useToast()
   const [page, setPage] = useState(1)
   const pageSize = 20
+
+  const [pendingRead, setPendingRead] = useState<Record<number, boolean>>({})
+  const [pendingDelete, setPendingDelete] = useState<Record<number, boolean>>({})
 
   const queryClient = useQueryClient()
 
@@ -34,6 +37,9 @@ export default function NotificationsPage() {
   const items = notificationsQuery.data?.items ?? []
   const total = notificationsQuery.data?.total ?? 0
   const unreadCount = notificationsQuery.data?.unread_count ?? 0
+
+  const pendingReadSet = useMemo(() => new Set(Object.keys(pendingRead).map((k) => Number(k))), [pendingRead])
+  const pendingDeleteSet = useMemo(() => new Set(Object.keys(pendingDelete).map((k) => Number(k))), [pendingDelete])
 
   const getIcon = (type: string) => {
     switch (type) {
@@ -57,6 +63,7 @@ export default function NotificationsPage() {
       return id
     },
     onMutate: async (id) => {
+      setPendingRead((prev) => ({ ...prev, [id]: true }))
       await queryClient.cancelQueries({ queryKey: notificationsQueryKey })
       const previous = queryClient.getQueryData<NotificationsResponse>(notificationsQueryKey)
 
@@ -73,7 +80,19 @@ export default function NotificationsPage() {
 
       return { previous }
     },
+    onSuccess: (_id) => {
+      setPendingRead((prev) => {
+        const next = { ...prev }
+        delete next[_id]
+        return next
+      })
+    },
     onError: (err, _id, ctx) => {
+      setPendingRead((prev) => {
+        const next = { ...prev }
+        delete next[_id]
+        return next
+      })
       if (ctx?.previous) queryClient.setQueryData(notificationsQueryKey, ctx.previous)
       toast.error(getApiErrorMessage(err))
     },
@@ -107,6 +126,7 @@ export default function NotificationsPage() {
       return id
     },
     onMutate: async (id) => {
+      setPendingDelete((prev) => ({ ...prev, [id]: true }))
       await queryClient.cancelQueries({ queryKey: notificationsQueryKey })
       const previous = queryClient.getQueryData<NotificationsResponse>(notificationsQueryKey)
       queryClient.setQueryData<NotificationsResponse>(notificationsQueryKey, (old) => {
@@ -119,17 +139,28 @@ export default function NotificationsPage() {
       })
       return { previous }
     },
-    onSuccess: () => {
+    onSuccess: (_data, id) => {
+      setPendingDelete((prev) => {
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
       toast.success('已删除')
     },
     onError: (err, _id, ctx) => {
+      setPendingDelete((prev) => {
+        const next = { ...prev }
+        delete next[_id]
+        return next
+      })
       if (ctx?.previous) queryClient.setQueryData(notificationsQueryKey, ctx.previous)
       toast.error(getApiErrorMessage(err))
     },
   })
 
   const handleMarkAsRead = async (id: number) => {
-    if (markAsReadMutation.isPending) return
+    if (markAllAsReadMutation.isPending) return
+    if (pendingReadSet.has(id) || pendingDeleteSet.has(id)) return
     markAsReadMutation.mutate(id)
   }
 
@@ -139,7 +170,8 @@ export default function NotificationsPage() {
   }
 
   const handleDelete = async (id: number) => {
-    if (deleteMutation.isPending) return
+    if (markAllAsReadMutation.isPending) return
+    if (pendingReadSet.has(id) || pendingDeleteSet.has(id)) return
     deleteMutation.mutate(id)
   }
 
@@ -179,8 +211,14 @@ export default function NotificationsPage() {
         tone={actualTheme}
         right={
           <div className="flex gap-2">
-            <Button variant="outline" onClick={() => notificationsQuery.refetch()} disabled={notificationsQuery.isFetching}>
-              <RefreshCw className={`h-4 w-4 mr-2 ${notificationsQuery.isFetching ? 'animate-spin' : ''}`} />
+            <Button
+              variant="outline"
+              icon={RefreshCw}
+              isLoading={notificationsQuery.isFetching}
+              loadingText="刷新中..."
+              onClick={() => notificationsQuery.refetch()}
+              disabled={notificationsQuery.isFetching}
+            >
               刷新
             </Button>
             <Button
@@ -188,6 +226,8 @@ export default function NotificationsPage() {
               onClick={handleMarkAllAsRead}
               disabled={notificationsQuery.isFetching || unreadCount === 0 || markAllAsReadMutation.isPending}
               icon={Check}
+              isLoading={markAllAsReadMutation.isPending}
+              loadingText="处理中..."
             >
               全部已读
             </Button>
@@ -196,7 +236,7 @@ export default function NotificationsPage() {
       />
 
       {notificationsQuery.isLoading && items.length === 0 ? (
-        <Loading text="加载中..." tone={actualTheme} />
+        <ListSkeleton count={4} />
       ) : items.length === 0 ? (
         <EmptyState
           icon={Bell}
@@ -207,15 +247,18 @@ export default function NotificationsPage() {
       ) : (
         <Card variant="surface" padding="none">
           <div className="divide-y divide-slate-200/70 dark:divide-white/10">
-            {items.map((n) => (
-              <div
-                key={n.id}
-                className={`p-5 flex items-start gap-4 transition-colors ${
-                  n.is_read
-                    ? 'hover:bg-slate-50 dark:hover:bg-white/5'
-                    : 'bg-amber-50/70 hover:bg-amber-50 dark:bg-amber-500/5 dark:hover:bg-amber-500/10'
-                }`}
-              >
+            {items.map((n) => {
+              const readLoading = pendingReadSet.has(n.id)
+              const deleteLoading = pendingDeleteSet.has(n.id)
+              return (
+                <div
+                  key={n.id}
+                  className={`p-5 flex items-start gap-4 transition-colors ${
+                    n.is_read
+                      ? 'hover:bg-slate-50 dark:hover:bg-white/5'
+                      : 'bg-amber-50/70 hover:bg-amber-50 dark:bg-amber-500/5 dark:hover:bg-amber-500/10'
+                  }`}
+                >
                 <div className="mt-0.5">{getIcon(n.type)}</div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-3">
@@ -238,9 +281,12 @@ export default function NotificationsPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="p-2"
+                          className={readLoading ? "px-3 py-2" : "p-2"}
                           title="标记已读"
                           onClick={() => handleMarkAsRead(n.id)}
+                          isLoading={readLoading}
+                          loadingText="标记中..."
+                          disabled={markAllAsReadMutation.isPending || deleteLoading}
                         >
                           <Check className="h-4 w-4" />
                         </Button>
@@ -248,9 +294,12 @@ export default function NotificationsPage() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="p-2 hover:text-red-600 dark:hover:text-red-300"
+                        className={`${deleteLoading ? "px-3 py-2" : "p-2"} hover:text-red-600 dark:hover:text-red-300`}
                         title="删除"
                         onClick={() => handleDelete(n.id)}
+                        isLoading={deleteLoading}
+                        loadingText="删除中..."
+                        disabled={markAllAsReadMutation.isPending || readLoading}
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
@@ -285,8 +334,9 @@ export default function NotificationsPage() {
                     </a>
                   ))}
                 </div>
-              </div>
-            ))}
+                </div>
+              )
+            })}
           </div>
 
           {total > pageSize && (

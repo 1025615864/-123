@@ -10,6 +10,7 @@ import {
   ArrowUp,
   Search,
   GripVertical,
+  RotateCcw,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -17,10 +18,11 @@ import {
   Button,
   Input,
   Modal,
-  Loading,
   EmptyState,
   Badge,
   Pagination,
+  ListSkeleton,
+  Skeleton,
 } from "../../components/ui";
 import api from "../../api/client";
 import { useAppMutation, useToast } from "../../hooks";
@@ -646,6 +648,31 @@ export default function NewsTopicsManagePage() {
     });
   };
 
+  const manageBusy =
+    reorderMutation.isPending ||
+    autoCacheRefreshMutation.isPending ||
+    bulkRemoveMutation.isPending ||
+    reindexMutation.isPending ||
+    importMutation.isPending ||
+    bulkAddMutation.isPending ||
+    addItemMutation.isPending ||
+    removeItemMutation.isPending ||
+    updatePosMutation.isPending;
+
+  const closeManageModal = () => {
+    setManageOpen(false);
+    setManageTopicId(null);
+    setNewsIdToAdd("");
+    setNewsSearchKeyword("");
+    setNewsSearchPage(1);
+    setSelectedNewsIds(new Set());
+    setSelectedItemIds(new Set());
+    setImportCategory("");
+    setImportLimit(50);
+    setManualOrderItemIds([]);
+    setDraggingItemId(null);
+  };
+
   return (
     <div className="space-y-8">
       <Card variant="surface" padding="md">
@@ -658,20 +685,58 @@ export default function NewsTopicsManagePage() {
               创建专题并配置专题内新闻
             </p>
           </div>
-          <Button
-            onClick={() => {
-              resetForm();
-              setShowCreate(true);
-            }}
-          >
-            <Plus className="h-4 w-4" />
-            新建专题
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              icon={RotateCcw}
+              isLoading={topicsQuery.isFetching || reportQuery.isFetching}
+              loadingText="刷新中..."
+              disabled={topicsQuery.isFetching || reportQuery.isFetching}
+              onClick={() => {
+                topicsQuery.refetch();
+                reportQuery.refetch();
+              }}
+            >
+              刷新
+            </Button>
+            <Button
+              onClick={() => {
+                resetForm();
+                setShowCreate(true);
+              }}
+            >
+              <Plus className="h-4 w-4" />
+              新建专题
+            </Button>
+          </div>
         </div>
       </Card>
 
       {topicsQuery.isLoading ? (
-        <Loading />
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {Array.from({ length: 6 }).map((_, idx) => (
+            <Card key={idx} variant="surface" padding="md">
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <Skeleton width="140px" height="18px" />
+                    <Skeleton width="48px" height="22px" />
+                  </div>
+                  <div className="mt-2 space-y-2">
+                    <Skeleton width="100%" height="12px" />
+                    <Skeleton width="85%" height="12px" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Skeleton width="72px" height="32px" />
+                <Skeleton width="92px" height="32px" />
+                <Skeleton width="72px" height="32px" />
+              </div>
+            </Card>
+          ))}
+        </div>
       ) : topics.length === 0 ? (
         <EmptyState
           icon={Layers}
@@ -768,7 +833,11 @@ export default function NewsTopicsManagePage() {
 
       <Modal
         isOpen={showCreate}
-        onClose={() => setShowCreate(false)}
+        onClose={() => {
+          if (createMutation.isPending) return;
+          setShowCreate(false);
+          resetForm();
+        }}
         title="新建专题"
         size="lg"
       >
@@ -777,6 +846,7 @@ export default function NewsTopicsManagePage() {
             label="标题"
             value={form.title}
             onChange={(e) => setForm((p) => ({ ...p, title: e.target.value }))}
+            disabled={createMutation.isPending}
             placeholder="专题标题"
           />
           <Input
@@ -785,6 +855,7 @@ export default function NewsTopicsManagePage() {
             onChange={(e) =>
               setForm((p) => ({ ...p, description: e.target.value }))
             }
+            disabled={createMutation.isPending}
             placeholder="专题简介（可选）"
           />
           <Input
@@ -793,6 +864,7 @@ export default function NewsTopicsManagePage() {
             onChange={(e) =>
               setForm((p) => ({ ...p, cover_image: e.target.value }))
             }
+            disabled={createMutation.isPending}
             placeholder="封面图 URL（可选）"
           />
           <Input
@@ -804,6 +876,7 @@ export default function NewsTopicsManagePage() {
                 sort_order: Number(e.target.value || 0),
               }))
             }
+            disabled={createMutation.isPending}
             placeholder="数字越大越靠前"
           />
           <Input
@@ -812,6 +885,7 @@ export default function NewsTopicsManagePage() {
             onChange={(e) =>
               setForm((p) => ({ ...p, auto_category: e.target.value }))
             }
+            disabled={createMutation.isPending}
             placeholder="例如：法律动态（可选）"
           />
           <Input
@@ -820,6 +894,7 @@ export default function NewsTopicsManagePage() {
             onChange={(e) =>
               setForm((p) => ({ ...p, auto_keyword: e.target.value }))
             }
+            disabled={createMutation.isPending}
             placeholder="例如：劳动（可选）"
           />
           <Input
@@ -831,6 +906,7 @@ export default function NewsTopicsManagePage() {
                 auto_limit: Number(e.target.value || 0),
               }))
             }
+            disabled={createMutation.isPending}
             placeholder="0 表示关闭自动收录"
           />
           <div className="flex items-center gap-3">
@@ -838,6 +914,7 @@ export default function NewsTopicsManagePage() {
               variant={form.is_active ? "primary" : "outline"}
               onClick={() => setForm((p) => ({ ...p, is_active: true }))}
               size="sm"
+              disabled={createMutation.isPending}
             >
               启用
             </Button>
@@ -845,13 +922,22 @@ export default function NewsTopicsManagePage() {
               variant={!form.is_active ? "primary" : "outline"}
               onClick={() => setForm((p) => ({ ...p, is_active: false }))}
               size="sm"
+              disabled={createMutation.isPending}
             >
               停用
             </Button>
           </div>
 
           <div className="flex justify-end gap-3 pt-2">
-            <Button variant="outline" onClick={() => setShowCreate(false)}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (createMutation.isPending) return;
+                setShowCreate(false);
+                resetForm();
+              }}
+              disabled={createMutation.isPending}
+            >
               取消
             </Button>
             <Button
@@ -860,6 +946,9 @@ export default function NewsTopicsManagePage() {
                 if (createMutation.isPending) return;
                 createMutation.mutate(form);
               }}
+              isLoading={createMutation.isPending}
+              loadingText="创建中..."
+              disabled={!form.title.trim() || createMutation.isPending}
             >
               创建
             </Button>
@@ -870,8 +959,10 @@ export default function NewsTopicsManagePage() {
       <Modal
         isOpen={showEdit}
         onClose={() => {
+          if (updateMutation.isPending) return;
           setShowEdit(false);
           setEditing(null);
+          resetForm();
         }}
         title="编辑专题"
         size="lg"
@@ -881,6 +972,7 @@ export default function NewsTopicsManagePage() {
             label="标题"
             value={form.title}
             onChange={(e) => setForm((p) => ({ ...p, title: e.target.value }))}
+            disabled={updateMutation.isPending}
             placeholder="专题标题"
           />
           <Input
@@ -889,6 +981,7 @@ export default function NewsTopicsManagePage() {
             onChange={(e) =>
               setForm((p) => ({ ...p, description: e.target.value }))
             }
+            disabled={updateMutation.isPending}
             placeholder="专题简介（可选）"
           />
           <Input
@@ -897,6 +990,7 @@ export default function NewsTopicsManagePage() {
             onChange={(e) =>
               setForm((p) => ({ ...p, cover_image: e.target.value }))
             }
+            disabled={updateMutation.isPending}
             placeholder="封面图 URL（可选）"
           />
           <Input
@@ -908,6 +1002,7 @@ export default function NewsTopicsManagePage() {
                 sort_order: Number(e.target.value || 0),
               }))
             }
+            disabled={updateMutation.isPending}
             placeholder="数字越大越靠前"
           />
           <div className="flex items-center gap-3">
@@ -915,6 +1010,7 @@ export default function NewsTopicsManagePage() {
               variant={form.is_active ? "primary" : "outline"}
               onClick={() => setForm((p) => ({ ...p, is_active: true }))}
               size="sm"
+              disabled={updateMutation.isPending}
             >
               启用
             </Button>
@@ -922,6 +1018,7 @@ export default function NewsTopicsManagePage() {
               variant={!form.is_active ? "primary" : "outline"}
               onClick={() => setForm((p) => ({ ...p, is_active: false }))}
               size="sm"
+              disabled={updateMutation.isPending}
             >
               停用
             </Button>
@@ -931,9 +1028,12 @@ export default function NewsTopicsManagePage() {
             <Button
               variant="outline"
               onClick={() => {
+                if (updateMutation.isPending) return;
                 setShowEdit(false);
                 setEditing(null);
+                resetForm();
               }}
+              disabled={updateMutation.isPending}
             >
               取消
             </Button>
@@ -944,6 +1044,9 @@ export default function NewsTopicsManagePage() {
                 if (updateMutation.isPending) return;
                 updateMutation.mutate({ id: editing.id, payload: form });
               }}
+              isLoading={updateMutation.isPending}
+              loadingText="保存中..."
+              disabled={!editing || !form.title.trim() || updateMutation.isPending}
             >
               保存
             </Button>
@@ -954,15 +1057,8 @@ export default function NewsTopicsManagePage() {
       <Modal
         isOpen={manageOpen}
         onClose={() => {
-          setManageOpen(false);
-          setManageTopicId(null);
-          setNewsIdToAdd("");
-          setNewsSearchKeyword("");
-          setNewsSearchPage(1);
-          setSelectedNewsIds(new Set());
-          setSelectedItemIds(new Set());
-          setImportCategory("");
-          setImportLimit(50);
+          if (manageBusy) return;
+          closeManageModal();
         }}
         title="配置专题新闻"
         size="xl"
@@ -973,6 +1069,7 @@ export default function NewsTopicsManagePage() {
               label="添加新闻ID"
               value={newsIdToAdd}
               onChange={(e) => setNewsIdToAdd(e.target.value)}
+              disabled={manageBusy}
               placeholder="例如 123"
             />
             <Button
@@ -983,6 +1080,9 @@ export default function NewsTopicsManagePage() {
                 if (addItemMutation.isPending) return;
                 addItemMutation.mutate({ topicId: tId, newsId: nId });
               }}
+              isLoading={addItemMutation.isPending}
+              loadingText="添加中..."
+              disabled={manageBusy}
             >
               添加
             </Button>
@@ -993,6 +1093,7 @@ export default function NewsTopicsManagePage() {
               label="搜索新闻"
               value={newsSearchKeyword}
               onChange={(e) => setNewsSearchKeyword(e.target.value)}
+              disabled={manageBusy}
               placeholder="输入关键词搜索标题/摘要"
               icon={Search}
             />
@@ -1003,18 +1104,22 @@ export default function NewsTopicsManagePage() {
               label="导入分类"
               value={importCategory}
               onChange={(e) => setImportCategory(e.target.value)}
+              disabled={manageBusy}
               placeholder="可选：法律动态"
             />
             <Input
               label="导入数量"
               value={String(importLimit)}
               onChange={(e) => setImportLimit(Number(e.target.value || 0))}
+              disabled={manageBusy}
               placeholder="默认 50"
             />
             <div className="flex items-end">
               <Button
                 variant="outline"
                 data-testid="admin-topic-import"
+                isLoading={importMutation.isPending}
+                loadingText="导入中..."
                 disabled={!manageTopicId || importMutation.isPending}
                 onClick={() => {
                   const tId = manageTopicId;
@@ -1040,9 +1145,11 @@ export default function NewsTopicsManagePage() {
               </div>
               <div className="flex items-center gap-2">
                 <div className="text-xs text-slate-500 dark:text-white/45">
-                  {newsSearchQuery.isLoading
-                    ? "加载中..."
-                    : `共 ${searchTotal} 条`}
+                  {newsSearchQuery.isLoading ? (
+                    <Skeleton width="72px" height="12px" />
+                  ) : (
+                    `共 ${searchTotal} 条`
+                  )}
                 </div>
                 {selectedNewsIds.size > 0 ? (
                   <div className="text-xs text-slate-600 dark:text-white/55">
@@ -1054,7 +1161,7 @@ export default function NewsTopicsManagePage() {
                   size="sm"
                   data-testid="admin-news-search-select-all"
                   disabled={
-                    searchResults.length === 0 || newsSearchQuery.isLoading
+                    manageBusy || searchResults.length === 0 || newsSearchQuery.isLoading
                   }
                   onClick={() => selectAllVisible()}
                 >
@@ -1064,7 +1171,7 @@ export default function NewsTopicsManagePage() {
                   variant="outline"
                   size="sm"
                   data-testid="admin-news-search-clear"
-                  disabled={selectedNewsIds.size === 0}
+                  disabled={manageBusy || selectedNewsIds.size === 0}
                   onClick={() => clearSelected()}
                 >
                   清空
@@ -1073,10 +1180,13 @@ export default function NewsTopicsManagePage() {
                   variant="outline"
                   size="sm"
                   data-testid="admin-news-search-bulk-add"
+                  isLoading={bulkAddMutation.isPending}
+                  loadingText="处理中..."
                   disabled={
                     !manageTopicId ||
                     selectedNewsIds.size === 0 ||
-                    bulkAddMutation.isPending
+                    bulkAddMutation.isPending ||
+                    manageBusy
                   }
                   onClick={() => {
                     const tId = manageTopicId;
@@ -1096,9 +1206,7 @@ export default function NewsTopicsManagePage() {
 
             <div className="mt-3 space-y-2">
               {newsSearchQuery.isLoading ? (
-                <div className="text-sm text-slate-600 dark:text-white/50">
-                  加载中...
-                </div>
+                <ListSkeleton count={3} />
               ) : searchResults.length === 0 ? (
                 <div className="text-sm text-slate-600 dark:text-white/50">
                   暂无结果
@@ -1147,7 +1255,12 @@ export default function NewsTopicsManagePage() {
                       <Button
                         variant="outline"
                         size="sm"
-                        disabled={!tId || already || addItemMutation.isPending}
+                        disabled={
+                          !tId ||
+                          already ||
+                          addItemMutation.isPending ||
+                          manageBusy
+                        }
                         data-testid={`admin-news-search-add-${n.id}`}
                         onClick={() => {
                           if (!tId) return;
@@ -1177,7 +1290,7 @@ export default function NewsTopicsManagePage() {
           </Card>
 
           {topicDetailQuery.isLoading ? (
-            <Loading />
+            <ListSkeleton count={4} />
           ) : items.length === 0 ? (
             <EmptyState
               icon={Layers}
@@ -1200,7 +1313,7 @@ export default function NewsTopicsManagePage() {
                     variant="outline"
                     size="sm"
                     onClick={() => selectAllItems()}
-                    disabled={items.length === 0}
+                    disabled={manageBusy || items.length === 0}
                   >
                     全选
                   </Button>
@@ -1208,7 +1321,7 @@ export default function NewsTopicsManagePage() {
                     variant="outline"
                     size="sm"
                     disabled={
-                      !manageTopicId || autoCacheRefreshMutation.isPending
+                      !manageTopicId || autoCacheRefreshMutation.isPending || manageBusy
                     }
                     data-testid="admin-topic-auto-cache-refresh"
                     onClick={() => {
@@ -1222,7 +1335,7 @@ export default function NewsTopicsManagePage() {
                   <Button
                     variant="outline"
                     size="sm"
-                    disabled={!manageTopicId || reindexMutation.isPending}
+                    disabled={!manageTopicId || reindexMutation.isPending || manageBusy}
                     onClick={() => {
                       const tId = manageTopicId;
                       if (!tId) return;
@@ -1288,6 +1401,7 @@ export default function NewsTopicsManagePage() {
                           className="h-4 w-4"
                           checked={selectedItemIds.has(Number(it.id))}
                           onChange={() => toggleItemSelected(Number(it.id))}
+                          disabled={manageBusy}
                         />
 
                         <div className="min-w-0">
@@ -1310,7 +1424,7 @@ export default function NewsTopicsManagePage() {
                           variant="outline"
                           size="sm"
                           onClick={() => move(-1, idx)}
-                          disabled={idx === 0 || updatePosMutation.isPending}
+                          disabled={manageBusy || idx === 0 || updatePosMutation.isPending}
                         >
                           <ArrowUp className="h-4 w-4" />
                         </Button>
@@ -1319,6 +1433,7 @@ export default function NewsTopicsManagePage() {
                           size="sm"
                           onClick={() => move(1, idx)}
                           disabled={
+                            manageBusy ||
                             idx === items.length - 1 ||
                             updatePosMutation.isPending
                           }
@@ -1337,6 +1452,7 @@ export default function NewsTopicsManagePage() {
                               itemId: it.id,
                             });
                           }}
+                          disabled={manageBusy}
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
@@ -1353,13 +1469,10 @@ export default function NewsTopicsManagePage() {
               variant="outline"
               data-testid="admin-topic-items-close"
               onClick={() => {
-                setManageOpen(false);
-                setManageTopicId(null);
-                setNewsIdToAdd("");
-                setNewsSearchKeyword("");
-                setNewsSearchPage(1);
-                setSelectedNewsIds(new Set());
+                if (manageBusy) return;
+                closeManageModal();
               }}
+              disabled={manageBusy}
             >
               关闭
             </Button>
