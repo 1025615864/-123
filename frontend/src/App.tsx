@@ -44,18 +44,11 @@ const LawyerDetailPage = lazy(() => import("./pages/LawyerDetailPage"));
 const LawyerVerificationPage = lazy(() => import("./pages/LawyerVerificationPage"));
 const LawyerDashboardPage = lazy(() => import("./pages/LawyerDashboardPage"));
 const FeeCalculatorPage = lazy(() => import("./pages/FeeCalculatorPage"));
-const LimitationsCalculatorPage = lazy(
-  () => import("./pages/LimitationsCalculatorPage")
-);
+const LimitationsCalculatorPage = lazy(() => import("./pages/LimitationsCalculatorPage"));
 const CalendarPage = lazy(() => import("./pages/CalendarPage"));
-const DocumentGeneratorPage = lazy(
-  () => import("./pages/DocumentGeneratorPage")
-);
+const DocumentGeneratorPage = lazy(() => import("./pages/DocumentGeneratorPage"));
 const FaqPage = lazy(() => import("./pages/FaqPage"));
 const SharePage = lazy(() => import("./pages/SharePage"));
-const VerifyEmailPage = lazy(() => import("./pages/VerifyEmailPage"));
-const ForgotPasswordPage = lazy(() => import("./pages/ForgotPasswordPage"));
-const ResetPasswordPage = lazy(() => import("./pages/ResetPasswordPage"));
 const PaymentReturnPage = lazy(() => import("./pages/PaymentReturnPage"));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
 
@@ -63,28 +56,14 @@ const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
 const DashboardPage = lazy(() => import("./pages/admin/DashboardPage"));
 const UsersPage = lazy(() => import("./pages/admin/UsersPage"));
 const NewsManagePage = lazy(() => import("./pages/admin/NewsManagePage"));
-const NewsSourcesManagePage = lazy(
-  () => import("./pages/admin/NewsSourcesManagePage")
-);
-const NewsTopicsManagePage = lazy(
-  () => import("./pages/admin/NewsTopicsManagePage")
-);
-const NewsCommentsManagePage = lazy(
-  () => import("./pages/admin/NewsCommentsManagePage")
-);
-const NewsIngestRunsPage = lazy(
-  () => import("./pages/admin/NewsIngestRunsPage")
-);
-const LawFirmsManagePage = lazy(
-  () => import("./pages/admin/LawFirmsManagePage")
-);
+const NewsSourcesManagePage = lazy(() => import("./pages/admin/NewsSourcesManagePage"));
+const NewsTopicsManagePage = lazy(() => import("./pages/admin/NewsTopicsManagePage"));
+const NewsCommentsManagePage = lazy(() => import("./pages/admin/NewsCommentsManagePage"));
+const NewsIngestRunsPage = lazy(() => import("./pages/admin/NewsIngestRunsPage"));
+const LawFirmsManagePage = lazy(() => import("./pages/admin/LawFirmsManagePage"));
 const SettingsPage = lazy(() => import("./pages/admin/SettingsPage"));
-const KnowledgeManagePage = lazy(
-  () => import("./pages/admin/KnowledgeManagePage")
-);
-const TemplatesManagePage = lazy(
-  () => import("./pages/admin/TemplatesManagePage")
-);
+const KnowledgeManagePage = lazy(() => import("./pages/admin/KnowledgeManagePage"));
+const TemplatesManagePage = lazy(() => import("./pages/admin/TemplatesManagePage"));
 const ForumManagePage = lazy(() => import("./pages/admin/ForumManagePage"));
 const LawyerVerificationsPage = lazy(() => import("./pages/admin/LawyerVerificationsPage"));
 const LogsPage = lazy(() => import("./pages/admin/LogsPage"));
@@ -189,9 +168,6 @@ function App() {
                 <Route path="share/:token" element={<SharePage />} />
                 <Route path="login" element={<LoginPage />} />
                 <Route path="register" element={<RegisterPage />} />
-                <Route path="verify-email" element={<VerifyEmailPage />} />
-                <Route path="forgot-password" element={<ForgotPasswordPage />} />
-                <Route path="reset-password" element={<ResetPasswordPage />} />
                 <Route path="terms" element={<TermsPage />} />
                 <Route path="privacy" element={<PrivacyPolicyPage />} />
                 <Route path="ai-disclaimer" element={<AiDisclaimerPage />} />
