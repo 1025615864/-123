@@ -83,8 +83,17 @@ test.describe('移动端回归', () => {
         resp = await p
       } catch {
         const p = waitPage2()
-        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
-        await page.getByRole('button', { name: '加载更多' }).click({ timeout: 12_000 })
+        for (let i = 0; i < 3; i++) {
+          await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+          await page.waitForTimeout(250)
+
+          const loadMore = page.getByRole('button', { name: '加载更多' })
+          if (await loadMore.count()) {
+            try {
+              await loadMore.click({ timeout: 2000 })
+            } catch {}
+          }
+        }
         resp = await p
       }
       expect(resp.ok()).toBeTruthy()
@@ -186,8 +195,17 @@ test.describe('移动端回归', () => {
         await p
       } catch {
         const p = waitPage2()
-        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
-        await page.getByRole('button', { name: '加载更多' }).click({ timeout: 12_000 })
+        for (let i = 0; i < 3; i++) {
+          await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+          await page.waitForTimeout(250)
+
+          const loadMore = page.getByRole('button', { name: '加载更多' })
+          if (await loadMore.count()) {
+            try {
+              await loadMore.click({ timeout: 2000 })
+            } catch {}
+          }
+        }
         await p
       }
       await page.waitForTimeout(400)
