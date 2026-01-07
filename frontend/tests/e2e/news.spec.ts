@@ -291,8 +291,15 @@ test('新闻列表：热门新闻区块可见（按阅读量排序）', async ({
     await setNewsViewCount(request, adminToken, normalId, 1)
 
     await page.goto('/news')
+    await page.waitForResponse(
+      (resp) =>
+        resp.request().method() === 'GET' &&
+        resp.url().includes('/api/news/hot') &&
+        resp.status() === 200,
+      { timeout: 20_000 }
+    )
     const hot = page.getByTestId('news-hot')
-    await expect(hot).toBeVisible({ timeout: 12_000 })
+    await expect(hot).toBeVisible({ timeout: 20_000 })
     await expect(hot.getByText(`热门新闻A-${token}`).first()).toBeVisible({ timeout: 12_000 })
   } finally {
     await deleteNews(request, adminToken, hotId)
