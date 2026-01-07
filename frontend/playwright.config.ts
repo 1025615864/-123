@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const pythonCmd = process.platform === "win32" ? "py" : "python";
+const e2eHost = process.env.E2E_HOST ?? "127.0.0.1";
 const backendPort = Number(process.env.E2E_BACKEND_PORT ?? 8001);
 const frontendPort = Number(process.env.E2E_FRONTEND_PORT ?? 5174);
 const reuseExistingBackend =
@@ -9,7 +10,7 @@ const reuseExistingFrontend =
   !process.env.CI && process.env.E2E_REUSE_EXISTING === "1";
 
 process.env.E2E_API_BASE =
-  process.env.E2E_API_BASE ?? `http://localhost:${frontendPort}/api`;
+  process.env.E2E_API_BASE ?? `http://${e2eHost}:${frontendPort}/api`;
 
 const backendDbUrl =
   process.env.E2E_DATABASE_URL ??
@@ -32,8 +33,8 @@ const backendEnvPrefix =
 
 const viteEnvPrefix =
   process.platform === "win32"
-    ? `set VITE_PROXY_TARGET=http://localhost:${backendPort}&& set VITE_WS_PROXY_TARGET=ws://localhost:${backendPort}&& `
-    : `VITE_PROXY_TARGET=http://localhost:${backendPort} VITE_WS_PROXY_TARGET=ws://localhost:${backendPort} `;
+    ? `set VITE_PROXY_TARGET=http://${e2eHost}:${backendPort}&& set VITE_WS_PROXY_TARGET=ws://${e2eHost}:${backendPort}&& `
+    : `VITE_PROXY_TARGET=http://${e2eHost}:${backendPort} VITE_WS_PROXY_TARGET=ws://${e2eHost}:${backendPort} `;
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -47,7 +48,7 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: [["list"], ["html", { open: "never" }]],
   use: {
-    baseURL: `http://localhost:${frontendPort}`,
+    baseURL: `http://${e2eHost}:${frontendPort}`,
     trace: "on-first-retry",
     screenshot: "only-on-failure",
     video: "retain-on-failure",
@@ -55,13 +56,13 @@ export default defineConfig({
   webServer: [
     {
       command: `${backendEnvPrefix}${pythonCmd} ../backend/scripts/seed_data.py && ${pythonCmd} -m uvicorn app.main:app --app-dir ../backend --host 0.0.0.0 --port ${backendPort}`,
-      url: `http://localhost:${backendPort}/health`,
+      url: `http://${e2eHost}:${backendPort}/health`,
       reuseExistingServer: reuseExistingBackend,
       timeout: 120_000,
     },
     {
       command: `${viteEnvPrefix}npm run dev -- --host 0.0.0.0 --port ${frontendPort} --logLevel error`,
-      url: `http://localhost:${frontendPort}`,
+      url: `http://${e2eHost}:${frontendPort}`,
       reuseExistingServer: reuseExistingFrontend,
       timeout: 120_000,
     },
