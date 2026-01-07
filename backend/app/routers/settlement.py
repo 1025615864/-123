@@ -37,7 +37,7 @@ from ..schemas.settlement import (
     WithdrawalRejectRequest,
 )
 from ..services.settlement_service import settlement_service
-from ..utils.deps import require_admin, require_lawyer
+from ..utils.deps import require_admin, require_lawyer, require_lawyer_verified
 
 router = APIRouter(tags=["律师结算"])
 
@@ -273,7 +273,7 @@ async def lawyer_list_bank_accounts(
 )
 async def lawyer_create_bank_account(
     data: LawyerBankAccountCreate,
-    current_user: Annotated[User, Depends(require_lawyer)],
+    current_user: Annotated[User, Depends(require_lawyer_verified)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     lawyer = await settlement_service.get_current_lawyer(db, int(current_user.id))
@@ -333,7 +333,7 @@ async def lawyer_create_bank_account(
 async def lawyer_update_bank_account(
     account_id: int,
     data: LawyerBankAccountUpdate,
-    current_user: Annotated[User, Depends(require_lawyer)],
+    current_user: Annotated[User, Depends(require_lawyer_verified)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     lawyer = await settlement_service.get_current_lawyer(db, int(current_user.id))
@@ -394,7 +394,7 @@ async def lawyer_update_bank_account(
 @router.delete("/lawyer/bank-accounts/{account_id}", summary="律师-删除收款账户")
 async def lawyer_delete_bank_account(
     account_id: int,
-    current_user: Annotated[User, Depends(require_lawyer)],
+    current_user: Annotated[User, Depends(require_lawyer_verified)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     lawyer = await settlement_service.get_current_lawyer(db, int(current_user.id))
@@ -423,7 +423,7 @@ async def lawyer_delete_bank_account(
 )
 async def lawyer_set_default_bank_account(
     account_id: int,
-    current_user: Annotated[User, Depends(require_lawyer)],
+    current_user: Annotated[User, Depends(require_lawyer_verified)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     lawyer = await settlement_service.get_current_lawyer(db, int(current_user.id))
@@ -595,7 +595,7 @@ async def lawyer_get_withdrawal(
 )
 async def lawyer_create_withdrawal(
     data: WithdrawalCreateRequest,
-    current_user: Annotated[User, Depends(require_lawyer)],
+    current_user: Annotated[User, Depends(require_lawyer_verified)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     lawyer = await settlement_service.get_current_lawyer(db, int(current_user.id))

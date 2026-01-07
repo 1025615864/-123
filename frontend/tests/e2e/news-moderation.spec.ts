@@ -84,6 +84,8 @@ test("新闻审核：pending 新闻在审核通过 + 发布后对外可见", asy
       page.getByRole("heading", { level: 1, name: "新闻管理" })
     ).toBeVisible({ timeout: 12_000 });
 
+    await page.getByPlaceholder("搜索新闻标题...").fill(token);
+
     const row = page.getByTestId(`admin-news-${newsId}`);
     await expect(row).toBeVisible({ timeout: 12_000 });
 

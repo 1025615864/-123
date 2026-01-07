@@ -66,6 +66,19 @@ class UserService:
     async def update(db: AsyncSession, user: User, user_data: UserUpdate) -> User:
         """更新用户信息"""
         update_data: dict[str, object] = user_data.model_dump(exclude_unset=True)
+
+        if "phone" in update_data:
+            raw_phone = update_data.get("phone")
+            new_phone: str | None
+            if raw_phone is None:
+                new_phone = None
+            else:
+                new_phone = str(raw_phone).strip() or None
+
+            if new_phone != user.phone:
+                user.phone_verified = False
+                user.phone_verified_at = None
+            update_data["phone"] = new_phone
         
         for field, value in update_data.items():
             setattr(user, field, value)

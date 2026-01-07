@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { CreditCard, ExternalLink, Eye, FileText, RefreshCw, XCircle } from 'lucide-react'
 import PageHeader from '../components/PageHeader'
@@ -109,6 +109,7 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
   const { isAuthenticated } = useAuth()
   const { actualTheme } = useTheme()
   const toast = useToast()
+  const navigate = useNavigate()
 
   const [page, setPage] = useState(1)
   const pageSize = 20
@@ -118,6 +119,9 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
   const [activeCancelOrderNo, setActiveCancelOrderNo] = useState<string | null>(null)
   const [activeBalancePayOrderNo, setActiveBalancePayOrderNo] = useState<string | null>(null)
   const [activeAlipayOrderNo, setActiveAlipayOrderNo] = useState<string | null>(null)
+
+  const [paymentGuideOpen, setPaymentGuideOpen] = useState(false)
+  const [paymentGuideOrderNo, setPaymentGuideOrderNo] = useState<string | null>(null)
 
   const queryKey = queryKeys.paymentOrders(page, pageSize, statusFilter)
 
@@ -174,9 +178,19 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
     },
     successMessage: '支付成功',
     errorMessageFallback: '支付失败，请稍后重试',
+    disableErrorToast: true,
     invalidateQueryKeys: [queryKeys.paymentOrdersBase()],
     onMutate: async (orderNo) => {
       setActiveBalancePayOrderNo(orderNo)
+    },
+    onError: (err) => {
+      const msg = getApiErrorMessage(err, '支付失败，请稍后重试')
+      if (String(msg).includes('余额不足')) {
+        toast.warning('余额不足，请先充值')
+        navigate('/profile?recharge=1')
+        return
+      }
+      toast.error(msg)
     },
     onSettled: (_data, _err, orderNo) => {
       setActiveBalancePayOrderNo((prev) => (prev === orderNo ? null : prev))
@@ -191,10 +205,11 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
       return (res.data || {}) as ThirdPartyPayResponse
     },
     errorMessageFallback: '获取支付链接失败，请稍后重试',
+    disableErrorToast: true,
     onMutate: async (orderNo) => {
       setActiveAlipayOrderNo(orderNo)
     },
-    onSuccess: (data) => {
+    onSuccess: (data, orderNo) => {
       const url = String(data?.pay_url || '').trim()
       if (!url) {
         toast.error('未获取到支付链接')
@@ -202,6 +217,11 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
       }
       window.open(url, '_blank', 'noopener,noreferrer')
       toast.success('已打开支付宝支付页面')
+      setPaymentGuideOrderNo(String(orderNo || '').trim() || null)
+      setPaymentGuideOpen(true)
+    },
+    onError: (err) => {
+      toast.error(getApiErrorMessage(err, '获取支付链接失败，请稍后重试'))
     },
     onSettled: (_data, _err, orderNo) => {
       setActiveAlipayOrderNo((prev) => (prev === orderNo ? null : prev))
@@ -649,6 +669,48 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
         ) : (
           <EmptyState icon={FileText} title="无数据" description="未获取到订单详情" tone={actualTheme} />
         )}
+      </Modal>
+
+      <Modal
+        isOpen={paymentGuideOpen}
+        onClose={() => setPaymentGuideOpen(false)}
+        title="支付提示"
+        description="支付完成后请返回本站刷新订单状态"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <div className="rounded-xl border border-slate-200/70 bg-slate-900/5 px-4 py-3 text-sm text-slate-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-white/70">
+            <div>1) 在新打开的支付页面完成支付</div>
+            <div className="mt-1">2) 回到本站点击“我已支付，刷新状态”确认结果</div>
+          </div>
+
+          <Button
+            fullWidth
+            icon={RefreshCw}
+            onClick={() => {
+              setPaymentGuideOpen(false)
+              if (paymentGuideOrderNo) {
+                void handleRefreshOne(paymentGuideOrderNo)
+              } else {
+                void handleRefreshStatus()
+              }
+            }}
+          >
+            我已支付，刷新状态
+          </Button>
+
+          <Button
+            fullWidth
+            variant="outline"
+            icon={CreditCard}
+            onClick={() => {
+              setPaymentGuideOpen(false)
+              navigate('/profile')
+            }}
+          >
+            去个人中心查看余额/权益
+          </Button>
+        </div>
       </Modal>
     </div>
   )

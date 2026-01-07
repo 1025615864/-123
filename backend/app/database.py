@@ -142,6 +142,14 @@ async def init_db() -> None:
                     users_cols = {row[1] for row in users_cols_result.fetchall()}
                     if "vip_expires_at" not in users_cols:
                         _ = await conn.execute(text("ALTER TABLE users ADD COLUMN vip_expires_at DATETIME"))
+                    if "email_verified" not in users_cols:
+                        _ = await conn.execute(text("ALTER TABLE users ADD COLUMN email_verified BOOLEAN DEFAULT 0"))
+                    if "email_verified_at" not in users_cols:
+                        _ = await conn.execute(text("ALTER TABLE users ADD COLUMN email_verified_at DATETIME"))
+                    if "phone_verified" not in users_cols:
+                        _ = await conn.execute(text("ALTER TABLE users ADD COLUMN phone_verified BOOLEAN DEFAULT 0"))
+                    if "phone_verified_at" not in users_cols:
+                        _ = await conn.execute(text("ALTER TABLE users ADD COLUMN phone_verified_at DATETIME"))
 
                 if "news_ai_annotations" in tables:
                     ann_cols_result = await conn.execute(text("PRAGMA table_info(news_ai_annotations)"))

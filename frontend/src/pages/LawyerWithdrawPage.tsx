@@ -47,9 +47,24 @@ type BankListResp = {
 };
 
 export default function LawyerWithdrawPage() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const { actualTheme } = useTheme();
   const toast = useToast();
+
+  const ensureVerified = () => {
+    if (!user) return false;
+    if (!user.phone_verified) {
+      toast.warning("请先完成手机号验证");
+      window.location.href = "/profile?phoneVerify=1";
+      return false;
+    }
+    if (!user.email_verified) {
+      toast.warning("请先完成邮箱验证");
+      window.location.href = "/profile?emailVerify=1";
+      return false;
+    }
+    return true;
+  };
 
   const [amount, setAmount] = useState("");
   const [accountId, setAccountId] = useState<number | null>(null);
@@ -193,7 +208,9 @@ export default function LawyerWithdrawPage() {
             }}
             isLoading={walletQuery.isFetching || bankQuery.isFetching}
             loadingText="刷新中..."
-            disabled={walletQuery.isFetching || bankQuery.isFetching || actionBusy}
+            disabled={
+              walletQuery.isFetching || bankQuery.isFetching || actionBusy
+            }
           >
             刷新
           </Button>
@@ -285,6 +302,7 @@ export default function LawyerWithdrawPage() {
               loadingText="提交中..."
               onClick={() => {
                 if (createWithdrawMutation.isPending) return;
+                if (!ensureVerified()) return;
                 const v = Number(String(amount || "").trim());
                 if (!v || Number.isNaN(v) || v <= 0) {
                   toast.error("请输入正确金额");

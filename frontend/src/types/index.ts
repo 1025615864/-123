@@ -2,10 +2,14 @@ export interface User {
   id: number;
   username: string;
   email: string;
+  email_verified?: boolean;
+  email_verified_at?: string | null;
   role: string;
   nickname?: string;
   avatar?: string;
   phone?: string;
+  phone_verified?: boolean;
+  phone_verified_at?: string | null;
   is_active?: boolean;
   vip_expires_at?: string | null;
   created_at?: string;
