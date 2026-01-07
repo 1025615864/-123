@@ -53,6 +53,10 @@ const DocumentGeneratorPage = lazy(
 );
 const FaqPage = lazy(() => import("./pages/FaqPage"));
 const SharePage = lazy(() => import("./pages/SharePage"));
+const VerifyEmailPage = lazy(() => import("./pages/VerifyEmailPage"));
+const ForgotPasswordPage = lazy(() => import("./pages/ForgotPasswordPage"));
+const ResetPasswordPage = lazy(() => import("./pages/ResetPasswordPage"));
+const PaymentReturnPage = lazy(() => import("./pages/PaymentReturnPage"));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
 
 // 懒加载管理后台页面
@@ -155,6 +159,7 @@ function App() {
                 />
                 <Route path="feedback" element={<FeedbackPage />} />
                 <Route path="orders" element={<OrdersHubPage />} />
+                <Route path="payment/return" element={<PaymentReturnPage />} />
                 <Route path="news" element={<NewsPage />} />
                 <Route
                   path="news/subscriptions"
@@ -184,6 +189,9 @@ function App() {
                 <Route path="share/:token" element={<SharePage />} />
                 <Route path="login" element={<LoginPage />} />
                 <Route path="register" element={<RegisterPage />} />
+                <Route path="verify-email" element={<VerifyEmailPage />} />
+                <Route path="forgot-password" element={<ForgotPasswordPage />} />
+                <Route path="reset-password" element={<ResetPasswordPage />} />
                 <Route path="terms" element={<TermsPage />} />
                 <Route path="privacy" element={<PrivacyPolicyPage />} />
                 <Route path="ai-disclaimer" element={<AiDisclaimerPage />} />

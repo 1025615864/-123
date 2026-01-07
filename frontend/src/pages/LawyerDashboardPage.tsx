@@ -34,6 +34,12 @@ type ConsultationListResponse = {
   page_size: number
 }
 
+type VerificationStatusResponse = {
+  status: string
+  reject_reason?: string | null
+  message?: string
+}
+
 function statusToBadgeVariant(status: string): 'default' | 'primary' | 'success' | 'warning' | 'danger' | 'info' {
   const s = String(status || '').toLowerCase()
   if (s === 'pending') return 'warning'
@@ -219,20 +225,60 @@ export default function LawyerDashboardPage() {
   }
 
   const listErrorStatus = (listQuery.error as any)?.response?.status
+  const listErrorDetail = String((listQuery.error as any)?.response?.data?.detail || '')
+
+  const verificationQuery = useQuery({
+    queryKey: ['lawyer-verification-status'] as const,
+    queryFn: async () => {
+      const res = await api.get('/lawfirm/verification/status')
+      return (res.data || {}) as VerificationStatusResponse
+    },
+    enabled: isAuthenticated && listQuery.isError && listErrorStatus === 403,
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  })
+
   if (listQuery.isError && listErrorStatus === 403) {
+    const vStatus = String(verificationQuery.data?.status || '').toLowerCase()
+    const rejectReason = String(verificationQuery.data?.reject_reason || '').trim()
+
+    let title = '暂无权限'
+    let description = '请先完成律师认证并通过审核'
+
+    if (listErrorDetail.includes('管理员不支持')) {
+      title = '该账号无法使用律师工作台'
+      description = '当前账号为管理员，请切换到律师账号登录'
+    } else if (listErrorDetail.includes('律师认证审核中') || vStatus === 'pending') {
+      title = '认证审核中'
+      description = '你的律师认证申请正在审核，请耐心等待'
+    } else if (listErrorDetail.includes('律师认证已驳回') || vStatus === 'rejected') {
+      title = '认证已驳回'
+      description = rejectReason ? `驳回原因：${rejectReason}` : '请前往认证页面查看原因并重新提交'
+    } else if (listErrorDetail.includes('未绑定律师资料')) {
+      title = '律师资料未绑定'
+      description = '请先完成律师认证，审核通过后会自动绑定律师资料'
+    } else if (listErrorDetail.includes('律师认证未通过')) {
+      title = '律师认证未通过'
+      description = '请先完成律师认证并通过审核'
+    } else if (listErrorDetail.includes('需要律师权限')) {
+      title = '需要律师权限'
+      description = '请先完成律师认证并通过审核'
+    }
+
     return (
       <div className="space-y-10">
         <PageHeader
           eyebrow="律师"
           title="律师工作台"
-          description="你当前没有律师权限"
+          description={description}
           layout="mdStart"
           tone={actualTheme}
         />
         <EmptyState
           icon={Handshake}
-          title="暂无权限"
-          description="请先完成律师认证并通过审核"
+          title={title}
+          description={description}
           tone={actualTheme}
           action={
             <Button onClick={() => (window.location.href = '/lawyer/verification')}>

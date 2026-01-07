@@ -8,7 +8,7 @@ from typing import Annotated, cast
 from datetime import datetime, timedelta, timezone
 import uuid
 from decimal import Decimal, ROUND_HALF_UP
-from urllib.parse import urlencode
+from urllib.parse import urlencode, parse_qsl
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -81,7 +81,7 @@ def _parse_pack_options(value: str | None, *, fallback: dict[int, float]) -> dic
     if not raw:
         return dict(fallback)
     try:
-        obj: object = json.loads(raw)
+        obj: object = cast(object, json.loads(raw))
     except Exception:
         return dict(fallback)
     if not isinstance(obj, dict):
@@ -229,6 +229,11 @@ class CallbackEventResponse(BaseModel):
     created_at: datetime
 
 
+class CallbackEventDetailResponse(CallbackEventResponse):
+    raw_payload: str | None
+    masked_payload: str | None
+
+
 class PaymentChannelStatusResponse(BaseModel):
     alipay_configured: bool
     wechatpay_configured: bool
@@ -338,6 +343,94 @@ def _normalize_pem(value: str) -> str:
     if not value:
         return ""
     return value.strip().replace("\\n", "\n")
+
+
+def _mask_payload(raw: str | None) -> str | None:
+    if raw is None:
+        return None
+    s = str(raw)
+    if not s.strip():
+        return s
+
+    sensitive_keys = {
+        "sign",
+        "signature",
+        "sign_data",
+        "sign_info",
+        "app_cert_sn",
+        "alipay_cert_sn",
+    }
+
+    def _mask_value(v: object) -> object:
+        if v is None:
+            return None
+        if isinstance(v, (int, float, bool)):
+            return v
+        ss = str(v)
+        if not ss:
+            return ss
+        if len(ss) <= 8:
+            return "*" * len(ss)
+        return f"{ss[:3]}***{ss[-3:]}"
+
+    def _mask_obj(obj: object) -> object:
+        if isinstance(obj, dict):
+            out: dict[object, object] = {}
+            for k, v in obj.items():
+                ks = str(k).strip().lower()
+                if ks in sensitive_keys:
+                    out[k] = _mask_value(v)
+                else:
+                    out[k] = _mask_obj(v)
+            return out
+        if isinstance(obj, list):
+            return [_mask_obj(x) for x in obj]
+        return obj
+
+    try:
+        obj: object = json.loads(s)
+        masked = _mask_obj(obj)
+        return json.dumps(masked, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+    try:
+        pairs = parse_qsl(s, keep_blank_values=True)
+        if pairs:
+            obj2: dict[str, object] = {}
+            for k, v in pairs:
+                obj2[k] = v
+            masked2 = _mask_obj(obj2)
+            return json.dumps(masked2, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+    return s
+
+
+def _alipay_private_key_check(private_key_pem: str | None) -> dict[str, object] | None:
+    raw = str(private_key_pem or "").strip()
+    if not raw:
+        return None
+    try:
+        key = cast(
+            RSAPrivateKey,
+            load_pem_private_key(_normalize_pem(raw).encode("utf-8"), password=None),
+        )
+        return {"ok": True, "key_size": int(getattr(key, "key_size", 0) or 0)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
+
+
+def _alipay_public_key_check(public_key_pem: str | None) -> dict[str, object] | None:
+    raw = str(public_key_pem or "").strip()
+    if not raw:
+        return None
+    try:
+        key = cast(RSAPublicKey, load_pem_public_key(_normalize_pem(raw).encode("utf-8")))
+        return {"ok": True, "key_size": int(getattr(key, "key_size", 0) or 0)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
 
 
 def _alipay_build_sign_string(params: dict[str, str]) -> str:
@@ -912,12 +1005,18 @@ async def pay_order(
             await db.commit()
             await db.refresh(order)
 
+        return_url = (settings.alipay_return_url or "").strip() or None
+        if return_url is None:
+            frontend_base = str(getattr(settings, "frontend_base_url", "") or "").strip().rstrip("/")
+            if frontend_base:
+                return_url = f"{frontend_base}/payment/return"
+
         pay_url = _alipay_build_page_pay_url(
             gateway_url=settings.alipay_gateway_url,
             app_id=settings.alipay_app_id,
             private_key=settings.alipay_private_key,
             notify_url=settings.alipay_notify_url,
-            return_url=settings.alipay_return_url or None,
+            return_url=return_url,
             out_trade_no=order.order_no,
             total_amount=_quantize_amount(float(order.actual_amount)),
             subject=order.title,
@@ -976,6 +1075,20 @@ async def alipay_notify(request: Request, db: Annotated[AsyncSession, Depends(ge
             amount=amount_raw,
             verified=False,
             error_message="验签失败",
+            raw_payload=payload_raw,
+        )
+        return Response(content="failure", status_code=400, media_type="text/plain")
+
+    sign_type = str(params.get("sign_type") or "").strip().upper()
+    if sign_type and sign_type != "RSA2":
+        await _record_callback_event(
+            db,
+            provider="alipay",
+            order_no=order_no_raw,
+            trade_no=trade_no_raw,
+            amount=amount_raw,
+            verified=True,
+            error_message=f"unsupported_sign_type:{sign_type}",
             raw_payload=payload_raw,
         )
         return Response(content="failure", status_code=400, media_type="text/plain")
@@ -2082,6 +2195,32 @@ async def admin_callback_event_stats(
     }
 
 
+@router.get("/admin/callback-events/{event_id}", response_model=CallbackEventDetailResponse, summary="管理员-支付回调事件详情")
+async def admin_callback_event_detail(
+    event_id: int,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    _ = current_user
+    res = await db.execute(select(PaymentCallbackEvent).where(PaymentCallbackEvent.id == int(event_id)))
+    e = res.scalar_one_or_none()
+    if not e:
+        raise HTTPException(status_code=404, detail="回调事件不存在")
+
+    return CallbackEventDetailResponse(
+        id=e.id,
+        provider=e.provider,
+        order_no=e.order_no,
+        trade_no=e.trade_no,
+        amount=e.amount,
+        verified=bool(e.verified),
+        error_message=e.error_message,
+        created_at=e.created_at,
+        raw_payload=e.raw_payload,
+        masked_payload=_mask_payload(e.raw_payload),
+    )
+
+
 @router.get("/admin/wechat/platform-certs", summary="管理员-微信平台证书")
 async def admin_wechat_platform_certs(
     current_user: Annotated[User, Depends(require_admin)],
@@ -2121,7 +2260,7 @@ async def admin_payment_channel_status(
 
     updated_at: int | None = None
     try:
-        obj_raw: object = json.loads(cfg_raw or "")
+        obj_raw: object = cast(object, json.loads(cfg_raw or ""))
         if isinstance(obj_raw, dict):
             obj_dict = cast(dict[str, object], obj_raw)
             v = obj_dict.get("updated_at")
@@ -2137,10 +2276,17 @@ async def admin_payment_channel_status(
     refresh_enabled_raw = os.getenv("WECHATPAY_CERT_REFRESH_ENABLED", "").strip().lower()
     refresh_enabled = refresh_enabled_raw in {"1", "true", "yes", "on"}
 
-    alipay_configured = bool(alipay_app_id_set and alipay_public_key_set)
+    frontend_base = str(getattr(settings, "frontend_base_url", "") or "").strip().rstrip("/")
+
+    alipay_configured = bool(alipay_app_id_set and alipay_public_key_set and alipay_private_key_set and alipay_notify_url_set)
     wechatpay_configured = bool(
         wechatpay_mch_id_set and wechatpay_serial_no_set and wechatpay_private_key_set and wechatpay_api_v3_key_set
     )
+
+    alipay_return_url = (settings.alipay_return_url or "").strip() or None
+    alipay_effective_return_url = alipay_return_url
+    if alipay_effective_return_url is None and frontend_base:
+        alipay_effective_return_url = f"{frontend_base}/payment/return"
 
     return PaymentChannelStatusResponse(
         alipay_configured=alipay_configured,
@@ -2156,6 +2302,12 @@ async def admin_payment_channel_status(
                 "public_key_set": alipay_public_key_set,
                 "private_key_set": alipay_private_key_set,
                 "notify_url_set": alipay_notify_url_set,
+                "public_key_check": _alipay_public_key_check(settings.alipay_public_key),
+                "private_key_check": _alipay_private_key_check(settings.alipay_private_key),
+                "gateway_url": (settings.alipay_gateway_url or "").strip() or None,
+                "notify_url": (settings.alipay_notify_url or "").strip() or None,
+                "return_url": alipay_return_url,
+                "effective_return_url": alipay_effective_return_url,
             },
             "wechatpay": {
                 "mch_id_set": wechatpay_mch_id_set,

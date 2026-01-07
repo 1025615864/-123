@@ -60,23 +60,33 @@ test.describe('移动端回归', () => {
       await page.getByPlaceholder('搜索标题或摘要').fill(token)
       await page1Resp
 
-      const page2Resp = page.waitForResponse(
-        (r) => {
-          if (r.request().method() !== 'GET') return false
-          try {
-            const u = new URL(r.url())
-            if (!u.pathname.includes('/api/news')) return false
-            return u.searchParams.get('page') === '2' && u.searchParams.get('keyword') === token
-          } catch {
-            return false
-          }
-        },
-        { timeout: 25_000 }
-      )
-      // scroll to bottom to trigger intersection observer auto-fetch
-      await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+      const waitPage2 = () =>
+        page.waitForResponse(
+          (r) => {
+            if (r.request().method() !== 'GET') return false
+            try {
+              const u = new URL(r.url())
+              if (!u.pathname.includes('/api/news')) return false
+              return u.searchParams.get('page') === '2' && u.searchParams.get('keyword') === token
+            } catch {
+              return false
+            }
+          },
+          { timeout: 25_000 }
+        )
 
-      const resp = await page2Resp
+      let resp
+      try {
+        const p = waitPage2()
+        // scroll to bottom to trigger intersection observer auto-fetch
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+        resp = await p
+      } catch {
+        const p = waitPage2()
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+        await page.getByRole('button', { name: '加载更多' }).click({ timeout: 12_000 })
+        resp = await p
+      }
       expect(resp.ok()).toBeTruthy()
 
       // Basic UI sanity: list should contain our token
@@ -143,19 +153,20 @@ test.describe('移动端回归', () => {
       await page1Resp
       await expect(page.getByText(token).first()).toBeVisible({ timeout: 12_000 })
 
-      const page2Resp = page.waitForResponse(
-        (r) => {
-          if (r.request().method() !== 'GET') return false
-          try {
-            const u = new URL(r.url())
-            if (!u.pathname.includes('/api/news')) return false
-            return u.searchParams.get('page') === '2' && u.searchParams.get('keyword') === token
-          } catch {
-            return false
-          }
-        },
-        { timeout: 25_000 }
-      )
+      const waitPage2 = () =>
+        page.waitForResponse(
+          (r) => {
+            if (r.request().method() !== 'GET') return false
+            try {
+              const u = new URL(r.url())
+              if (!u.pathname.includes('/api/news')) return false
+              return u.searchParams.get('page') === '2' && u.searchParams.get('keyword') === token
+            } catch {
+              return false
+            }
+          },
+          { timeout: 25_000 }
+        )
 
       // scroll to a deeper position first, to catch "jump to top" regressions
       await page.evaluate(() => window.scrollTo(0, 700))
@@ -169,7 +180,16 @@ test.describe('移动端回归', () => {
       const yBefore = await page.evaluate(() => window.scrollY)
       expect(yBefore).toBeGreaterThanOrEqual(300)
 
-      await page2Resp
+      try {
+        const p = waitPage2()
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+        await p
+      } catch {
+        const p = waitPage2()
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
+        await page.getByRole('button', { name: '加载更多' }).click({ timeout: 12_000 })
+        await p
+      }
       await page.waitForTimeout(400)
 
       const yAfter = await page.evaluate(() => window.scrollY)

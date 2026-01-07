@@ -7,6 +7,8 @@ import {
   ShieldAlert,
   KeyRound,
   Search,
+  Copy,
+  Eye,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import api from "../../api/client";
@@ -17,6 +19,8 @@ import {
   Badge,
   Pagination,
   Textarea,
+  Modal,
+  ModalActions,
   ListSkeleton,
   Skeleton,
 } from "../../components/ui";
@@ -92,6 +96,11 @@ type ReconcileResponse = {
   }>;
 };
 
+type CallbackEventDetailResponse = CallbackEventItem & {
+  raw_payload: string | null;
+  masked_payload: string | null;
+};
+
 function formatTime(dateStr: string) {
   const date = new Date(dateStr);
   return date.toLocaleString("zh-CN", {
@@ -148,6 +157,12 @@ export default function PaymentCallbacksPage() {
   const [reconcileOrderNo, setReconcileOrderNo] = useState("");
   const [reconcileResult, setReconcileResult] =
     useState<ReconcileResponse | null>(null);
+
+  const [payloadModalOpen, setPayloadModalOpen] = useState(false);
+  const [payloadLoading, setPayloadLoading] = useState(false);
+  const [payloadEvent, setPayloadEvent] =
+    useState<CallbackEventDetailResponse | null>(null);
+  const [payloadShowRaw, setPayloadShowRaw] = useState(false);
 
   const [platformCertImportJson, setPlatformCertImportJson] = useState("");
   const [platformCertImportPem, setPlatformCertImportPem] = useState("");
@@ -319,6 +334,25 @@ export default function PaymentCallbacksPage() {
     },
   });
 
+  const eventDetailMutation = useAppMutation<
+    CallbackEventDetailResponse,
+    number
+  >({
+    mutationFn: async (eventId) => {
+      const res = await api.get(
+        `/payment/admin/callback-events/${encodeURIComponent(String(eventId))}`
+      );
+      return res.data as CallbackEventDetailResponse;
+    },
+    errorMessageFallback: "加载回调详情失败",
+    onSuccess: (data) => {
+      setPayloadEvent(data);
+    },
+    onError: () => {
+      setPayloadEvent(null);
+    },
+  });
+
   const total = listQuery.data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const items = listQuery.data?.items ?? [];
@@ -343,9 +377,61 @@ export default function PaymentCallbacksPage() {
     reconcileMutation.mutate(v);
   };
 
+  const doReconcileByOrderNo = (value: string) => {
+    const v = String(value || "").trim();
+    if (!v) {
+      toast.error("该回调事件未包含订单号");
+      return;
+    }
+    setReconcileOrderNo(v);
+    setReconcileResult(null);
+    reconcileMutation.mutate(v);
+  };
+
+  const openPayloadModal = async (eventId: number) => {
+    setPayloadModalOpen(true);
+    setPayloadLoading(true);
+    setPayloadEvent(null);
+    setPayloadShowRaw(false);
+    try {
+      await eventDetailMutation.mutateAsync(eventId);
+    } finally {
+      setPayloadLoading(false);
+    }
+  };
+
   const reconcileBadge = reconcileResult
     ? diagnosisLabel(String(reconcileResult.diagnosis || ""))
     : null;
+
+  const alipayDetails = (channelStatusQuery.data?.details as any)?.alipay as
+    | {
+        app_id_set?: boolean;
+        public_key_set?: boolean;
+        private_key_set?: boolean;
+        notify_url_set?: boolean;
+        public_key_check?: { ok?: boolean; key_size?: number; error?: string } | null;
+        private_key_check?: { ok?: boolean; key_size?: number; error?: string } | null;
+        gateway_url?: string | null;
+        notify_url?: string | null;
+        return_url?: string | null;
+        effective_return_url?: string | null;
+      }
+    | undefined;
+
+  const handleCopyText = async (value: string, label: string) => {
+    const v = String(value || "").trim();
+    if (!v) {
+      toast.error(`${label} 为空`);
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(v);
+      toast.success(`已复制${label}`);
+    } catch {
+      toast.error(`复制${label}失败，请手动复制`);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -401,7 +487,9 @@ export default function PaymentCallbacksPage() {
 
         <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
           <div className="p-3 rounded-lg bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10">
-            <div className="text-xs text-slate-500 dark:text-white/40">支付宝</div>
+            <div className="text-xs text-slate-500 dark:text-white/40">
+              支付宝
+            </div>
             <div className="mt-1">
               {channelStatusQuery.isLoading ? (
                 <Skeleton width="72px" height="18px" />
@@ -418,7 +506,9 @@ export default function PaymentCallbacksPage() {
           </div>
 
           <div className="p-3 rounded-lg bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10">
-            <div className="text-xs text-slate-500 dark:text-white/40">微信支付</div>
+            <div className="text-xs text-slate-500 dark:text-white/40">
+              微信支付
+            </div>
             <div className="mt-1">
               {channelStatusQuery.isLoading ? (
                 <Skeleton width="72px" height="18px" />
@@ -435,13 +525,16 @@ export default function PaymentCallbacksPage() {
           </div>
 
           <div className="p-3 rounded-lg bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10">
-            <div className="text-xs text-slate-500 dark:text-white/40">平台证书缓存</div>
+            <div className="text-xs text-slate-500 dark:text-white/40">
+              平台证书缓存
+            </div>
             <div className="mt-1">
               {channelStatusQuery.isLoading ? (
                 <Skeleton width="72px" height="18px" />
               ) : channelStatusQuery.data?.wechatpay_platform_certs_cached ? (
                 <Badge variant="success" size="sm">
-                  {channelStatusQuery.data?.wechatpay_platform_certs_total ?? 0} 条
+                  {channelStatusQuery.data?.wechatpay_platform_certs_total ?? 0}{" "}
+                  条
                 </Badge>
               ) : (
                 <Badge variant="warning" size="sm">
@@ -452,7 +545,9 @@ export default function PaymentCallbacksPage() {
           </div>
 
           <div className="p-3 rounded-lg bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10">
-            <div className="text-xs text-slate-500 dark:text-white/40">证书自动刷新</div>
+            <div className="text-xs text-slate-500 dark:text-white/40">
+              证书自动刷新
+            </div>
             <div className="mt-1">
               {channelStatusQuery.isLoading ? (
                 <Skeleton width="72px" height="18px" />
@@ -465,6 +560,214 @@ export default function PaymentCallbacksPage() {
                   未启用
                 </Badge>
               )}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div className="p-4 rounded-xl bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10">
+            <div className="text-sm font-semibold text-slate-900 dark:text-white">
+              支付宝配置明细
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <div className="text-xs text-slate-500 dark:text-white/40">
+                APP_ID
+              </div>
+              <div className="text-xs">
+                {alipayDetails?.app_id_set ? (
+                  <Badge variant="success" size="sm">
+                    已配置
+                  </Badge>
+                ) : (
+                  <Badge variant="warning" size="sm">
+                    未配置
+                  </Badge>
+                )}
+              </div>
+
+              <div className="text-xs text-slate-500 dark:text-white/40">
+                PUBLIC_KEY
+              </div>
+              <div className="text-xs">
+                {alipayDetails?.public_key_set ? (
+                  <Badge variant="success" size="sm">
+                    已配置
+                  </Badge>
+                ) : (
+                  <Badge variant="warning" size="sm">
+                    未配置
+                  </Badge>
+                )}
+              </div>
+
+              <div className="text-xs text-slate-500 dark:text-white/40">
+                PUBLIC_KEY 自检
+              </div>
+              <div className="text-xs">
+                {alipayDetails?.public_key_check ? (
+                  alipayDetails.public_key_check.ok ? (
+                    <Badge variant="success" size="sm">
+                      通过{alipayDetails.public_key_check.key_size
+                        ? `（${alipayDetails.public_key_check.key_size}）`
+                        : ""}
+                    </Badge>
+                  ) : (
+                    <Badge variant="danger" size="sm">
+                      失败
+                    </Badge>
+                  )
+                ) : (
+                  "-"
+                )}
+              </div>
+
+              <div className="text-xs text-slate-500 dark:text-white/40">
+                PRIVATE_KEY
+              </div>
+              <div className="text-xs">
+                {alipayDetails?.private_key_set ? (
+                  <Badge variant="success" size="sm">
+                    已配置
+                  </Badge>
+                ) : (
+                  <Badge variant="warning" size="sm">
+                    未配置
+                  </Badge>
+                )}
+              </div>
+
+              <div className="text-xs text-slate-500 dark:text-white/40">
+                PRIVATE_KEY 自检
+              </div>
+              <div className="text-xs">
+                {alipayDetails?.private_key_check ? (
+                  alipayDetails.private_key_check.ok ? (
+                    <Badge variant="success" size="sm">
+                      通过{alipayDetails.private_key_check.key_size
+                        ? `（${alipayDetails.private_key_check.key_size}）`
+                        : ""}
+                    </Badge>
+                  ) : (
+                    <Badge variant="danger" size="sm">
+                      失败
+                    </Badge>
+                  )
+                ) : (
+                  "-"
+                )}
+              </div>
+
+              <div className="text-xs text-slate-500 dark:text-white/40">
+                NOTIFY_URL
+              </div>
+              <div className="text-xs">
+                {alipayDetails?.notify_url_set ? (
+                  <Badge variant="success" size="sm">
+                    已配置
+                  </Badge>
+                ) : (
+                  <Badge variant="warning" size="sm">
+                    未配置
+                  </Badge>
+                )}
+              </div>
+            </div>
+
+            {alipayDetails?.public_key_check && !alipayDetails.public_key_check.ok ? (
+              <div className="mt-3 text-xs text-red-600 dark:text-red-400 break-all">
+                PUBLIC_KEY 自检失败：{String(alipayDetails.public_key_check.error || "").trim() || "未知错误"}
+              </div>
+            ) : null}
+            {alipayDetails?.private_key_check && !alipayDetails.private_key_check.ok ? (
+              <div className="mt-2 text-xs text-red-600 dark:text-red-400 break-all">
+                PRIVATE_KEY 自检失败：{String(alipayDetails.private_key_check.error || "").trim() || "未知错误"}
+              </div>
+            ) : null}
+
+            <div className="mt-4 space-y-2">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs text-slate-600 dark:text-white/60 break-all">
+                  notify_url: {alipayDetails?.notify_url || "-"}
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={Copy}
+                  onClick={() =>
+                    void handleCopyText(
+                      String(alipayDetails?.notify_url || ""),
+                      "notify_url"
+                    )
+                  }
+                  disabled={!alipayDetails?.notify_url}
+                >
+                  复制
+                </Button>
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs text-slate-600 dark:text-white/60 break-all">
+                  return_url: {alipayDetails?.return_url || "-"}
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={Copy}
+                  onClick={() =>
+                    void handleCopyText(
+                      String(alipayDetails?.return_url || ""),
+                      "return_url"
+                    )
+                  }
+                  disabled={!alipayDetails?.return_url}
+                >
+                  复制
+                </Button>
+              </div>
+
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-xs text-slate-600 dark:text-white/60 break-all">
+                  effective_return_url:{" "}
+                  {alipayDetails?.effective_return_url || "-"}
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon={Copy}
+                  onClick={() =>
+                    void handleCopyText(
+                      String(alipayDetails?.effective_return_url || ""),
+                      "effective_return_url"
+                    )
+                  }
+                  disabled={!alipayDetails?.effective_return_url}
+                >
+                  复制
+                </Button>
+              </div>
+
+              <div className="text-xs text-slate-600 dark:text-white/60 break-all">
+                gateway_url: {alipayDetails?.gateway_url || "-"}
+              </div>
+            </div>
+          </div>
+
+          <div className="p-4 rounded-xl bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10">
+            <div className="text-sm font-semibold text-slate-900 dark:text-white">
+              联调提示
+            </div>
+            <div className="mt-3 text-xs text-slate-600 dark:text-white/60 space-y-2">
+              <div>
+                - 支付宝后台配置的异步通知地址必须与 notify_url
+                一致（必须公网可访问）。
+              </div>
+              <div>
+                - 回跳页 return_url 用于用户浏览器跳转；真实支付以 notify 为准。
+              </div>
+              <div>
+                -
+                如订单未更新：先查“回调事件列表”是否有验签失败/金额不一致，再用“订单对账”定位原因。
+              </div>
             </div>
           </div>
         </div>
@@ -646,13 +949,16 @@ export default function PaymentCallbacksPage() {
                 <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
                   错误
                 </th>
+                <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
+                  操作
+                </th>
               </tr>
             </thead>
             <tbody>
               {listQuery.isLoading ? (
                 <tr>
                   <td
-                    colSpan={7}
+                    colSpan={8}
                     className="py-10 text-center text-slate-500 dark:text-white/50"
                   >
                     <div className="px-4">
@@ -663,7 +969,7 @@ export default function PaymentCallbacksPage() {
               ) : items.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={7}
+                    colSpan={8}
                     className="py-10 text-center text-slate-500 dark:text-white/50"
                   >
                     暂无数据
@@ -705,6 +1011,29 @@ export default function PaymentCallbacksPage() {
                     </td>
                     <td className="py-3 px-4 text-slate-600 text-sm dark:text-white/60">
                       {it.error_message || "-"}
+                    </td>
+                    <td className="py-3 px-4">
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          icon={Eye}
+                          onClick={() => void openPayloadModal(it.id)}
+                        >
+                          查看
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          icon={Search}
+                          onClick={() =>
+                            doReconcileByOrderNo(it.order_no || "")
+                          }
+                          disabled={!it.order_no}
+                        >
+                          对账
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -775,7 +1104,8 @@ export default function PaymentCallbacksPage() {
               离线导入证书（当无法刷新/无法访问微信接口时）
             </div>
             <div className="text-slate-600 text-xs mt-1 dark:text-white/50">
-              支持两种方式：1) 粘贴平台证书 JSON（dump 格式）；2) 粘贴单个证书 PEM（可选填 serial/expire）
+              支持两种方式：1) 粘贴平台证书 JSON（dump 格式）；2) 粘贴单个证书
+              PEM（可选填 serial/expire）
             </div>
 
             <div className="mt-3 grid grid-cols-1 gap-3">
@@ -798,13 +1128,17 @@ export default function PaymentCallbacksPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <Input
                   value={platformCertImportSerialNo}
-                  onChange={(e) => setPlatformCertImportSerialNo(e.target.value)}
+                  onChange={(e) =>
+                    setPlatformCertImportSerialNo(e.target.value)
+                  }
                   disabled={importCertsMutation.isPending}
                   placeholder="serial_no（可选）"
                 />
                 <Input
                   value={platformCertImportExpireTime}
-                  onChange={(e) => setPlatformCertImportExpireTime(e.target.value)}
+                  onChange={(e) =>
+                    setPlatformCertImportExpireTime(e.target.value)
+                  }
                   disabled={importCertsMutation.isPending}
                   placeholder="expire_time（可选，ISO8601）"
                 />
@@ -835,7 +1169,10 @@ export default function PaymentCallbacksPage() {
                               ? { serial_no: platformCertImportSerialNo.trim() }
                               : {}),
                             ...(platformCertImportExpireTime.trim()
-                              ? { expire_time: platformCertImportExpireTime.trim() }
+                              ? {
+                                  expire_time:
+                                    platformCertImportExpireTime.trim(),
+                                }
                               : {}),
                           }
                         : {}),
@@ -1034,6 +1371,88 @@ export default function PaymentCallbacksPage() {
           ) : null}
         </Card>
       </div>
+
+      <Modal
+        isOpen={payloadModalOpen}
+        onClose={() => {
+          setPayloadModalOpen(false);
+          setPayloadEvent(null);
+          setPayloadLoading(false);
+          setPayloadShowRaw(false);
+        }}
+        title="回调 Raw Payload"
+        description={
+          payloadEvent
+            ? `${providerLabel(payloadEvent.provider)} · order_no=${
+                payloadEvent.order_no || "-"
+              } · trade_no=${payloadEvent.trade_no || "-"}`
+            : "用于排障：查看支付回调原始入参（已脱敏/不回显密钥）"
+        }
+        size="lg"
+      >
+        <div className="space-y-3">
+          <Textarea
+            value={
+              payloadShowRaw
+                ? payloadEvent?.raw_payload || ""
+                : payloadEvent?.masked_payload || payloadEvent?.raw_payload || ""
+            }
+            readOnly
+            rows={12}
+            className="font-mono text-xs"
+            placeholder={payloadLoading ? "加载中..." : "无 payload"}
+          />
+
+          <ModalActions>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setPayloadModalOpen(false);
+                setPayloadEvent(null);
+                setPayloadShowRaw(false);
+              }}
+            >
+              关闭
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => setPayloadShowRaw((v) => !v)}
+              disabled={payloadLoading || !payloadEvent?.raw_payload}
+            >
+              {payloadShowRaw ? "显示脱敏" : "显示原文"}
+            </Button>
+            <Button
+              icon={Copy}
+              onClick={async () => {
+                const v = payloadShowRaw
+                  ? String(payloadEvent?.raw_payload || "")
+                  : String(
+                      payloadEvent?.masked_payload || payloadEvent?.raw_payload || ""
+                    );
+                if (!v.trim()) {
+                  toast.error("payload 为空");
+                  return;
+                }
+                try {
+                  await navigator.clipboard.writeText(v);
+                  toast.success(payloadShowRaw ? "已复制原始 payload" : "已复制脱敏 payload");
+                } catch {
+                  toast.error("复制失败，请手动复制");
+                }
+              }}
+              disabled={
+                payloadLoading ||
+                (!payloadShowRaw && !payloadEvent?.masked_payload && !payloadEvent?.raw_payload) ||
+                (payloadShowRaw && !payloadEvent?.raw_payload)
+              }
+              isLoading={payloadLoading}
+              loadingText="加载中..."
+            >
+              复制
+            </Button>
+          </ModalActions>
+        </div>
+      </Modal>
     </div>
   );
 }
