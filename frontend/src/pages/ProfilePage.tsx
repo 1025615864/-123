@@ -5,6 +5,8 @@ import {
   Loader2,
   Mail,
   Phone,
+  Wallet,
+  CreditCard,
   Camera,
   Save,
   Shield,
@@ -50,7 +52,7 @@ import { getApiErrorMessage } from "../utils";
 import { queryKeys } from "../queryKeys";
 
 export default function ProfilePage() {
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const { actualTheme } = useTheme();
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -63,6 +65,27 @@ export default function ProfilePage() {
       ai_chat: PricingPackItem[];
       document_generate: PricingPackItem[];
     };
+  };
+
+  type BalanceResp = {
+    balance: number;
+    frozen: number;
+    total_recharged: number;
+    total_consumed: number;
+  };
+
+  type BalanceTxItem = {
+    id: number;
+    type: string;
+    amount: number;
+    balance_after: number;
+    description: string | null;
+    created_at: string;
+  };
+
+  type BalanceTxListResp = {
+    items: BalanceTxItem[];
+    total: number;
   };
 
   type UserQuotaDailyResponse = {
@@ -101,6 +124,18 @@ export default function ProfilePage() {
     placeholderData: (prev) => prev,
   });
 
+  const balanceQuery = useQuery({
+    queryKey: ["payment-balance"],
+    queryFn: async () => {
+      const res = await api.get("/payment/balance");
+      return res.data as BalanceResp;
+    },
+    enabled: Boolean(user),
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  });
+
   useEffect(() => {
     if (!quotasQuery.error) return;
     toast.error(getApiErrorMessage(quotasQuery.error, "配额加载失败"));
@@ -109,6 +144,9 @@ export default function ProfilePage() {
   const vipPlan = pricingQuery.data?.vip;
   const vipDays = Number(vipPlan?.days || 30);
   const vipPrice = Number(vipPlan?.price || 29);
+
+  const isEmailVerified = user?.email_verified === true;
+  const isPhoneVerified = user?.phone_verified === true;
 
   const vipExpiresAt = useMemo(() => {
     const raw = user?.vip_expires_at;
@@ -147,6 +185,7 @@ export default function ProfilePage() {
       return { order_no: orderNo, ...(payRes.data || {}) };
     },
     errorMessageFallback: "开通失败，请稍后重试",
+    disableErrorToast: true,
   });
 
   const handleBuyVip = () => {
@@ -171,6 +210,7 @@ export default function ProfilePage() {
             if (url) {
               window.open(url, "_blank", "noopener,noreferrer");
               toast.success("已打开支付宝支付页面");
+              openPaymentGuide(String((data as any)?.order_no || null));
             } else {
               toast.error("未获取到支付链接");
             }
@@ -183,9 +223,135 @@ export default function ProfilePage() {
             queryKey: queryKeys.userMeQuotas() as any,
           });
         },
+        onError: (err) => {
+          const msg = getApiErrorMessage(err, "开通失败");
+          if (String(msg).includes("余额不足")) {
+            toast.warning("余额不足，请先充值");
+            openRecharge(vipPrice);
+            return;
+          }
+          toast.error(msg);
+        },
       }
     );
   };
+
+  const requestEmailVerificationMutation = useAppMutation<any, void>({
+    mutationFn: async () => {
+      const res = await api.post("/user/email-verification/request");
+      return res.data;
+    },
+    errorMessageFallback: "发送失败，请稍后重试",
+  });
+
+  const handleRequestEmailVerification = () => {
+    if (!user) return;
+    if (isEmailVerified) {
+      toast.success("邮箱已验证");
+      return;
+    }
+    if (requestEmailVerificationMutation.isPending) return;
+    requestEmailVerificationMutation.mutate(undefined, {
+      onSuccess: async (data) => {
+        const verifyUrl = String((data as any)?.verify_url || "").trim();
+        if (verifyUrl) {
+          window.open(verifyUrl, "_blank", "noopener,noreferrer");
+          toast.success("已打开验证链接（开发环境）");
+        } else {
+          toast.success("验证邮件已发送，请前往邮箱完成验证");
+        }
+        await refreshUser();
+      },
+    });
+  };
+
+  const [showBalanceTxModal, setShowBalanceTxModal] = useState(false);
+  const [txPage, setTxPage] = useState(1);
+  const txPageSize = 10;
+
+  const balanceTxQuery = useQuery({
+    queryKey: [
+      "payment-balance-transactions",
+      { page: txPage, pageSize: txPageSize },
+    ],
+    queryFn: async () => {
+      const res = await api.get("/payment/balance/transactions", {
+        params: { page: txPage, page_size: txPageSize },
+      });
+      return res.data as BalanceTxListResp;
+    },
+    enabled: Boolean(user) && showBalanceTxModal,
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  });
+
+  const [showRechargeModal, setShowRechargeModal] = useState(false);
+  const [rechargeAmount, setRechargeAmount] = useState("100");
+  const [showPaymentGuideModal, setShowPaymentGuideModal] = useState(false);
+  const [paymentGuideOrderNo, setPaymentGuideOrderNo] = useState<string | null>(
+    null
+  );
+
+  const rechargeMutation = useAppMutation<
+    { order_no: string; pay_url?: string },
+    { amount: number }
+  >({
+    mutationFn: async ({ amount }) => {
+      const createRes = await api.post("/payment/orders", {
+        order_type: "recharge",
+        amount,
+        title: "余额充值",
+        description: "余额充值",
+      });
+      const orderNo = String(createRes.data?.order_no || "").trim();
+      if (!orderNo) throw new Error("未获取到订单号");
+
+      const payRes = await api.post(
+        `/payment/orders/${encodeURIComponent(orderNo)}/pay`,
+        {
+          payment_method: "alipay",
+        }
+      );
+
+      return {
+        order_no: orderNo,
+        pay_url:
+          String((payRes.data as any)?.pay_url || "").trim() || undefined,
+      };
+    },
+    errorMessageFallback: "充值失败，请稍后重试",
+  });
+
+  const openRecharge = (amount?: number) => {
+    if (typeof amount === "number" && Number.isFinite(amount) && amount > 0) {
+      setRechargeAmount(String(amount));
+    }
+    setShowRechargeModal(true);
+  };
+
+  const openPaymentGuide = (orderNo: string | null) => {
+    setPaymentGuideOrderNo(orderNo);
+    setShowPaymentGuideModal(true);
+  };
+
+  const fmtMoney = (value: number | null | undefined) => {
+    const n = typeof value === "number" && Number.isFinite(value) ? value : 0;
+    return `¥${n.toFixed(2)}`;
+  };
+
+  const txTypeLabel = (t: string) => {
+    const v = String(t || "").toLowerCase();
+    if (v === "recharge") return "充值";
+    if (v === "consume") return "消费";
+    if (v === "refund") return "退款";
+    return t || "—";
+  };
+
+  const txTotalPages = useMemo(() => {
+    const total = Number(balanceTxQuery.data?.total || 0);
+    return Math.max(1, Math.ceil(total / txPageSize));
+  }, [balanceTxQuery.data?.total, txPageSize]);
 
   type PackRelatedType = "ai_chat" | "document_generate";
 
@@ -235,6 +401,7 @@ export default function ProfilePage() {
       return { order_no: orderNo, ...(payRes.data || {}) };
     },
     errorMessageFallback: "购买失败，请稍后重试",
+    disableErrorToast: true,
   });
 
   const handleBuyPack = (related_type: PackRelatedType) => {
@@ -274,6 +441,8 @@ export default function ProfilePage() {
             if (url) {
               window.open(url, "_blank", "noopener,noreferrer");
               toast.success("已打开支付宝支付页面");
+              setShowPackModal(false);
+              openPaymentGuide(String((data as any)?.order_no || null));
             } else {
               toast.error("未获取到支付链接");
             }
@@ -286,6 +455,15 @@ export default function ProfilePage() {
           queryClient.invalidateQueries({
             queryKey: queryKeys.userMeQuotas() as any,
           });
+        },
+        onError: (err) => {
+          const msg = getApiErrorMessage(err, "购买失败");
+          if (String(msg).includes("余额不足")) {
+            toast.warning("余额不足，请先充值");
+            openRecharge(Number(opt.price || 0));
+            return;
+          }
+          toast.error(msg);
         },
       }
     );
@@ -633,8 +811,139 @@ export default function ProfilePage() {
     const raw = Number(String(urlParams.get("postsPage") ?? "1"));
     const next = Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 1;
     setMyPostsPage(next);
+
+    const shouldRecharge = String(urlParams.get("recharge") ?? "")
+      .trim()
+      .toLowerCase();
+    if (
+      shouldRecharge === "1" ||
+      shouldRecharge === "true" ||
+      shouldRecharge === "yes"
+    ) {
+      const rawAmount = Number(String(urlParams.get("amount") ?? ""));
+      const amount =
+        Number.isFinite(rawAmount) && rawAmount > 0 ? rawAmount : undefined;
+      openRecharge(amount);
+      setUrlParams(
+        (prev) => {
+          const p = new URLSearchParams(prev);
+          p.delete("recharge");
+          p.delete("amount");
+          return p;
+        },
+        { replace: true }
+      );
+    }
     didInitFromUrlRef.current = true;
   }, [urlParams]);
+
+  useEffect(() => {
+    const shouldPhoneVerify = String(urlParams.get("phoneVerify") ?? "")
+      .trim()
+      .toLowerCase();
+    if (
+      !(
+        shouldPhoneVerify === "1" ||
+        shouldPhoneVerify === "true" ||
+        shouldPhoneVerify === "yes"
+      )
+    ) {
+      return;
+    }
+    if (!user) return;
+    openPhoneVerify();
+    setUrlParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        p.delete("phoneVerify");
+        return p;
+      },
+      { replace: true }
+    );
+  }, [setUrlParams, urlParams, user]);
+
+  useEffect(() => {
+    const shouldEmailVerify = String(urlParams.get("emailVerify") ?? "")
+      .trim()
+      .toLowerCase();
+    if (
+      !(
+        shouldEmailVerify === "1" ||
+        shouldEmailVerify === "true" ||
+        shouldEmailVerify === "yes"
+      )
+    ) {
+      return;
+    }
+    if (!user) return;
+
+    handleRequestEmailVerification();
+    setUrlParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        p.delete("emailVerify");
+        return p;
+      },
+      { replace: true }
+    );
+  }, [handleRequestEmailVerification, setUrlParams, urlParams, user]);
+
+  // 手机号短信验证
+  const [showPhoneVerifyModal, setShowPhoneVerifyModal] = useState(false);
+  const [smsPhone, setSmsPhone] = useState("");
+  const [smsCode, setSmsCode] = useState("");
+  const [smsDevCode, setSmsDevCode] = useState<string | null>(null);
+  const [smsCooldownSeconds, setSmsCooldownSeconds] = useState(0);
+
+  useEffect(() => {
+    if (smsCooldownSeconds <= 0) return;
+    const t = window.setInterval(() => {
+      setSmsCooldownSeconds((s) => Math.max(0, s - 1));
+    }, 1000);
+    return () => window.clearInterval(t);
+  }, [smsCooldownSeconds]);
+
+  const smsSendMutation = useAppMutation<
+    { message?: string; success?: boolean; code?: string | null },
+    { phone: string }
+  >({
+    mutationFn: async ({ phone }) => {
+      const res = await api.post("/user/sms/send", {
+        phone,
+        scene: "bind_phone",
+      });
+      return res.data as {
+        message?: string;
+        success?: boolean;
+        code?: string | null;
+      };
+    },
+    errorMessageFallback: "发送验证码失败，请稍后重试",
+  });
+
+  const smsVerifyMutation = useAppMutation<
+    any,
+    { phone: string; code: string }
+  >({
+    mutationFn: async ({ phone, code }) => {
+      const res = await api.post("/user/sms/verify", {
+        phone,
+        scene: "bind_phone",
+        code,
+      });
+      return res.data;
+    },
+    errorMessageFallback: "验证码校验失败",
+  });
+
+  const openPhoneVerify = () => {
+    if (!user) return;
+    setSmsPhone(String(formData.phone || user?.phone || "").trim());
+    setSmsCode("");
+    setSmsDevCode(null);
+    setSmsCooldownSeconds(0);
+    setShowPhoneVerifyModal(true);
+  };
 
   useEffect(() => {
     const currentUserId = typeof user?.id === "number" ? user.id : null;
@@ -660,6 +969,10 @@ export default function ProfilePage() {
     setUrlParams(
       (prev) => {
         const next = new URLSearchParams(prev);
+        next.delete("recharge");
+        next.delete("amount");
+        next.delete("phoneVerify");
+        next.delete("emailVerify");
         if (myPostsPage > 1) next.set("postsPage", String(myPostsPage));
         else next.delete("postsPage");
         return next;
@@ -940,6 +1253,93 @@ export default function ProfilePage() {
             </div>
           </Card>
 
+          <Card variant="surface" padding="md">
+            <div className="flex items-center justify-between gap-2 mb-4">
+              <div className="flex items-center gap-2">
+                <Wallet className="h-4 w-4 text-slate-400 dark:text-white/40" />
+                <h4 className="text-sm font-medium text-slate-600 dark:text-white/60">
+                  我的资产
+                </h4>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                icon={RefreshCw}
+                isLoading={balanceQuery.isFetching}
+                loadingText="刷新中..."
+                onClick={() => balanceQuery.refetch()}
+                disabled={balanceQuery.isFetching}
+              >
+                刷新
+              </Button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-xl border border-slate-200/70 bg-slate-900/5 px-3 py-3 dark:border-white/10 dark:bg-white/[0.03]">
+                <div className="text-xs text-slate-500 dark:text-white/45">
+                  余额
+                </div>
+                <div className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">
+                  {fmtMoney(balanceQuery.data?.balance)}
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-200/70 bg-slate-900/5 px-3 py-3 dark:border-white/10 dark:bg-white/[0.03]">
+                <div className="text-xs text-slate-500 dark:text-white/45">
+                  冻结
+                </div>
+                <div className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">
+                  {fmtMoney(balanceQuery.data?.frozen)}
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-200/70 bg-slate-900/5 px-3 py-3 dark:border-white/10 dark:bg-white/[0.03]">
+                <div className="text-xs text-slate-500 dark:text-white/45">
+                  累计充值
+                </div>
+                <div className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">
+                  {fmtMoney(balanceQuery.data?.total_recharged)}
+                </div>
+              </div>
+              <div className="rounded-xl border border-slate-200/70 bg-slate-900/5 px-3 py-3 dark:border-white/10 dark:bg-white/[0.03]">
+                <div className="text-xs text-slate-500 dark:text-white/45">
+                  累计消费
+                </div>
+                <div className="mt-1 text-lg font-semibold text-slate-900 dark:text-white">
+                  {fmtMoney(balanceQuery.data?.total_consumed)}
+                </div>
+              </div>
+            </div>
+
+            {balanceQuery.isError ? (
+              <div className="mt-3 text-xs text-red-500 dark:text-red-300">
+                {getApiErrorMessage(balanceQuery.error, "余额加载失败")}
+              </div>
+            ) : null}
+
+            <div className="mt-4 flex items-center gap-2">
+              <Button
+                icon={CreditCard}
+                onClick={() => {
+                  setRechargeAmount("100");
+                  setShowRechargeModal(true);
+                }}
+                disabled={rechargeMutation.isPending}
+              >
+                充值
+              </Button>
+              <Button
+                variant="outline"
+                icon={FileText}
+                onClick={() => {
+                  setTxPage(1);
+                  setShowBalanceTxModal(true);
+                }}
+                disabled={rechargeMutation.isPending}
+              >
+                明细
+              </Button>
+            </div>
+          </Card>
+
           {/* 账户状态 */}
           <Card variant="surface" padding="md">
             <h4 className="text-sm font-medium text-slate-600 mb-4 dark:text-white/60">
@@ -969,7 +1369,9 @@ export default function ProfilePage() {
                   <span>AI 咨询</span>
                   <span className="font-medium text-slate-800 dark:text-white">
                     {quotasQuery.data
-                      ? `${Number(quotasQuery.data.ai_chat_remaining || 0)}/${Number(
+                      ? `${Number(
+                          quotasQuery.data.ai_chat_remaining || 0
+                        )}/${Number(
                           quotasQuery.data.ai_chat_limit || 0
                         )} · 次数包 ${Number(
                           quotasQuery.data.ai_chat_pack_remaining || 0
@@ -1002,10 +1404,38 @@ export default function ProfilePage() {
                     邮箱验证
                   </span>
                 </div>
-                <div className="flex items-center gap-1 text-green-400">
-                  <CheckCircle className="h-4 w-4" />
-                  <span className="text-xs">已验证</span>
-                </div>
+                {isEmailVerified ? (
+                  <div className="flex items-center gap-1 text-green-400">
+                    <CheckCircle className="h-4 w-4" />
+                    <span className="text-xs">已验证</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                      <AlertCircle className="h-4 w-4" />
+                      <span className="text-xs">未验证</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleRequestEmailVerification}
+                      disabled={
+                        requestEmailVerificationMutation.isPending ||
+                        buyVipMutation.isPending ||
+                        buyPackMutation.isPending
+                      }
+                      className="text-amber-600 text-xs hover:text-amber-700 flex items-center gap-1 dark:text-amber-400 dark:hover:text-amber-300 disabled:opacity-50"
+                    >
+                      {requestEmailVerificationMutation.isPending
+                        ? "发送中..."
+                        : "去验证"}
+                      {requestEmailVerificationMutation.isPending ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <ExternalLink className="h-3 w-3" />
+                      )}
+                    </button>
+                  </div>
+                )}
               </div>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -1014,15 +1444,33 @@ export default function ProfilePage() {
                     手机绑定
                   </span>
                 </div>
-                {user.phone ? (
+                {isPhoneVerified ? (
                   <div className="flex items-center gap-1 text-green-400">
                     <CheckCircle className="h-4 w-4" />
-                    <span className="text-xs">已绑定</span>
+                    <span className="text-xs">已验证</span>
                   </div>
                 ) : (
-                  <div className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
-                    <AlertCircle className="h-4 w-4" />
-                    <span className="text-xs">未绑定</span>
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                      <AlertCircle className="h-4 w-4" />
+                      <span className="text-xs">
+                        {user.phone ? "待验证" : "未绑定"}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={openPhoneVerify}
+                      disabled={
+                        smsSendMutation.isPending ||
+                        smsVerifyMutation.isPending ||
+                        buyVipMutation.isPending ||
+                        buyPackMutation.isPending
+                      }
+                      className="text-amber-600 text-xs hover:text-amber-700 flex items-center gap-1 dark:text-amber-400 dark:hover:text-amber-300 disabled:opacity-50"
+                    >
+                      去验证
+                      <ExternalLink className="h-3 w-3" />
+                    </button>
                   </div>
                 )}
               </div>
@@ -1112,10 +1560,16 @@ export default function ProfilePage() {
                   <button
                     type="button"
                     onClick={handleBuyVip}
-                    disabled={buyVipMutation.isPending || buyPackMutation.isPending}
+                    disabled={
+                      buyVipMutation.isPending || buyPackMutation.isPending
+                    }
                     className="text-amber-600 text-xs hover:text-amber-700 flex items-center gap-1 dark:text-amber-400 dark:hover:text-amber-300 disabled:opacity-50"
                   >
-                    {buyVipMutation.isPending ? "处理中..." : isVipActive ? "续费" : "开通"}
+                    {buyVipMutation.isPending
+                      ? "处理中..."
+                      : isVipActive
+                      ? "续费"
+                      : "开通"}
                     {buyVipMutation.isPending ? (
                       <Loader2 className="h-3 w-3 animate-spin" />
                     ) : (
@@ -1135,7 +1589,9 @@ export default function ProfilePage() {
                 <button
                   type="button"
                   onClick={() => handleBuyPack("ai_chat")}
-                  disabled={buyVipMutation.isPending || buyPackMutation.isPending}
+                  disabled={
+                    buyVipMutation.isPending || buyPackMutation.isPending
+                  }
                   className="text-amber-600 text-xs hover:text-amber-700 flex items-center gap-1 dark:text-amber-400 dark:hover:text-amber-300 disabled:opacity-50"
                 >
                   {buyPackMutation.isPending ? "处理中..." : "购买"}
@@ -1157,7 +1613,9 @@ export default function ProfilePage() {
                 <button
                   type="button"
                   onClick={() => handleBuyPack("document_generate")}
-                  disabled={buyVipMutation.isPending || buyPackMutation.isPending}
+                  disabled={
+                    buyVipMutation.isPending || buyPackMutation.isPending
+                  }
                   className="text-amber-600 text-xs hover:text-amber-700 flex items-center gap-1 dark:text-amber-400 dark:hover:text-amber-300 disabled:opacity-50"
                 >
                   {buyPackMutation.isPending ? "处理中..." : "购买"}
@@ -1581,6 +2039,345 @@ export default function ProfilePage() {
           </Card>
         </div>
       </div>
+
+      <Modal
+        isOpen={showBalanceTxModal}
+        onClose={() => {
+          if (balanceTxQuery.isFetching) return;
+          setShowBalanceTxModal(false);
+        }}
+        title="余额明细"
+        description="查看充值/消费/退款记录"
+        size="lg"
+      >
+        <div className="space-y-4">
+          {balanceTxQuery.isLoading && !balanceTxQuery.data ? (
+            <ListSkeleton count={5} />
+          ) : balanceTxQuery.isError ? (
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
+              <div>
+                {getApiErrorMessage(
+                  balanceTxQuery.error,
+                  "加载失败，请稍后重试"
+                )}
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => balanceTxQuery.refetch()}
+              >
+                重试
+              </Button>
+            </div>
+          ) : (balanceTxQuery.data?.items ?? []).length > 0 ? (
+            <div className="space-y-3">
+              {(balanceTxQuery.data?.items ?? []).map((t) => {
+                const amount = Number(t.amount || 0);
+                const positive = amount > 0;
+                const color = positive
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : amount < 0
+                  ? "text-rose-600 dark:text-rose-400"
+                  : "text-slate-600 dark:text-white/60";
+                return (
+                  <div
+                    key={t.id}
+                    className="rounded-xl border border-slate-200/70 bg-white px-4 py-3 dark:border-white/10 dark:bg-white/[0.03]"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <Badge variant="default">{txTypeLabel(t.type)}</Badge>
+                          <div className="text-sm font-medium text-slate-900 dark:text-white line-clamp-1">
+                            {t.description || "—"}
+                          </div>
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500 dark:text-white/45">
+                          {t.created_at
+                            ? new Date(t.created_at).toLocaleString()
+                            : ""}
+                          {t.balance_after != null
+                            ? ` · 余额 ${fmtMoney(
+                                Number(t.balance_after || 0)
+                              )}`
+                            : ""}
+                        </div>
+                      </div>
+                      <div
+                        className={`shrink-0 text-sm font-semibold ${color}`}
+                      >
+                        {positive ? "+" : ""}
+                        {fmtMoney(amount)}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <EmptyState
+              icon={Wallet}
+              title="暂无明细"
+              description="你的充值/消费记录会在这里显示"
+              tone={actualTheme}
+              size="md"
+            />
+          )}
+
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs text-slate-500 dark:text-white/45">
+              共 {Number(balanceTxQuery.data?.total || 0)} 条
+            </div>
+            <Pagination
+              currentPage={txPage}
+              totalPages={txTotalPages}
+              onPageChange={(p) => setTxPage(p)}
+            />
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showRechargeModal}
+        onClose={() => {
+          if (rechargeMutation.isPending) return;
+          setShowRechargeModal(false);
+        }}
+        title="余额充值"
+        description="选择充值金额并跳转支付宝支付"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-3 gap-3">
+            {[50, 100, 200, 500, 1000, 2000].map((amt) => (
+              <Button
+                key={amt}
+                type="button"
+                variant={
+                  String(amt) === String(rechargeAmount).trim()
+                    ? "primary"
+                    : "outline"
+                }
+                disabled={rechargeMutation.isPending}
+                onClick={() => setRechargeAmount(String(amt))}
+              >
+                ¥{amt}
+              </Button>
+            ))}
+          </div>
+
+          <Input
+            label="自定义金额（元）"
+            value={rechargeAmount}
+            onChange={(e) => setRechargeAmount(e.target.value)}
+            disabled={rechargeMutation.isPending}
+            placeholder="例如：100"
+          />
+
+          <Button
+            type="button"
+            fullWidth
+            isLoading={rechargeMutation.isPending}
+            loadingText="创建订单中..."
+            disabled={rechargeMutation.isPending}
+            onClick={() => {
+              const amt = Number(String(rechargeAmount || "").trim());
+              if (!Number.isFinite(amt) || amt <= 0) {
+                toast.error("请输入正确的充值金额");
+                return;
+              }
+              rechargeMutation.mutate(
+                { amount: amt },
+                {
+                  onSuccess: (data) => {
+                    const payUrl = String((data as any)?.pay_url || "").trim();
+                    if (payUrl) {
+                      window.open(payUrl, "_blank", "noopener,noreferrer");
+                      toast.success("已打开支付宝支付页面");
+                      openPaymentGuide(String((data as any)?.order_no || null));
+                      setShowRechargeModal(false);
+                      return;
+                    }
+                    toast.success("订单已创建，请前往订单页继续支付");
+                    setShowRechargeModal(false);
+                  },
+                }
+              );
+            }}
+          >
+            去支付
+          </Button>
+
+          <Button
+            type="button"
+            variant="secondary"
+            fullWidth
+            onClick={() => setShowRechargeModal(false)}
+            disabled={rechargeMutation.isPending}
+          >
+            取消
+          </Button>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showPaymentGuideModal}
+        onClose={() => setShowPaymentGuideModal(false)}
+        title="支付提示"
+        description="支付完成后请返回本站刷新状态"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <div className="rounded-xl border border-slate-200/70 bg-slate-900/5 px-4 py-3 text-sm text-slate-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-white/70">
+            <div>1) 在新打开的支付页面完成支付</div>
+            <div className="mt-1">2) 回到本页点击“我已支付，刷新余额/权益”</div>
+          </div>
+
+          <Button
+            fullWidth
+            icon={RefreshCw}
+            onClick={async () => {
+              setShowPaymentGuideModal(false);
+              await refreshUser();
+              await balanceQuery.refetch();
+              await quotasQuery.refetch();
+              toast.success("已刷新账户状态");
+            }}
+          >
+            我已支付，刷新余额/权益
+          </Button>
+
+          <Link to="/orders?tab=payment" className="block">
+            <Button variant="outline" fullWidth icon={ExternalLink}>
+              去订单页查看/刷新
+            </Button>
+          </Link>
+
+          {paymentGuideOrderNo ? (
+            <div className="text-xs text-slate-500 dark:text-white/45">
+              订单号：{paymentGuideOrderNo}
+            </div>
+          ) : null}
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showPhoneVerifyModal}
+        onClose={() => {
+          if (smsSendMutation.isPending || smsVerifyMutation.isPending) return;
+          setShowPhoneVerifyModal(false);
+        }}
+        title="手机号验证"
+        description="发送验证码并完成绑定"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <Input
+            label="手机号"
+            icon={Phone}
+            value={smsPhone}
+            onChange={(e) => setSmsPhone(e.target.value)}
+            placeholder="请输入手机号"
+            disabled={smsSendMutation.isPending || smsVerifyMutation.isPending}
+          />
+
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={
+                smsSendMutation.isPending ||
+                smsVerifyMutation.isPending ||
+                smsCooldownSeconds > 0 ||
+                !String(smsPhone || "").trim()
+              }
+              onClick={() => {
+                const phone = String(smsPhone || "").trim();
+                if (!phone) {
+                  toast.error("请输入手机号");
+                  return;
+                }
+                smsSendMutation.mutate(
+                  { phone },
+                  {
+                    onSuccess: (data) => {
+                      const devCode = String((data as any)?.code || "").trim();
+                      setSmsDevCode(devCode ? devCode : null);
+                      setSmsCooldownSeconds(60);
+                      toast.success("验证码已发送");
+                    },
+                  }
+                );
+              }}
+            >
+              {smsCooldownSeconds > 0
+                ? `重新发送(${smsCooldownSeconds}s)`
+                : "发送验证码"}
+            </Button>
+
+            {smsDevCode ? (
+              <div className="text-xs text-amber-700 dark:text-amber-300">
+                DEBUG code：{smsDevCode}
+              </div>
+            ) : null}
+          </div>
+
+          <Input
+            label="验证码"
+            value={smsCode}
+            onChange={(e) => setSmsCode(e.target.value)}
+            placeholder="请输入收到的验证码"
+            disabled={smsVerifyMutation.isPending}
+          />
+
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              className="flex-1"
+              isLoading={smsVerifyMutation.isPending}
+              loadingText="验证中..."
+              disabled={
+                smsVerifyMutation.isPending || smsSendMutation.isPending
+              }
+              onClick={() => {
+                const phone = String(smsPhone || "").trim();
+                const code = String(smsCode || "").trim();
+                if (!phone) {
+                  toast.error("请输入手机号");
+                  return;
+                }
+                if (!code) {
+                  toast.error("请输入验证码");
+                  return;
+                }
+                smsVerifyMutation.mutate(
+                  { phone, code },
+                  {
+                    onSuccess: async () => {
+                      toast.success("手机号验证成功");
+                      setShowPhoneVerifyModal(false);
+                      setFormData((prev) => ({ ...prev, phone }));
+                      await refreshUser();
+                    },
+                  }
+                );
+              }}
+            >
+              确认绑定
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              className="flex-1"
+              disabled={
+                smsVerifyMutation.isPending || smsSendMutation.isPending
+              }
+              onClick={() => setShowPhoneVerifyModal(false)}
+            >
+              取消
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         isOpen={showEditPostModal}

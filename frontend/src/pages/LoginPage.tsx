@@ -175,6 +175,15 @@ export default function LoginPage() {
               </Button>
             </form>
 
+            <div className="mt-5 text-center">
+              <Link
+                to="/forgot-password"
+                className="text-sm text-slate-600 hover:text-slate-800 dark:text-white/50 dark:hover:text-white/70"
+              >
+                忘记密码？
+              </Link>
+            </div>
+
             <p className="text-center text-slate-600 dark:text-white/50 mt-8">
               还没有账户？{' '}
               <Link to="/register" className="text-amber-700 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300">

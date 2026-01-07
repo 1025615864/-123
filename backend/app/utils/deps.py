@@ -130,3 +130,48 @@ async def require_lawyer(current_user: Annotated[User, Depends(get_current_user)
             detail="需要律师权限"
         )
     return current_user
+
+
+async def require_phone_verified(current_user: Annotated[User, Depends(get_current_user)]) -> User:
+    """要求手机号已验证（敏感操作兜底）"""
+    if not bool(getattr(current_user, "phone_verified", False)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="请先完成手机号验证",
+        )
+    return current_user
+
+
+async def require_email_verified(current_user: Annotated[User, Depends(get_current_user)]) -> User:
+    """要求邮箱已验证（敏感操作兜底）"""
+    if not bool(getattr(current_user, "email_verified", False)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="请先完成邮箱验证",
+        )
+    return current_user
+
+
+async def require_lawyer_phone_verified(current_user: Annotated[User, Depends(require_lawyer)]) -> User:
+    """要求律师权限且手机号已验证（敏感操作兜底）"""
+    if not bool(getattr(current_user, "phone_verified", False)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="请先完成手机号验证",
+        )
+    return current_user
+
+
+async def require_lawyer_verified(current_user: Annotated[User, Depends(require_lawyer)]) -> User:
+    """要求律师权限且手机号/邮箱均已验证（敏感操作兜底）"""
+    if not bool(getattr(current_user, "phone_verified", False)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="请先完成手机号验证",
+        )
+    if not bool(getattr(current_user, "email_verified", False)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="请先完成邮箱验证",
+        )
+    return current_user

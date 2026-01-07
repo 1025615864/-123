@@ -92,6 +92,13 @@ async def test_settlement_withdrawal_flow_and_bank_account_encrypted(
         email="lawyer_settle@example.com",
         role="lawyer",
     )
+    lawyer_user.phone_verified = True
+    lawyer_user.phone_verified_at = datetime.now(timezone.utc)
+    lawyer_user.email_verified = True
+    lawyer_user.email_verified_at = datetime.now(timezone.utc)
+    test_session.add(lawyer_user)
+    await test_session.commit()
+
     admin_user = await _create_user(
         test_session,
         username="admin_settle",
@@ -262,12 +269,25 @@ async def test_lawyer_export_income_records_csv_only_current_lawyer_and_status_f
         email="lawyer_export_1@example.com",
         role="lawyer",
     )
+    lawyer_user_1.phone_verified = True
+    lawyer_user_1.phone_verified_at = datetime.now(timezone.utc)
+    lawyer_user_1.email_verified = True
+    lawyer_user_1.email_verified_at = datetime.now(timezone.utc)
+    test_session.add(lawyer_user_1)
+    await test_session.commit()
+
     lawyer_user_2 = await _create_user(
         test_session,
         username="lawyer_export_2",
         email="lawyer_export_2@example.com",
         role="lawyer",
     )
+    lawyer_user_2.phone_verified = True
+    lawyer_user_2.phone_verified_at = datetime.now(timezone.utc)
+    lawyer_user_2.email_verified = True
+    lawyer_user_2.email_verified_at = datetime.now(timezone.utc)
+    test_session.add(lawyer_user_2)
+    await test_session.commit()
 
     lawyer_1 = await _create_lawyer_profile(test_session, user_id=int(lawyer_user_1.id))
     lawyer_2 = await _create_lawyer_profile(test_session, user_id=int(lawyer_user_2.id))

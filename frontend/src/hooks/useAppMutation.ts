@@ -11,6 +11,7 @@ export interface AppMutationOptions<TData, TVariables, TContext>
   successMessage?: string
   errorMessageFallback?: string
   invalidateQueryKeys?: QueryKey[]
+  disableErrorToast?: boolean
 }
 
 export function useAppMutation<TData = unknown, TVariables = void, TContext = unknown>(
@@ -24,6 +25,7 @@ export function useAppMutation<TData = unknown, TVariables = void, TContext = un
     successMessage,
     errorMessageFallback = '操作失败，请稍后重试',
     invalidateQueryKeys,
+    disableErrorToast = false,
     onSuccess,
     onError,
     ...rest
@@ -44,7 +46,9 @@ export function useAppMutation<TData = unknown, TVariables = void, TContext = un
       }
     },
     onError: async (err, variables, context, ...extra) => {
-      toast.error(getApiErrorMessage(err, errorMessageFallback))
+      if (!disableErrorToast) {
+        toast.error(getApiErrorMessage(err, errorMessageFallback))
+      }
       await (onError as any)?.(err, variables, context, ...extra)
     },
   })

@@ -33,9 +33,24 @@ type BankAccount = {
 type ListResp = { items: BankAccount[]; total: number };
 
 export default function LawyerBankAccountsPage() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const { actualTheme } = useTheme();
   const toast = useToast();
+
+  const ensureVerified = () => {
+    if (!user) return false;
+    if (!user.phone_verified) {
+      toast.warning("请先完成手机号验证");
+      window.location.href = "/profile?phoneVerify=1";
+      return false;
+    }
+    if (!user.email_verified) {
+      toast.warning("请先完成邮箱验证");
+      window.location.href = "/profile?emailVerify=1";
+      return false;
+    }
+    return true;
+  };
 
   const [activeDeleteId, setActiveDeleteId] = useState<number | null>(null);
   const [activeDefaultId, setActiveDefaultId] = useState<number | null>(null);
@@ -246,6 +261,7 @@ export default function LawyerBankAccountsPage() {
                         size="sm"
                         onClick={() => {
                           if (actionBusy) return;
+                          if (!ensureVerified()) return;
                           setDefaultMutation.mutate(a.id);
                         }}
                         isLoading={defaultLoading}
@@ -264,6 +280,7 @@ export default function LawyerBankAccountsPage() {
                         icon={Trash2}
                         onClick={() => {
                           if (actionBusy) return;
+                          if (!ensureVerified()) return;
                           deleteMutation.mutate(a.id);
                         }}
                         isLoading={deleteLoading}
@@ -334,6 +351,7 @@ export default function LawyerBankAccountsPage() {
             disabled={actionBusy}
             onClick={() => {
               if (actionBusy || createMutation.isPending) return;
+              if (!ensureVerified()) return;
               const bn = bankName.trim();
               const an = accountNo.trim();
               const ah = accountHolder.trim();

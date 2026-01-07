@@ -65,7 +65,7 @@ interface AuthContextType {
     agreeTerms: boolean,
     agreePrivacy: boolean,
     agreeAiDisclaimer: boolean
-  ) => Promise<void>;
+  ) => Promise<{ user: User; message?: string }>;
   logout: () => void;
   refreshUser: () => Promise<void>;
   isAuthenticated: boolean;
@@ -84,9 +84,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const refreshUser = async () => {
-    if (!token) return
-    await fetchUser(token)
-  }
+    if (!token) return;
+    await fetchUser(token);
+  };
 
   useEffect(() => {
     const handler = () => logout();
@@ -138,7 +138,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     agreePrivacy: boolean,
     agreeAiDisclaimer: boolean
   ) => {
-    await api.post("/user/register", {
+    const res = await api.post("/user/register", {
       username,
       email,
       password,
@@ -146,6 +146,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       agree_privacy: agreePrivacy,
       agree_ai_disclaimer: agreeAiDisclaimer,
     });
+    return res.data as { user: User; message?: string };
   };
 
   return (

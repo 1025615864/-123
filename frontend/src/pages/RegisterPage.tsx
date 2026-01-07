@@ -3,7 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { Eye, EyeOff, Lock, Mail, ShieldCheck, User } from "lucide-react";
 import { useToast } from "../hooks";
 import { useAuth } from "../contexts/AuthContext";
-import { Button, Input } from "../components/ui";
+import { Button, Input, Modal } from "../components/ui";
 import { getApiErrorMessage } from "../utils";
 
 export default function RegisterPage() {
@@ -34,6 +34,11 @@ export default function RegisterPage() {
   const { register } = useAuth();
   const navigate = useNavigate();
   const toast = useToast();
+
+  const [postRegisterOpen, setPostRegisterOpen] = useState(false);
+  const [postRegisterMessage, setPostRegisterMessage] = useState<string | null>(
+    null
+  );
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -85,7 +90,7 @@ export default function RegisterPage() {
     setLoading(true);
 
     try {
-      await register(
+      const res = await register(
         username,
         email,
         password,
@@ -93,8 +98,9 @@ export default function RegisterPage() {
         agreePrivacy,
         agreeAiDisclaimer
       );
-      toast.success("注册成功！请登录");
-      navigate("/login");
+      const msg = String((res as any)?.message || "注册成功").trim();
+      setPostRegisterMessage(msg || "注册成功");
+      setPostRegisterOpen(true);
     } catch (err: any) {
       const message = getApiErrorMessage(err, "注册失败，请稍后重试");
       const msg = String(message || "").trim();
@@ -129,6 +135,43 @@ export default function RegisterPage() {
 
   return (
     <div className="min-h-[80vh] flex items-center justify-center py-16">
+      <Modal
+        isOpen={postRegisterOpen}
+        onClose={() => setPostRegisterOpen(false)}
+        title="注册成功"
+        description={
+          postRegisterMessage || "注册成功。请前往邮箱完成验证后再登录。"
+        }
+        size="sm"
+      >
+        <div className="space-y-4">
+          <div className="rounded-xl border border-slate-200/70 bg-slate-900/5 px-4 py-3 text-sm text-slate-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-white/70">
+            <div>1) 请前往邮箱查收验证邮件（可能在垃圾箱）</div>
+            <div className="mt-1">2) 点击邮件中的链接完成验证</div>
+            <div className="mt-1">3) 回到本站登录，个人中心可重发验证邮件</div>
+          </div>
+
+          <Button
+            fullWidth
+            onClick={() => {
+              setPostRegisterOpen(false);
+              toast.success("请登录");
+              navigate("/login");
+            }}
+          >
+            去登录
+          </Button>
+
+          <Button
+            fullWidth
+            variant="outline"
+            onClick={() => setPostRegisterOpen(false)}
+          >
+            稍后再说
+          </Button>
+        </div>
+      </Modal>
+
       <div className="relative w-full max-w-4xl">
         <div className="absolute inset-0 -z-10 blur-3xl opacity-70">
           <div className="absolute -top-24 -left-20 h-72 w-72 rounded-full bg-gradient-to-br from-amber-500/25 via-orange-500/10 to-transparent" />

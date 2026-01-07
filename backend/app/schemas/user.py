@@ -37,6 +37,10 @@ class UserResponse(UserBase):
     id: int
     avatar: str | None = None
     phone: str | None = None
+    email_verified: bool = False
+    email_verified_at: datetime | None = None
+    phone_verified: bool = False
+    phone_verified_at: datetime | None = None
     role: str = "user"
     is_active: bool = True
     vip_expires_at: datetime | None = None
@@ -81,6 +85,26 @@ class MessageResponse(BaseModel):
     """通用消息响应"""
     message: str
     success: bool = True
+
+
+class EmailVerificationRequestResponse(MessageResponse):
+    token: str | None = None
+    verify_url: str | None = None
+
+
+class SmsSendRequest(BaseModel):
+    phone: str = Field(..., min_length=5, max_length=20, description="手机号")
+    scene: str = Field("bind_phone", description="验证码使用场景")
+
+
+class SmsVerifyRequest(BaseModel):
+    phone: str = Field(..., min_length=5, max_length=20, description="手机号")
+    scene: str = Field("bind_phone", description="验证码使用场景")
+    code: str = Field(..., min_length=4, max_length=10, description="验证码")
+
+
+class SmsSendResponse(MessageResponse):
+    code: str | None = None
 
 
 class PasswordResetRequest(BaseModel):

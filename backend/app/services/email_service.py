@@ -16,10 +16,22 @@ class ResetTokenData(TypedDict):
     expires_at: str
     used: bool
 
+
+class EmailVerificationTokenData(TypedDict):
+    user_id: int
+    email: str
+    expires_at: str
+    used: bool
+
 _reset_tokens: dict[str, ResetTokenData] = {}
+
+_email_verification_tokens: dict[str, EmailVerificationTokenData] = {}
 
 _RESET_TOKEN_PREFIX = "password_reset_token:"
 _RESET_TOKEN_TTL_SECONDS = 3600
+
+_EMAIL_VERIFY_TOKEN_PREFIX = "email_verify_token:"
+_EMAIL_VERIFY_TOKEN_TTL_SECONDS = 60 * 60 * 24
 
 
 class EmailService:
@@ -131,6 +143,83 @@ class EmailService:
 
         if token in _reset_tokens:
             _reset_tokens[token]["used"] = True
+
+
+    async def generate_email_verification_token(self, user_id: int, email: str) -> str:
+        token = secrets.token_urlsafe(32)
+        expires_at = datetime.now() + timedelta(seconds=_EMAIL_VERIFY_TOKEN_TTL_SECONDS)
+
+        token_data: EmailVerificationTokenData = {
+            "user_id": int(user_id),
+            "email": str(email),
+            "expires_at": expires_at.isoformat(),
+            "used": False,
+        }
+
+        cache_key = f"{_EMAIL_VERIFY_TOKEN_PREFIX}{token}"
+        try:
+            _ = await cache_service.set_json(cache_key, dict(token_data), expire=_EMAIL_VERIFY_TOKEN_TTL_SECONDS)
+        except Exception:
+            _email_verification_tokens[token] = token_data
+            self._cleanup_expired_tokens()
+
+        return token
+
+
+    async def verify_email_verification_token(self, token: str) -> EmailVerificationTokenData | None:
+        cache_key = f"{_EMAIL_VERIFY_TOKEN_PREFIX}{token}"
+        try:
+            token_data = await cache_service.get_json(cache_key)
+            if isinstance(token_data, dict):
+                used = token_data.get("used")
+                if used:
+                    return None
+                user_id = token_data.get("user_id")
+                email = token_data.get("email")
+                expires_at = token_data.get("expires_at")
+                if isinstance(user_id, int) and isinstance(email, str) and isinstance(expires_at, str):
+                    return {
+                        "user_id": user_id,
+                        "email": email,
+                        "expires_at": expires_at,
+                        "used": bool(used),
+                    }
+        except Exception:
+            pass
+
+        if token not in _email_verification_tokens:
+            return None
+
+        token_data = _email_verification_tokens[token]
+        if token_data["used"]:
+            return None
+
+        try:
+            expires_at_dt = datetime.fromisoformat(token_data["expires_at"])
+        except ValueError:
+            del _email_verification_tokens[token]
+            return None
+
+        if datetime.now() > expires_at_dt:
+            del _email_verification_tokens[token]
+            return None
+
+        return token_data
+
+
+    async def invalidate_email_verification_token(self, token: str) -> None:
+        cache_key = f"{_EMAIL_VERIFY_TOKEN_PREFIX}{token}"
+        try:
+            token_data = await cache_service.get_json(cache_key)
+            if isinstance(token_data, dict):
+                token_data["used"] = True
+                _ = await cache_service.set_json(cache_key, token_data, expire=_EMAIL_VERIFY_TOKEN_TTL_SECONDS)
+                return
+        except Exception:
+            pass
+
+        if token in _email_verification_tokens:
+            _email_verification_tokens[token]["used"] = True
     
     def _cleanup_expired_tokens(self) -> None:
         """清理过期令牌"""
@@ -270,6 +359,88 @@ class EmailService:
             return False
         except Exception as e:
             logger.error(f"Failed to send notification email: {e}")
+            return False
+
+
+    async def send_email_verification_email(self, email: str, verify_url: str) -> bool:
+        if not self.is_configured:
+            logger.warning("Email service not configured, skipping email send")
+            logger.info(f"[DEV] Email verification url for {email}: {verify_url}")
+            return True
+
+        try:
+            import importlib
+            aiosmtplib = importlib.import_module("aiosmtplib")
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+
+            message = MIMEMultipart("alternative")
+            message["Subject"] = "邮箱验证 - 百姓法律助手"
+            message["From"] = f"{self.from_name} <{self.from_email}>"
+            message["To"] = email
+
+            text_content = f"""
+您好，
+
+请点击以下链接完成邮箱验证（24小时内有效）：
+{verify_url}
+
+如果您没有发起该操作，请忽略此邮件。
+
+百姓法律助手团队
+"""
+
+            html_content = f"""
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }}
+        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+        .header {{ background: linear-gradient(135deg, #f59e0b, #ea580c); padding: 30px; text-align: center; border-radius: 10px 10px 0 0; }}
+        .header h1 {{ color: white; margin: 0; }}
+        .content {{ background: #1a1625; color: #e5e5e5; padding: 30px; border-radius: 0 0 10px 10px; }}
+        .button {{ display: inline-block; background: linear-gradient(135deg, #f59e0b, #ea580c); color: white; padding: 15px 30px; text-decoration: none; border-radius: 25px; margin: 20px 0; }}
+        .footer {{ text-align: center; color: #888; font-size: 12px; margin-top: 20px; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>⚖️ 百姓法律助手</h1>
+        </div>
+        <div class="content">
+            <p>您好，</p>
+            <p>请点击以下按钮完成邮箱验证（<strong>24小时</strong>内有效）：</p>
+            <p style="text-align: center;">
+                <a href="{verify_url}" class="button">验证邮箱</a>
+            </p>
+            <p>如果您没有发起该操作，请忽略此邮件。</p>
+            <p class="footer">© 百姓法律助手团队</p>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+            message.attach(MIMEText(text_content, "plain", "utf-8"))
+            message.attach(MIMEText(html_content, "html", "utf-8"))
+
+            await aiosmtplib.send(
+                message,
+                hostname=self.smtp_host,
+                port=self.smtp_port,
+                username=self.smtp_user,
+                password=self.smtp_password,
+                start_tls=True,
+            )
+            return True
+        except ImportError:
+            logger.error("aiosmtplib not installed. Run: pip install aiosmtplib")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to send email verification email: {e}")
             return False
 
 

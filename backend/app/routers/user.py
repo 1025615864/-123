@@ -1,4 +1,6 @@
 """用户API路由"""
+from datetime import datetime, timezone
+import secrets
 import logging
 from typing import Annotated
 
@@ -11,12 +13,17 @@ from ..models.user_consent import ConsentDocType, UserConsent
 from ..schemas.user import (
     UserCreate, UserLogin, UserUpdate, UserResponse,
     Token, LoginResponse, RegisterResponse, PasswordChange, MessageResponse,
-    PasswordResetRequest, PasswordResetConfirm
+    PasswordResetRequest, PasswordResetConfirm,
+    EmailVerificationRequestResponse,
+    SmsSendRequest,
+    SmsVerifyRequest,
+    SmsSendResponse,
 )
 from ..schemas.quota import UserQuotaDailyResponse
 from ..services.user_service import user_service
 from ..services.forum_service import forum_service
 from ..services.email_service import email_service
+from ..services.cache_service import cache_service
 from ..utils.security import create_access_token, verify_password, hash_password
 from ..utils.deps import get_current_user, require_admin
 from ..utils.rate_limiter import rate_limit, RateLimitConfig
@@ -28,6 +35,9 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/user", tags=["用户管理"])
+
+_SMS_CODE_TTL_SECONDS = 300
+_SMS_SEND_LOCK_SECONDS = 60
 
 
 @router.post("/register", response_model=RegisterResponse, summary="用户注册")
@@ -97,10 +107,22 @@ async def register(
         await db.commit()
         await db.refresh(user)
 
-        return RegisterResponse(
-            user=UserResponse.model_validate(user),
-            message="注册成功"
-        )
+        msg = "注册成功"
+        try:
+            if not bool(getattr(user, "email_verified", False)):
+                token = await email_service.generate_email_verification_token(int(user.id), str(user.email))
+                base = settings.frontend_base_url.rstrip("/")
+                verify_url = f"{base}/verify-email?token={token}"
+                ok = await email_service.send_email_verification_email(str(user.email), verify_url)
+                if ok:
+                    msg = "注册成功，验证邮件已发送，请查收邮箱"
+                else:
+                    msg = "注册成功，但验证邮件发送失败，请稍后在个人中心重发"
+        except Exception:
+            logger.exception("register: failed to send verification email")
+            msg = "注册成功，但验证邮件发送失败，请稍后在个人中心重发"
+
+        return RegisterResponse(user=UserResponse.model_validate(user), message=msg)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -236,6 +258,151 @@ async def get_user_stats(
     """获取当前用户的统计数据（帖子数、收藏数、评论数）"""
     stats = await forum_service.get_user_stats(db, current_user.id)
     return stats
+
+
+@router.post(
+    "/email-verification/request",
+    response_model=EmailVerificationRequestResponse,
+    summary="请求邮箱验证邮件",
+)
+@rate_limit(*RateLimitConfig.AUTH_PASSWORD_RESET, by_ip=True)
+async def request_email_verification(
+    request: Request,
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    _ = request
+    if bool(getattr(current_user, "email_verified", False)):
+        return EmailVerificationRequestResponse(message="邮箱已验证", success=True)
+
+    token = await email_service.generate_email_verification_token(int(current_user.id), str(current_user.email))
+    base = settings.frontend_base_url.rstrip("/")
+    verify_url = f"{base}/verify-email?token={token}"
+
+    ok = await email_service.send_email_verification_email(str(current_user.email), verify_url)
+
+    if not ok:
+        if bool(settings.debug):
+            return EmailVerificationRequestResponse(
+                message="邮件服务未配置，已返回验证链接（开发环境）",
+                success=True,
+                token=token,
+                verify_url=verify_url,
+            )
+        raise HTTPException(status_code=500, detail="验证邮件发送失败")
+
+    if bool(settings.debug):
+        return EmailVerificationRequestResponse(
+            message="验证邮件已发送",
+            success=True,
+            token=token,
+            verify_url=verify_url,
+        )
+    return EmailVerificationRequestResponse(message="验证邮件已发送", success=True)
+
+
+@router.get(
+    "/email-verification/verify",
+    response_model=MessageResponse,
+    summary="邮箱验证（通过token）",
+)
+@rate_limit(*RateLimitConfig.AUTH_PASSWORD_RESET, by_ip=True)
+async def verify_email(
+    token: str,
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    _ = request
+    token_data = await email_service.verify_email_verification_token(token)
+    if not token_data:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无效或已过期的验证令牌")
+
+    user = await user_service.get_by_id(db, int(token_data["user_id"]))
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+
+    if str(user.email) != str(token_data["email"]):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="邮箱不匹配")
+
+    if not bool(getattr(user, "email_verified", False)):
+        user.email_verified = True
+        user.email_verified_at = datetime.now(timezone.utc)
+        db.add(user)
+        await db.commit()
+
+    await email_service.invalidate_email_verification_token(token)
+    return MessageResponse(message="邮箱验证成功", success=True)
+
+
+@router.post("/sms/send", response_model=SmsSendResponse, summary="发送短信验证码")
+@rate_limit(*RateLimitConfig.AUTH_PASSWORD_RESET, by_ip=True)
+async def send_sms_code(
+    data: SmsSendRequest,
+    request: Request,
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    _ = request
+    _ = current_user
+
+    phone = str(data.phone).strip()
+    scene = str(data.scene or "bind_phone").strip() or "bind_phone"
+
+    lock_key = f"sms_send_lock:{scene}:{phone}"
+    lock_value = f"{int(getattr(current_user, 'id', 0) or 0)}"
+    acquired = await cache_service.acquire_lock(lock_key, lock_value, expire=_SMS_SEND_LOCK_SECONDS)
+    if not acquired:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="发送过于频繁，请稍后再试")
+
+    code = f"{secrets.randbelow(1000000):06d}"
+    cache_key = f"sms_code:{scene}:{phone}"
+    _ = await cache_service.set_json(
+        cache_key,
+        {
+            "code": code,
+            "phone": phone,
+            "scene": scene,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+        expire=_SMS_CODE_TTL_SECONDS,
+    )
+
+    logger.info("[DEV] sms code for %s(%s): %s", phone, scene, code)
+
+    if bool(settings.debug):
+        return SmsSendResponse(message="验证码已发送", success=True, code=code)
+    return SmsSendResponse(message="验证码已发送", success=True)
+
+
+@router.post("/sms/verify", response_model=MessageResponse, summary="校验短信验证码并绑定手机号")
+@rate_limit(*RateLimitConfig.AUTH_PASSWORD_RESET, by_ip=True)
+async def verify_sms_code(
+    data: SmsVerifyRequest,
+    request: Request,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    _ = request
+
+    phone = str(data.phone).strip()
+    scene = str(data.scene or "bind_phone").strip() or "bind_phone"
+    code = str(data.code).strip()
+
+    cache_key = f"sms_code:{scene}:{phone}"
+    raw = await cache_service.get_json(cache_key)
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="验证码无效或已过期")
+
+    expected = str(raw.get("code") or "").strip()
+    if not expected or expected != code:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="验证码错误")
+
+    current_user.phone = phone
+    current_user.phone_verified = True
+    current_user.phone_verified_at = datetime.now(timezone.utc)
+    db.add(current_user)
+    await db.commit()
+
+    _ = await cache_service.delete(cache_key)
+    return MessageResponse(message="手机验证成功", success=True)
 
 
 @router.get("/{user_id}/stats", summary="获取用户统计数据（管理员）")

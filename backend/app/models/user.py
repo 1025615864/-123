@@ -18,6 +18,10 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
     nickname: Mapped[str | None] = mapped_column(String(50), nullable=True)
     phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    phone_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    phone_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     avatar: Mapped[str | None] = mapped_column(String(255), nullable=True)
     role: Mapped[str] = mapped_column(String(20), default="user")  # user/lawyer/admin
