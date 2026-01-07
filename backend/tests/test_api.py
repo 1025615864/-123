@@ -984,7 +984,7 @@ class TestLawFirmConsultationsAPI:
         test_session.add(balance)
         await test_session.commit()
 
-        lawyer = Lawyer(name="律师付费", consultation_fee=10.0)
+        lawyer = Lawyer(name="律师付费", consultation_fee=10.0, is_verified=True)
         test_session.add(lawyer)
         await test_session.commit()
         await test_session.refresh(lawyer)
@@ -1118,7 +1118,7 @@ class TestLawFirmConsultationMessagesAPI:
         await test_session.refresh(user2)
         await test_session.refresh(lawyer_user)
 
-        lawyer = Lawyer(name="律师留言", consultation_fee=0.0, user_id=int(lawyer_user.id))
+        lawyer = Lawyer(name="律师留言", consultation_fee=0.0, user_id=int(lawyer_user.id), is_verified=True)
         test_session.add(lawyer)
         await test_session.commit()
         await test_session.refresh(lawyer)

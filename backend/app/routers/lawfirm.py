@@ -114,6 +114,39 @@ async def _get_current_lawyer(db: AsyncSession, user_id: int) -> Lawyer | None:
     return res.scalar_one_or_none()
 
 
+async def _get_latest_verification(db: AsyncSession, user_id: int) -> LawyerVerification | None:
+    res = await db.execute(
+        select(LawyerVerification)
+        .where(LawyerVerification.user_id == int(user_id))
+        .order_by(LawyerVerification.created_at.desc())
+        .limit(1)
+    )
+    return res.scalar_one_or_none()
+
+
+async def _require_verified_lawyer(db: AsyncSession, current_user: User) -> Lawyer:
+    role = str(getattr(current_user, "role", "") or "").lower()
+    if role in {"admin", "super_admin"}:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="管理员不支持使用律师工作台")
+
+    if role != "lawyer":
+        v = await _get_latest_verification(db, int(current_user.id))
+        if v and str(getattr(v, "status", "") or "").lower() == "pending":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="律师认证审核中")
+        if v and str(getattr(v, "status", "") or "").lower() == "rejected":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="律师认证已驳回")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="需要律师权限")
+
+    lawyer = await _get_current_lawyer(db, int(current_user.id))
+    if not lawyer:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="未绑定律师资料")
+
+    if not bool(getattr(lawyer, "is_verified", False)):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="律师认证未通过")
+
+    return lawyer
+
+
 def _generate_order_no() -> str:
     now = datetime.now(timezone.utc)
     return f"{now.strftime('%Y%m%d%H%M%S')}{uuid.uuid4().hex[:8].upper()}"
@@ -542,12 +575,7 @@ async def lawyer_get_my_consultations(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
 ):
-    if current_user.role not in {"lawyer", "admin", "super_admin"}:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权限")
-
-    lawyer = await _get_current_lawyer(db, int(current_user.id))
-    if not lawyer:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="未绑定律师资料")
+    lawyer = await _require_verified_lawyer(db, current_user)
 
     query = (
         select(LawyerConsultation)
@@ -615,12 +643,7 @@ async def lawyer_accept_consultation(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    if current_user.role not in {"lawyer", "admin", "super_admin"}:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权限")
-
-    lawyer = await _get_current_lawyer(db, int(current_user.id))
-    if not lawyer:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="未绑定律师资料")
+    lawyer = await _require_verified_lawyer(db, current_user)
 
     res = await db.execute(
         select(LawyerConsultation)
@@ -692,12 +715,7 @@ async def lawyer_reject_consultation(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    if current_user.role not in {"lawyer", "admin", "super_admin"}:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权限")
-
-    lawyer = await _get_current_lawyer(db, int(current_user.id))
-    if not lawyer:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="未绑定律师资料")
+    lawyer = await _require_verified_lawyer(db, current_user)
 
     res = await db.execute(
         select(LawyerConsultation)
@@ -749,12 +767,7 @@ async def lawyer_complete_consultation(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    if current_user.role not in {"lawyer", "admin", "super_admin"}:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权限")
-
-    lawyer = await _get_current_lawyer(db, int(current_user.id))
-    if not lawyer:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="未绑定律师资料")
+    lawyer = await _require_verified_lawyer(db, current_user)
 
     res = await db.execute(
         select(LawyerConsultation)
