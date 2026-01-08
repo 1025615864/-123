@@ -160,7 +160,7 @@ export default function LawyerBookingModal({
           return;
         }
         window.open(payUrl, "_blank", "noopener,noreferrer");
-        toast.success("已打开支付宝支付页面，请支付后等待律师确认");
+        toast.success("已打开支付页面，请支付后等待律师确认");
         if (mountedRef.current) setFlowBusy(false);
         onClose();
         navigate("/orders?tab=consultations");

@@ -28,6 +28,7 @@ class PaymentMethod(str, enum.Enum):
     ALIPAY = "alipay"  # 支付宝
     WECHAT = "wechat"  # 微信支付
     BALANCE = "balance"  # 余额支付
+    IKUNPAY = "ikunpay"  # 爱坤支付
 
 
 class OrderType(str, enum.Enum):
