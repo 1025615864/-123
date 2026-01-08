@@ -65,6 +65,7 @@ type PlatformCertListResponse = {
 type PaymentChannelStatusResponse = {
   alipay_configured: boolean;
   wechatpay_configured: boolean;
+  ikunpay_configured: boolean;
   payment_webhook_secret_configured: boolean;
   wechatpay_platform_certs_cached: boolean;
   wechatpay_platform_certs_total: number;
@@ -116,6 +117,7 @@ function formatTime(dateStr: string) {
 function providerLabel(provider: string) {
   const p = String(provider || "").toLowerCase();
   if (p === "alipay") return "支付宝";
+  if (p === "ikunpay") return "爱坤支付";
   if (p === "wechat") return "微信";
   return provider;
 }
@@ -410,8 +412,16 @@ export default function PaymentCallbacksPage() {
         public_key_set?: boolean;
         private_key_set?: boolean;
         notify_url_set?: boolean;
-        public_key_check?: { ok?: boolean; key_size?: number; error?: string } | null;
-        private_key_check?: { ok?: boolean; key_size?: number; error?: string } | null;
+        public_key_check?: {
+          ok?: boolean;
+          key_size?: number;
+          error?: string;
+        } | null;
+        private_key_check?: {
+          ok?: boolean;
+          key_size?: number;
+          error?: string;
+        } | null;
         gateway_url?: string | null;
         notify_url?: string | null;
         return_url?: string | null;
@@ -485,7 +495,7 @@ export default function PaymentCallbacksPage() {
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-5 gap-3">
           <div className="p-3 rounded-lg bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10">
             <div className="text-xs text-slate-500 dark:text-white/40">
               支付宝
@@ -494,6 +504,25 @@ export default function PaymentCallbacksPage() {
               {channelStatusQuery.isLoading ? (
                 <Skeleton width="72px" height="18px" />
               ) : channelStatusQuery.data?.alipay_configured ? (
+                <Badge variant="success" size="sm">
+                  已配置
+                </Badge>
+              ) : (
+                <Badge variant="warning" size="sm">
+                  未配置
+                </Badge>
+              )}
+            </div>
+          </div>
+
+          <div className="p-3 rounded-lg bg-slate-900/5 border border-slate-200/70 dark:bg-white/5 dark:border-white/10">
+            <div className="text-xs text-slate-500 dark:text-white/40">
+              爱坤支付
+            </div>
+            <div className="mt-1">
+              {channelStatusQuery.isLoading ? (
+                <Skeleton width="72px" height="18px" />
+              ) : channelStatusQuery.data?.ikunpay_configured ? (
                 <Badge variant="success" size="sm">
                   已配置
                 </Badge>
@@ -607,7 +636,8 @@ export default function PaymentCallbacksPage() {
                 {alipayDetails?.public_key_check ? (
                   alipayDetails.public_key_check.ok ? (
                     <Badge variant="success" size="sm">
-                      通过{alipayDetails.public_key_check.key_size
+                      通过
+                      {alipayDetails.public_key_check.key_size
                         ? `（${alipayDetails.public_key_check.key_size}）`
                         : ""}
                     </Badge>
@@ -643,7 +673,8 @@ export default function PaymentCallbacksPage() {
                 {alipayDetails?.private_key_check ? (
                   alipayDetails.private_key_check.ok ? (
                     <Badge variant="success" size="sm">
-                      通过{alipayDetails.private_key_check.key_size
+                      通过
+                      {alipayDetails.private_key_check.key_size
                         ? `（${alipayDetails.private_key_check.key_size}）`
                         : ""}
                     </Badge>
@@ -673,14 +704,20 @@ export default function PaymentCallbacksPage() {
               </div>
             </div>
 
-            {alipayDetails?.public_key_check && !alipayDetails.public_key_check.ok ? (
+            {alipayDetails?.public_key_check &&
+            !alipayDetails.public_key_check.ok ? (
               <div className="mt-3 text-xs text-red-600 dark:text-red-400 break-all">
-                PUBLIC_KEY 自检失败：{String(alipayDetails.public_key_check.error || "").trim() || "未知错误"}
+                PUBLIC_KEY 自检失败：
+                {String(alipayDetails.public_key_check.error || "").trim() ||
+                  "未知错误"}
               </div>
             ) : null}
-            {alipayDetails?.private_key_check && !alipayDetails.private_key_check.ok ? (
+            {alipayDetails?.private_key_check &&
+            !alipayDetails.private_key_check.ok ? (
               <div className="mt-2 text-xs text-red-600 dark:text-red-400 break-all">
-                PRIVATE_KEY 自检失败：{String(alipayDetails.private_key_check.error || "").trim() || "未知错误"}
+                PRIVATE_KEY 自检失败：
+                {String(alipayDetails.private_key_check.error || "").trim() ||
+                  "未知错误"}
               </div>
             ) : null}
 
@@ -858,6 +895,7 @@ export default function PaymentCallbacksPage() {
             >
               <option value="">全部渠道</option>
               <option value="alipay">支付宝</option>
+              <option value="ikunpay">爱坤支付</option>
               <option value="wechat">微信</option>
             </select>
 
@@ -1395,7 +1433,9 @@ export default function PaymentCallbacksPage() {
             value={
               payloadShowRaw
                 ? payloadEvent?.raw_payload || ""
-                : payloadEvent?.masked_payload || payloadEvent?.raw_payload || ""
+                : payloadEvent?.masked_payload ||
+                  payloadEvent?.raw_payload ||
+                  ""
             }
             readOnly
             rows={12}
@@ -1427,7 +1467,9 @@ export default function PaymentCallbacksPage() {
                 const v = payloadShowRaw
                   ? String(payloadEvent?.raw_payload || "")
                   : String(
-                      payloadEvent?.masked_payload || payloadEvent?.raw_payload || ""
+                      payloadEvent?.masked_payload ||
+                        payloadEvent?.raw_payload ||
+                        ""
                     );
                 if (!v.trim()) {
                   toast.error("payload 为空");
@@ -1435,14 +1477,18 @@ export default function PaymentCallbacksPage() {
                 }
                 try {
                   await navigator.clipboard.writeText(v);
-                  toast.success(payloadShowRaw ? "已复制原始 payload" : "已复制脱敏 payload");
+                  toast.success(
+                    payloadShowRaw ? "已复制原始 payload" : "已复制脱敏 payload"
+                  );
                 } catch {
                   toast.error("复制失败，请手动复制");
                 }
               }}
               disabled={
                 payloadLoading ||
-                (!payloadShowRaw && !payloadEvent?.masked_payload && !payloadEvent?.raw_payload) ||
+                (!payloadShowRaw &&
+                  !payloadEvent?.masked_payload &&
+                  !payloadEvent?.raw_payload) ||
                 (payloadShowRaw && !payloadEvent?.raw_payload)
               }
               isLoading={payloadLoading}

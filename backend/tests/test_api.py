@@ -2248,6 +2248,7 @@ class TestPaymentCallbackAdminAPI:
         assert res.status_code == 200
         data = _json_dict(res)
         assert "alipay_configured" in data
+        assert "ikunpay_configured" in data
         assert "wechatpay_configured" in data
         assert "wechatpay_platform_certs_total" in data
 
@@ -2481,6 +2482,167 @@ class TestPaymentCallbackAdminAPI:
         evt_count_res = await test_session.execute(
             select(func.count(PaymentCallbackEvent.id)).where(
                 PaymentCallbackEvent.provider == "alipay",
+                PaymentCallbackEvent.order_no == order_no,
+                PaymentCallbackEvent.verified == 0,
+            )
+        )
+        assert int(evt_count_res.scalar() or 0) >= 1
+
+    @pytest.mark.asyncio
+    async def test_ikunpay_pay_url_and_notify_marks_order_paid_and_records_event_idempotent(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+        monkeypatch: MonkeyPatch,
+    ):
+        from sqlalchemy import select, func
+
+        from app.models.user import User
+        from app.models.payment import PaymentOrder, PaymentCallbackEvent
+        from app.routers import payment as payment_router
+        from app.utils.security import hash_password, create_access_token
+
+        user = User(
+            username="u_ikunpay_notify_test",
+            email="u_ikunpay_notify_test@example.com",
+            nickname="u_ikunpay_notify_test",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        token = create_access_token({"sub": str(user.id)})
+
+        create_res = await client.post(
+            "/api/payment/orders",
+            json={"order_type": "service", "amount": 10.0, "title": "svc"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create_res.status_code == 200
+        order_no = str(create_res.json()["order_no"])
+
+        monkeypatch.setattr(payment_router.settings, "ikunpay_pid", "PID_TEST", raising=False)
+        monkeypatch.setattr(payment_router.settings, "ikunpay_key", "KEY_TEST", raising=False)
+        monkeypatch.setattr(payment_router.settings, "ikunpay_notify_url", "https://example.com/notify", raising=False)
+        monkeypatch.setattr(payment_router.settings, "ikunpay_gateway_url", "https://ikunpay.com/submit.php", raising=False)
+
+        pay_res = await client.post(
+            f"/api/payment/orders/{order_no}/pay",
+            json={"payment_method": "ikunpay"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert pay_res.status_code == 200
+        pay_url = str(_json_dict(pay_res).get("pay_url") or "").strip()
+        assert pay_url
+        assert pay_url.startswith("https://ikunpay.com/submit.php")
+
+        trade_no = "IK_T_1"
+        params = {
+            "pid": "PID_TEST",
+            "out_trade_no": order_no,
+            "trade_no": trade_no,
+            "trade_status": "TRADE_SUCCESS",
+            "money": "10.00",
+            "sign_type": "MD5",
+        }
+        params["sign"] = payment_router._ikunpay_sign_md5(params, "KEY_TEST")
+
+        notify_res = await client.post("/api/payment/ikunpay/notify", data=params)
+        assert notify_res.status_code == 200
+        assert notify_res.text.strip() == "success"
+
+        order_db_res = await test_session.execute(select(PaymentOrder).where(PaymentOrder.order_no == order_no))
+        order_db = order_db_res.scalar_one_or_none()
+        assert order_db is not None
+        assert str(order_db.status) == "paid"
+        assert str(order_db.trade_no or "") == trade_no
+        assert str(order_db.payment_method or "") == "ikunpay"
+
+        evt_count_res = await test_session.execute(
+            select(func.count(PaymentCallbackEvent.id)).where(
+                PaymentCallbackEvent.provider == "ikunpay",
+                PaymentCallbackEvent.trade_no == trade_no,
+            )
+        )
+        assert int(evt_count_res.scalar() or 0) == 1
+
+        notify_res2 = await client.post("/api/payment/ikunpay/notify", data=params)
+        assert notify_res2.status_code == 200
+        assert notify_res2.text.strip() == "success"
+
+        evt_count_res2 = await test_session.execute(
+            select(func.count(PaymentCallbackEvent.id)).where(
+                PaymentCallbackEvent.provider == "ikunpay",
+                PaymentCallbackEvent.trade_no == trade_no,
+            )
+        )
+        assert int(evt_count_res2.scalar() or 0) == 1
+
+    @pytest.mark.asyncio
+    async def test_ikunpay_notify_invalid_signature_records_event_and_keeps_pending(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+        monkeypatch: MonkeyPatch,
+    ):
+        from sqlalchemy import select, func
+
+        from app.models.user import User
+        from app.models.payment import PaymentOrder, PaymentCallbackEvent
+        from app.routers import payment as payment_router
+        from app.utils.security import hash_password, create_access_token
+
+        user = User(
+            username="u_ikunpay_bad_sig",
+            email="u_ikunpay_bad_sig@example.com",
+            nickname="u_ikunpay_bad_sig",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        token = create_access_token({"sub": str(user.id)})
+
+        create_res = await client.post(
+            "/api/payment/orders",
+            json={"order_type": "service", "amount": 10.0, "title": "svc"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create_res.status_code == 200
+        order_no = str(create_res.json()["order_no"])
+
+        monkeypatch.setattr(payment_router.settings, "ikunpay_pid", "PID_TEST", raising=False)
+        monkeypatch.setattr(payment_router.settings, "ikunpay_key", "KEY_TEST", raising=False)
+        monkeypatch.setattr(payment_router.settings, "ikunpay_notify_url", "https://example.com/notify", raising=False)
+
+        params = {
+            "pid": "PID_TEST",
+            "out_trade_no": order_no,
+            "trade_no": "IK_BAD_1",
+            "trade_status": "TRADE_SUCCESS",
+            "money": "10.00",
+            "sign_type": "MD5",
+            "sign": "deadbeef",
+        }
+
+        notify_res = await client.post("/api/payment/ikunpay/notify", data=params)
+        assert notify_res.status_code == 400
+        assert notify_res.text.strip() == "fail"
+
+        order_res = await test_session.execute(select(PaymentOrder).where(PaymentOrder.order_no == order_no))
+        order = order_res.scalar_one_or_none()
+        assert order is not None
+        assert str(order.status) == "pending"
+
+        evt_count_res = await test_session.execute(
+            select(func.count(PaymentCallbackEvent.id)).where(
+                PaymentCallbackEvent.provider == "ikunpay",
                 PaymentCallbackEvent.order_no == order_no,
                 PaymentCallbackEvent.verified == 0,
             )
