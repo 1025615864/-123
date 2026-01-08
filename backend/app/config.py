@@ -75,6 +75,31 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("ALIPAY_RETURN_URL", "PAY_ALIPAY_RETURN_URL"),
     )
 
+    ikunpay_pid: str = Field(
+        default="",
+        validation_alias=AliasChoices("IKUNPAY_PID", "PAY_IKUNPAY_PID"),
+    )
+    ikunpay_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("IKUNPAY_KEY", "PAY_IKUNPAY_KEY"),
+    )
+    ikunpay_gateway_url: str = Field(
+        default="https://ikunpay.com/submit.php",
+        validation_alias=AliasChoices("IKUNPAY_GATEWAY_URL", "IKUNPAY_SUBMIT_URL", "PAY_IKUNPAY_GATEWAY_URL"),
+    )
+    ikunpay_notify_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("IKUNPAY_NOTIFY_URL", "PAY_IKUNPAY_NOTIFY_URL"),
+    )
+    ikunpay_return_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("IKUNPAY_RETURN_URL", "PAY_IKUNPAY_RETURN_URL"),
+    )
+    ikunpay_default_type: str = Field(
+        default="",
+        validation_alias=AliasChoices("IKUNPAY_DEFAULT_TYPE", "PAY_IKUNPAY_DEFAULT_TYPE"),
+    )
+
     wechatpay_mch_id: str = Field(
         default="",
         validation_alias=AliasChoices("WECHATPAY_MCH_ID", "WECHAT_MCH_ID"),

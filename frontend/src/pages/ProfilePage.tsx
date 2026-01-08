@@ -163,7 +163,7 @@ export default function ProfilePage() {
 
   const buyVipMutation = useAppMutation<
     any,
-    { payment_method: "balance" | "alipay" }
+    { payment_method: "balance" | "alipay" | "ikunpay" }
   >({
     mutationFn: async ({ payment_method }) => {
       const createRes = await api.post("/payment/orders", {
@@ -197,7 +197,7 @@ export default function ProfilePage() {
         2
       )}）：确定使用余额支付吗？取消将使用支付宝支付`
     );
-    const payment_method: "balance" | "alipay" = useBalance
+    const payment_method: "balance" | "alipay" | "ikunpay" = useBalance
       ? "balance"
       : "alipay";
 
@@ -205,11 +205,11 @@ export default function ProfilePage() {
       { payment_method },
       {
         onSuccess: async (data) => {
-          if (payment_method === "alipay") {
+          if (payment_method !== "balance") {
             const url = String((data as any)?.pay_url || "").trim();
             if (url) {
               window.open(url, "_blank", "noopener,noreferrer");
-              toast.success("已打开支付宝支付页面");
+              toast.success("已打开支付页面");
               openPaymentGuide(String((data as any)?.order_no || null));
             } else {
               toast.error("未获取到支付链接");
@@ -365,7 +365,7 @@ export default function ProfilePage() {
       pack_count: number;
       related_type: PackRelatedType;
       amount: number;
-      payment_method: "balance" | "alipay";
+      payment_method: "balance" | "alipay" | "ikunpay";
     }
   >({
     mutationFn: async ({
@@ -423,7 +423,7 @@ export default function ProfilePage() {
         2
       )}）：确定使用余额支付吗？取消将使用支付宝支付`
     );
-    const payment_method: "balance" | "alipay" = useBalance
+    const payment_method: "balance" | "alipay" | "ikunpay" = useBalance
       ? "balance"
       : "alipay";
 
@@ -436,11 +436,11 @@ export default function ProfilePage() {
       },
       {
         onSuccess: async (data) => {
-          if (payment_method === "alipay") {
+          if (payment_method !== "balance") {
             const url = String((data as any)?.pay_url || "").trim();
             if (url) {
               window.open(url, "_blank", "noopener,noreferrer");
-              toast.success("已打开支付宝支付页面");
+              toast.success("已打开支付页面");
               setShowPackModal(false);
               openPaymentGuide(String((data as any)?.order_no || null));
             } else {
@@ -2143,7 +2143,7 @@ export default function ProfilePage() {
           setShowRechargeModal(false);
         }}
         title="余额充值"
-        description="选择充值金额并跳转支付宝支付"
+        description="选择充值金额并跳转支付"
         size="sm"
       >
         <div className="space-y-4">
@@ -2192,7 +2192,7 @@ export default function ProfilePage() {
                     const payUrl = String((data as any)?.pay_url || "").trim();
                     if (payUrl) {
                       window.open(payUrl, "_blank", "noopener,noreferrer");
-                      toast.success("已打开支付宝支付页面");
+                      toast.success("已打开支付页面");
                       openPaymentGuide(String((data as any)?.order_no || null));
                       setShowRechargeModal(false);
                       return;

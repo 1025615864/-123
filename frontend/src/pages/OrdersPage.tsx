@@ -46,6 +46,7 @@ function paymentMethodToLabel(value: string | null | undefined): string {
   if (!s) return '—'
   if (s === 'balance') return '余额'
   if (s === 'alipay') return '支付宝'
+  if (s === 'ikunpay') return '爱坤支付'
   if (s === 'wechat') return '微信'
   return value || '—'
 }
@@ -216,7 +217,7 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
         return
       }
       window.open(url, '_blank', 'noopener,noreferrer')
-      toast.success('已打开支付宝支付页面')
+      toast.success('已打开支付页面')
       setPaymentGuideOrderNo(String(orderNo || '').trim() || null)
       setPaymentGuideOpen(true)
     },

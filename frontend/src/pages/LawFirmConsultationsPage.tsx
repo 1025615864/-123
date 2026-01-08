@@ -213,7 +213,7 @@ export default function LawFirmConsultationsPage({
         return;
       }
       window.open(url, "_blank", "noopener,noreferrer");
-      toast.success("已打开支付宝支付页面");
+      toast.success("已打开支付页面");
     },
     onSettled: (_data, _err, orderNo) => {
       setActiveAlipayOrderNo((prev) => (prev === orderNo ? null : prev));

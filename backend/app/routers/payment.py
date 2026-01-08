@@ -237,6 +237,7 @@ class CallbackEventDetailResponse(CallbackEventResponse):
 class PaymentChannelStatusResponse(BaseModel):
     alipay_configured: bool
     wechatpay_configured: bool
+    ikunpay_configured: bool
     payment_webhook_secret_configured: bool
     wechatpay_platform_certs_cached: bool
     wechatpay_platform_certs_total: int
@@ -517,6 +518,61 @@ def _alipay_build_page_pay_url(
     if return_url:
         params["return_url"] = return_url
     params["sign"] = _alipay_sign_rsa2(params, private_key)
+    return f"{gateway_url}?{urlencode(params)}"
+
+
+def _ikunpay_build_sign_string(params: dict[str, str]) -> str:
+    items: list[tuple[str, str]] = []
+    for k, v in params.items():
+        if k in {"sign", "sign_type"}:
+            continue
+        s = str(v)
+        if s == "":
+            continue
+        items.append((k, s))
+    items.sort(key=lambda x: x[0])
+    return "&".join([f"{k}={v}" for k, v in items])
+
+
+def _ikunpay_sign_md5(params: dict[str, str], key: str) -> str:
+    sign_content = _ikunpay_build_sign_string(params)
+    raw = (sign_content + str(key)).encode("utf-8")
+    return hashlib.md5(raw).hexdigest().lower()
+
+
+def _ikunpay_verify_md5(params: dict[str, str], key: str) -> bool:
+    sign = str(params.get("sign") or "").strip().lower()
+    if not sign:
+        return False
+    expected = _ikunpay_sign_md5(params, key)
+    return hmac.compare_digest(expected, sign)
+
+
+def _ikunpay_build_submit_pay_url(
+    *,
+    gateway_url: str,
+    pid: str,
+    pay_type: str,
+    out_trade_no: str,
+    notify_url: str,
+    return_url: str | None,
+    name: str,
+    money: Decimal,
+    key: str,
+) -> str:
+    params: dict[str, str] = {
+        "pid": str(pid).strip(),
+        "type": str(pay_type).strip(),
+        "out_trade_no": str(out_trade_no).strip(),
+        "notify_url": str(notify_url).strip(),
+        "name": str(name).strip(),
+        "money": str(_quantize_amount(float(money))),
+        "timestamp": str(int(datetime.now(timezone.utc).timestamp())),
+        "sign_type": "MD5",
+    }
+    if return_url:
+        params["return_url"] = str(return_url).strip()
+    params["sign"] = _ikunpay_sign_md5(params, key)
     return f"{gateway_url}?{urlencode(params)}"
 
 
@@ -871,7 +927,7 @@ async def pay_order(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """支付订单"""
-    if data.payment_method not in {"alipay", "wechat", "balance"}:
+    if data.payment_method not in {"alipay", "wechat", "balance", "ikunpay"}:
         raise HTTPException(status_code=400, detail="无效的支付方式")
 
     result = await db.execute(
@@ -993,6 +1049,46 @@ async def pay_order(
         return {"message": "支付成功", "trade_no": order.trade_no}
     
     # 其他支付方式（返回支付链接/二维码）
+    if data.payment_method == "ikunpay":
+        if not (settings.ikunpay_pid or "").strip():
+            raise HTTPException(status_code=400, detail="IKUNPAY_PID 未设置")
+        if not (settings.ikunpay_key or "").strip():
+            raise HTTPException(status_code=400, detail="IKUNPAY_KEY 未设置")
+        if not (settings.ikunpay_notify_url or "").strip():
+            raise HTTPException(status_code=400, detail="IKUNPAY_NOTIFY_URL 未设置")
+
+        if order.payment_method != "ikunpay":
+            order.payment_method = "ikunpay"
+            db.add(order)
+            await db.commit()
+            await db.refresh(order)
+
+        pay_type = (settings.ikunpay_default_type or "").strip() or "alipay"
+        return_url = (settings.ikunpay_return_url or "").strip() or None
+        if return_url is None:
+            frontend_base = str(getattr(settings, "frontend_base_url", "") or "").strip().rstrip("/")
+            if frontend_base:
+                return_url = f"{frontend_base}/payment/return"
+
+        pay_url = _ikunpay_build_submit_pay_url(
+            gateway_url=(settings.ikunpay_gateway_url or "").strip() or "https://ikunpay.com/submit.php",
+            pid=settings.ikunpay_pid,
+            pay_type=pay_type,
+            out_trade_no=order.order_no,
+            notify_url=settings.ikunpay_notify_url,
+            return_url=return_url,
+            name=order.title,
+            money=_quantize_amount(float(order.actual_amount)),
+            key=settings.ikunpay_key,
+        )
+        return {
+            "message": "OK",
+            "payment_method": "ikunpay",
+            "amount": order.actual_amount,
+            "order_no": order.order_no,
+            "pay_url": pay_url,
+        }
+
     if data.payment_method == "alipay":
         if not settings.alipay_app_id or not settings.alipay_private_key:
             raise HTTPException(status_code=400, detail="支付宝配置未设置")
@@ -1233,6 +1329,198 @@ async def alipay_notify(request: Request, db: Annotated[AsyncSession, Depends(ge
     await _record_callback_event(
         db,
         provider="alipay",
+        order_no=order_no,
+        trade_no=trade_no,
+        amount=amount,
+        verified=True,
+        error_message=None,
+        raw_payload=payload_raw,
+    )
+
+    return Response(content="success", media_type="text/plain")
+
+
+@router.post("/ikunpay/notify", summary="Ikunpay 异步通知")
+async def ikunpay_notify(request: Request, db: Annotated[AsyncSession, Depends(get_db)]):
+    form = await request.form()
+    params = {str(k): str(v) for k, v in form.items()}
+
+    payload_raw = json.dumps(params, ensure_ascii=False, separators=(",", ":"))
+    order_no_raw = str(params.get("out_trade_no") or "").strip() or None
+    trade_no_raw = str(params.get("trade_no") or "").strip() or None
+
+    amount_raw: Decimal | None = None
+    money_str = str(params.get("money") or "").strip()
+    try:
+        if money_str:
+            amount_raw = _quantize_amount(float(money_str))
+    except Exception:
+        amount_raw = None
+
+    if not (settings.ikunpay_key or "").strip():
+        await _record_callback_event(
+            db,
+            provider="ikunpay",
+            order_no=order_no_raw,
+            trade_no=trade_no_raw,
+            amount=amount_raw,
+            verified=False,
+            error_message="IKUNPAY_KEY 未设置",
+            raw_payload=payload_raw,
+        )
+        return Response(content="fail", status_code=500, media_type="text/plain")
+
+    if not _ikunpay_verify_md5(params, settings.ikunpay_key):
+        await _record_callback_event(
+            db,
+            provider="ikunpay",
+            order_no=order_no_raw,
+            trade_no=trade_no_raw,
+            amount=amount_raw,
+            verified=False,
+            error_message="验签失败",
+            raw_payload=payload_raw,
+        )
+        return Response(content="fail", status_code=400, media_type="text/plain")
+
+    pid = str(params.get("pid") or "").strip()
+    if (settings.ikunpay_pid or "").strip() and pid and pid != str(settings.ikunpay_pid).strip():
+        await _record_callback_event(
+            db,
+            provider="ikunpay",
+            order_no=order_no_raw,
+            trade_no=trade_no_raw,
+            amount=amount_raw,
+            verified=True,
+            error_message="pid 不匹配",
+            raw_payload=payload_raw,
+        )
+        return Response(content="fail", status_code=400, media_type="text/plain")
+
+    trade_status = str(params.get("trade_status") or "").strip()
+    if trade_status != "TRADE_SUCCESS":
+        await _record_callback_event(
+            db,
+            provider="ikunpay",
+            order_no=order_no_raw,
+            trade_no=trade_no_raw,
+            amount=amount_raw,
+            verified=True,
+            error_message=f"ignored_trade_status:{trade_status}" if trade_status else "ignored_trade_status",
+            raw_payload=payload_raw,
+        )
+        return Response(content="success", media_type="text/plain")
+
+    order_no = str(params.get("out_trade_no") or "").strip()
+    trade_no = str(params.get("trade_no") or "").strip()
+    if not order_no or not trade_no or not money_str:
+        await _record_callback_event(
+            db,
+            provider="ikunpay",
+            order_no=order_no_raw,
+            trade_no=trade_no_raw,
+            amount=amount_raw,
+            verified=True,
+            error_message="缺少字段",
+            raw_payload=payload_raw,
+        )
+        return Response(content="fail", status_code=400, media_type="text/plain")
+
+    try:
+        amount = _quantize_amount(float(money_str))
+    except Exception:
+        await _record_callback_event(
+            db,
+            provider="ikunpay",
+            order_no=order_no,
+            trade_no=trade_no,
+            amount=amount_raw,
+            verified=True,
+            error_message="金额格式错误",
+            raw_payload=payload_raw,
+        )
+        return Response(content="fail", status_code=400, media_type="text/plain")
+
+    result = await db.execute(select(PaymentOrder).where(PaymentOrder.order_no == order_no))
+    order = result.scalar_one_or_none()
+    if not order:
+        await _record_callback_event(
+            db,
+            provider="ikunpay",
+            order_no=order_no,
+            trade_no=trade_no,
+            amount=amount,
+            verified=True,
+            error_message="订单不存在",
+            raw_payload=payload_raw,
+        )
+        return Response(content="fail", status_code=404, media_type="text/plain")
+
+    if order.status == PaymentStatus.PAID:
+        await _record_callback_event(
+            db,
+            provider="ikunpay",
+            order_no=order_no,
+            trade_no=trade_no,
+            amount=amount,
+            verified=True,
+            error_message=None,
+            raw_payload=payload_raw,
+        )
+        return Response(content="success", media_type="text/plain")
+
+    if order.status != PaymentStatus.PENDING:
+        await _record_callback_event(
+            db,
+            provider="ikunpay",
+            order_no=order_no,
+            trade_no=trade_no,
+            amount=amount,
+            verified=True,
+            error_message="订单状态异常",
+            raw_payload=payload_raw,
+        )
+        return Response(content="fail", status_code=400, media_type="text/plain")
+
+    if _quantize_amount(float(order.actual_amount)) != amount:
+        await _record_callback_event(
+            db,
+            provider="ikunpay",
+            order_no=order_no,
+            trade_no=trade_no,
+            amount=amount,
+            verified=True,
+            error_message="金额不一致",
+            raw_payload=payload_raw,
+        )
+        return Response(content="fail", status_code=400, media_type="text/plain")
+
+    try:
+        await _mark_order_paid_in_tx(
+            db,
+            order=order,
+            payment_method="ikunpay",
+            trade_no=trade_no,
+            amount=amount,
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        await _record_callback_event(
+            db,
+            provider="ikunpay",
+            order_no=order_no,
+            trade_no=trade_no,
+            amount=amount,
+            verified=True,
+            error_message="订单落库失败",
+            raw_payload=payload_raw,
+        )
+        return Response(content="fail", status_code=500, media_type="text/plain")
+
+    await _record_callback_event(
+        db,
+        provider="ikunpay",
         order_no=order_no,
         trade_no=trade_no,
         amount=amount,
@@ -2253,6 +2541,10 @@ async def admin_payment_channel_status(
     wechatpay_private_key_set = bool((settings.wechatpay_private_key or "").strip())
     wechatpay_api_v3_key_set = bool((settings.wechatpay_api_v3_key or "").strip())
 
+    ikunpay_pid_set = bool((settings.ikunpay_pid or "").strip())
+    ikunpay_key_set = bool((settings.ikunpay_key or "").strip())
+    ikunpay_notify_url_set = bool((settings.ikunpay_notify_url or "").strip())
+
     payment_webhook_secret_set = bool((settings.payment_webhook_secret or "").strip())
 
     cfg_raw = await _get_system_config_value(db, "WECHATPAY_PLATFORM_CERTS_JSON")
@@ -2282,6 +2574,7 @@ async def admin_payment_channel_status(
     wechatpay_configured = bool(
         wechatpay_mch_id_set and wechatpay_serial_no_set and wechatpay_private_key_set and wechatpay_api_v3_key_set
     )
+    ikunpay_configured = bool(ikunpay_pid_set and ikunpay_key_set and ikunpay_notify_url_set)
 
     alipay_return_url = (settings.alipay_return_url or "").strip() or None
     alipay_effective_return_url = alipay_return_url
@@ -2291,6 +2584,7 @@ async def admin_payment_channel_status(
     return PaymentChannelStatusResponse(
         alipay_configured=alipay_configured,
         wechatpay_configured=wechatpay_configured,
+        ikunpay_configured=ikunpay_configured,
         payment_webhook_secret_configured=payment_webhook_secret_set,
         wechatpay_platform_certs_cached=len(certs_map) > 0,
         wechatpay_platform_certs_total=len(certs_map),
@@ -2308,6 +2602,15 @@ async def admin_payment_channel_status(
                 "notify_url": (settings.alipay_notify_url or "").strip() or None,
                 "return_url": alipay_return_url,
                 "effective_return_url": alipay_effective_return_url,
+            },
+            "ikunpay": {
+                "pid_set": ikunpay_pid_set,
+                "key_set": ikunpay_key_set,
+                "notify_url_set": ikunpay_notify_url_set,
+                "gateway_url": (settings.ikunpay_gateway_url or "").strip() or None,
+                "notify_url": (settings.ikunpay_notify_url or "").strip() or None,
+                "return_url": (settings.ikunpay_return_url or "").strip() or None,
+                "default_type": (settings.ikunpay_default_type or "").strip() or None,
             },
             "wechatpay": {
                 "mch_id_set": wechatpay_mch_id_set,
