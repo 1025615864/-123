@@ -323,7 +323,8 @@ jobs:
 
   required-checks:
     runs-on: ubuntu-latest
-    needs: [helm-validate, backend-test, frontend-build]
+    needs:
+      [helm-validate, backend-test, frontend-build, playwright-documents-e2e]
     if: always()
     steps:
       - name: Verify required jobs
@@ -331,6 +332,8 @@ jobs:
           echo "helm-validate=${{ needs.helm-validate.result }}"
           echo "backend-test=${{ needs.backend-test.result }}"
           echo "frontend-build=${{ needs.frontend-build.result }}"
+          echo "playwright-documents-e2e=${{ needs.playwright-documents-e2e.result }}"
           test "${{ needs.helm-validate.result }}" = "success"
           test "${{ needs.backend-test.result }}" = "success"
           test "${{ needs.frontend-build.result }}" = "success"
+          test "${{ needs.playwright-documents-e2e.result }}" = "success"
