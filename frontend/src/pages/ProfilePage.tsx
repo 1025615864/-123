@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   User,
   Loader2,
@@ -14,6 +14,7 @@ import {
   MessageSquare,
   Heart,
   Star,
+  Crown,
   Clock,
   Lock,
   Eye,
@@ -59,6 +60,7 @@ export default function ProfilePage() {
   const { actualTheme } = useTheme();
   const toast = useToast();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   type PricingPackItem = { count: number; price: number };
@@ -210,8 +212,7 @@ export default function ProfilePage() {
     if (!user) return;
     if (buyVipMutation.isPending) return;
 
-    setPaymentMethodContext({ kind: "vip" });
-    setShowPaymentMethodModal(true);
+    navigate("/vip");
   };
 
   const requestEmailVerificationMutation = useAppMutation<any, void>({
@@ -411,6 +412,7 @@ export default function ProfilePage() {
       related_type: packRelatedType,
       opt,
     });
+    setShowPackModal(false);
     setShowPaymentMethodModal(true);
   };
 
@@ -1616,9 +1618,24 @@ export default function ProfilePage() {
 
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <Star className="h-4 w-4 text-slate-400 dark:text-white/40" />
+                  <Crown
+                    className={`h-4 w-4 ${
+                      isVipActive
+                        ? "text-amber-500"
+                        : "text-slate-400 dark:text-white/40"
+                    }`}
+                  />
                   <span className="text-sm text-slate-700 dark:text-white/70">
                     VIP会员
+                  </span>
+                  <span
+                    className={`text-[11px] px-2 py-0.5 rounded-full border ${
+                      isVipActive
+                        ? "bg-amber-500/10 text-amber-700 border-amber-500/20 dark:text-amber-300"
+                        : "bg-slate-900/5 text-slate-600 border-slate-200/70 dark:bg-white/5 dark:text-white/55 dark:border-white/10"
+                    }`}
+                  >
+                    VIP
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -2235,6 +2252,26 @@ export default function ProfilePage() {
             return;
           setShowPaymentMethodModal(false);
         }}
+        onBack={(() => {
+          const ctx = paymentMethodContext;
+          if (!ctx) return undefined;
+          if (ctx.kind === "pack") {
+            return () => {
+              if (buyPackMutation.isPending) return;
+              setShowPaymentMethodModal(false);
+              setShowPackModal(true);
+            };
+          }
+          if (ctx.kind === "recharge") {
+            return () => {
+              if (rechargeMutation.isPending) return;
+              setShowPaymentMethodModal(false);
+              setShowRechargeModal(true);
+            };
+          }
+          return undefined;
+        })()}
+        backLabel="返回修改"
         title={
           paymentMethodContext?.kind === "vip"
             ? "选择支付方式"
@@ -2476,6 +2513,7 @@ export default function ProfilePage() {
               }
 
               setPaymentMethodContext({ kind: "recharge", amount: amt });
+              setShowRechargeModal(false);
               setShowPaymentMethodModal(true);
             }}
           >
