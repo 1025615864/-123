@@ -2432,7 +2432,7 @@ class TestPaymentCallbackAdminAPI:
         assert data1.get("alipay_configured") is False
         assert data1.get("ikunpay_configured") is False
         assert "available_methods" in data1
-        assert list(data1.get("available_methods") or []) == ["balance"]
+        assert [str(x) for x in _as_list(data1.get("available_methods"))] == ["balance"]
 
         monkeypatch.setattr(payment_router.settings, "alipay_app_id", "app", raising=False)
         monkeypatch.setattr(payment_router.settings, "alipay_public_key", "pub", raising=False)
@@ -2448,7 +2448,7 @@ class TestPaymentCallbackAdminAPI:
         data2 = _json_dict(res2)
         assert data2.get("alipay_configured") is True
         assert data2.get("ikunpay_configured") is True
-        assert list(data2.get("available_methods") or []) == ["balance", "alipay", "ikunpay"]
+        assert [str(x) for x in _as_list(data2.get("available_methods"))] == ["balance", "alipay", "ikunpay"]
 
     @pytest.mark.asyncio
     async def test_admin_import_wechat_platform_certs_json(

@@ -8,11 +8,9 @@ from typing import cast
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
-from typing_extensions import override
 
 
 class EnvelopeMiddleware(BaseHTTPMiddleware):
-    @override
     async def dispatch(
         self,
         request: Request,

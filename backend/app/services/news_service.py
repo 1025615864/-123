@@ -592,7 +592,7 @@ class NewsService:
                     return None
             return None
 
-        update_payload: dict[str, object] = {}
+        update_payload: dict[str, Any] = {}
         for k in (
             "title",
             "summary",

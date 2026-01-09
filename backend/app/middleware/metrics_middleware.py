@@ -5,13 +5,11 @@ from collections.abc import Awaitable, Callable
 
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
-from typing_extensions import override
 
 from ..services.prometheus_metrics import prometheus_metrics
 
 
 class MetricsMiddleware(BaseHTTPMiddleware):
-    @override
     async def dispatch(self, request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         start = time.perf_counter()
         response: Response | None = None
