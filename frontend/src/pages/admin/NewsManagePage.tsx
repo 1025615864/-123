@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   Search,
   Plus,
@@ -118,6 +118,26 @@ interface NewsItem {
   created_at: string;
   updated_at?: string;
 }
+
+type NewsSource = {
+  id: number;
+  name: string;
+  site?: string | null;
+};
+
+type NewsSourceListResponse = {
+  items: NewsSource[];
+};
+
+type NewsTopic = {
+  id: number;
+  title: string;
+  is_active?: boolean;
+};
+
+type NewsTopicListResponse = {
+  items: NewsTopic[];
+};
 
 type NewsReviewAction = "approve" | "reject" | "pending";
 
@@ -254,11 +274,15 @@ interface NewsAdminListResponse {
 }
 
 export default function NewsManagePage() {
+  const [searchParams] = useSearchParams();
   const [keyword, setKeyword] = useState("");
   const [page, setPage] = useState(1);
   const pageSize = 20;
   const [reviewStatus, setReviewStatus] = useState<string>("all");
   const [riskLevel, setRiskLevel] = useState<string>("all");
+  const [topicId, setTopicId] = useState<string>("all");
+  const [sourceSite, setSourceSite] = useState<string>("all");
+  const [deepLinkAppliedKey, setDeepLinkAppliedKey] = useState<string>("");
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -355,10 +379,44 @@ export default function NewsManagePage() {
           pageSize,
           reviewStatus: String(reviewStatus || ""),
           riskLevel: String(riskLevel || ""),
+          topicId: String(topicId || ""),
+          sourceSite: String(sourceSite || ""),
         },
       ] as const,
-    [keyword, page, pageSize, reviewStatus, riskLevel]
+    [keyword, page, pageSize, reviewStatus, riskLevel, topicId, sourceSite]
   );
+
+  const topicsQuery = useQuery({
+    queryKey: ["admin-news-topics"],
+    queryFn: async () => {
+      const res = await api.get("/news/admin/topics");
+      return res.data as NewsTopicListResponse;
+    },
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  });
+
+  const sourcesQuery = useQuery({
+    queryKey: ["admin-news-sources"],
+    queryFn: async () => {
+      const res = await api.get("/news/admin/sources");
+      return res.data as NewsSourceListResponse;
+    },
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  });
+
+  const sourceSiteOptions = useMemo(() => {
+    const items = Array.isArray(sourcesQuery.data?.items)
+      ? sourcesQuery.data?.items
+      : [];
+    const sites = items
+      .map((x) => String(x?.site || "").trim())
+      .filter((x) => !!x);
+    return Array.from(new Set(sites)).sort((a, b) => a.localeCompare(b));
+  }, [sourcesQuery.data?.items]);
 
   const newsQuery = useQuery({
     queryKey: newsQueryKey,
@@ -370,6 +428,10 @@ export default function NewsManagePage() {
       if (rs && rs !== "all") params.review_status = rs;
       const rl = String(riskLevel || "").trim();
       if (rl && rl !== "all") params.risk_level = rl;
+      const tid = String(topicId || "").trim();
+      if (tid && tid !== "all") params.topic_id = Number(tid);
+      const ss = String(sourceSite || "").trim();
+      if (ss && ss !== "all") params.source_site = ss;
       const res = await api.get("/news/admin/all", { params });
       return res.data as NewsAdminListResponse;
     },
@@ -436,6 +498,36 @@ export default function NewsManagePage() {
       setActiveRowAction((prev) =>
         prev && prev.kind === "delete" && prev.id === id ? null : prev
       );
+    },
+  });
+
+  const batchQueryRerunMutation = useAppMutation<
+    NewsBatchActionResponse,
+    {
+      limit: number;
+      keyword?: string | null;
+      review_status?: string | null;
+      risk_level?: string | null;
+      topic_id?: number | null;
+      source_site?: string | null;
+    }
+  >({
+    mutationFn: async (payload) => {
+      const res = await api.post(`/news/admin/batch/query`, {
+        action: "rerun_ai",
+        limit: payload.limit,
+        keyword: payload.keyword ?? null,
+        review_status: payload.review_status ?? null,
+        risk_level: payload.risk_level ?? null,
+        topic_id: payload.topic_id ?? null,
+        source_site: payload.source_site ?? null,
+      });
+      return res.data as NewsBatchActionResponse;
+    },
+    errorMessageFallback: "批量重跑失败，请稍后重试",
+    invalidateQueryKeys: [newsQueryKey as any],
+    onSuccess: (data) => {
+      if (data?.message) toast.success(data.message);
     },
   });
 
@@ -561,6 +653,22 @@ export default function NewsManagePage() {
       setEditImages(extractMarkdownImageUrls(content));
     }
   };
+
+  useEffect(() => {
+    const rawId = String(
+      searchParams.get("news_id") || searchParams.get("id") || ""
+    ).trim();
+    if (!rawId) return;
+
+    const n = Number(rawId);
+    if (!Number.isFinite(n) || n <= 0) return;
+
+    const key = `news_id:${n}`;
+    if (deepLinkAppliedKey === key) return;
+    setDeepLinkAppliedKey(key);
+    void openEdit(Number(n));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, deepLinkAppliedKey]);
 
   const versionsQuery = useQuery({
     queryKey: ["news-versions", { id: editingId, limit: 50 }] as const,
@@ -1210,7 +1318,7 @@ export default function NewsManagePage() {
       </div>
 
       <Card variant="surface" padding="md">
-        <div className="flex gap-4 mb-6">
+        <div className="flex flex-wrap gap-4 mb-6">
           <div className="flex-1 max-w-md">
             <Input
               icon={Search}
@@ -1222,6 +1330,41 @@ export default function NewsManagePage() {
               placeholder="搜索新闻标题..."
             />
           </div>
+          <select
+            data-testid="admin-news-topic-filter"
+            value={topicId}
+            onChange={(e) => {
+              setTopicId(e.target.value);
+              setPage(1);
+            }}
+            className="px-4 py-2 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none transition hover:border-slate-300 focus-visible:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white dark:hover:border-white/20 dark:focus-visible:ring-offset-slate-900"
+          >
+            <option value="all">全部专题</option>
+            {(Array.isArray(topicsQuery.data?.items)
+              ? topicsQuery.data?.items
+              : []
+            ).map((t) => (
+              <option key={t.id} value={String(t.id)}>
+                {t.title}
+              </option>
+            ))}
+          </select>
+          <select
+            data-testid="admin-news-source-site-filter"
+            value={sourceSite}
+            onChange={(e) => {
+              setSourceSite(e.target.value);
+              setPage(1);
+            }}
+            className="px-4 py-2 rounded-xl border border-slate-200/70 bg-white text-slate-900 outline-none transition hover:border-slate-300 focus-visible:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white dark:hover:border-white/20 dark:focus-visible:ring-offset-slate-900"
+          >
+            <option value="all">全部来源站点</option>
+            {sourceSiteOptions.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
           <select
             data-testid="admin-news-review-filter"
             value={reviewStatus}
@@ -1251,6 +1394,68 @@ export default function NewsManagePage() {
             <option value="warning">注意</option>
             <option value="danger">敏感</option>
           </select>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 -mt-2 mb-6">
+          <div className="text-xs text-slate-500 dark:text-white/40 mr-1">
+            快捷筛选：
+          </div>
+          <Button
+            variant={reviewStatus === "pending" && riskLevel === "all" ? "primary" : "outline"}
+            size="sm"
+            onClick={() => {
+              setReviewStatus("pending");
+              setRiskLevel("all");
+              setPage(1);
+            }}
+          >
+            待审核
+          </Button>
+          <Button
+            variant={riskLevel === "danger" && reviewStatus === "all" ? "primary" : "outline"}
+            size="sm"
+            onClick={() => {
+              setRiskLevel("danger");
+              setReviewStatus("all");
+              setPage(1);
+            }}
+          >
+            敏感
+          </Button>
+          <Button
+            variant={reviewStatus === "pending" && riskLevel === "danger" ? "primary" : "outline"}
+            size="sm"
+            onClick={() => {
+              setReviewStatus("pending");
+              setRiskLevel("danger");
+              setPage(1);
+            }}
+          >
+            待审+敏感
+          </Button>
+          <Button
+            variant={riskLevel === "unknown" ? "primary" : "outline"}
+            size="sm"
+            onClick={() => {
+              setRiskLevel("unknown");
+              setPage(1);
+            }}
+          >
+            未标注
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setReviewStatus("all");
+              setRiskLevel("all");
+              setTopicId("all");
+              setSourceSite("all");
+              setPage(1);
+            }}
+          >
+            重置筛选
+          </Button>
         </div>
 
         {loading && news.length === 0 ? (
@@ -1344,6 +1549,41 @@ export default function NewsManagePage() {
                   }
                 >
                   执行
+                </Button>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (batchQueryRerunMutation.isPending) return;
+                    const raw = prompt("按当前筛选批量重跑 AI：最多处理条数（1-500）", "200");
+                    if (raw === null) return;
+                    const n = Number(String(raw || "").trim());
+                    const limit = Number.isFinite(n) ? Math.max(1, Math.min(500, n)) : 200;
+
+                    const kw = keyword.trim();
+                    const rs = String(reviewStatus || "").trim();
+                    const rl = String(riskLevel || "").trim();
+                    const tid = String(topicId || "").trim();
+                    const ss = String(sourceSite || "").trim();
+
+                    if (!confirm(`确认按当前筛选批量重跑 AI？将最多处理 ${limit} 条。`)) return;
+
+                    batchQueryRerunMutation.mutate({
+                      limit,
+                      keyword: kw ? kw : null,
+                      review_status: rs && rs !== "all" ? rs : null,
+                      risk_level: rl && rl !== "all" ? rl : null,
+                      topic_id: tid && tid !== "all" ? Number(tid) : null,
+                      source_site: ss && ss !== "all" ? ss : null,
+                    });
+                  }}
+                  isLoading={batchQueryRerunMutation.isPending}
+                  loadingText="重跑中..."
+                  disabled={batchQueryRerunMutation.isPending}
+                  title="按当前筛选条件（专题/来源/关键词/审核/风险）批量重跑 AI（最多 500 条）"
+                >
+                  按筛选重跑AI
                 </Button>
               </div>
             </div>

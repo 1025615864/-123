@@ -20,11 +20,25 @@ api.interceptors.request.use((config) => {
       "Authorization"
     ] = `Bearer ${token}`;
   }
+  config.headers = config.headers ?? {};
+  (config.headers as Record<string, string>)["X-Api-Envelope"] = "1";
   return config;
 });
 
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    const data: any = response?.data;
+    if (
+      data &&
+      typeof data === "object" &&
+      ("ok" in data) &&
+      ("data" in data) &&
+      data.ok === true
+    ) {
+      response.data = data.data;
+    }
+    return response;
+  },
   (error) => {
     const status = error?.response?.status;
     if (status === 401) {

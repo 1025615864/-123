@@ -9,7 +9,7 @@
   "executionEnvironments": [
     {
       "root": "./backend/tests",
-      "extraPaths": ["./backend"],
+      "extraPaths": [".."],
       "reportGeneralTypeIssues": "none",
       "reportMissingParameterType": "none",
       "reportMissingTypeArgument": "none",
@@ -22,11 +22,11 @@
     },
     {
       "root": "./backend/app",
-      "extraPaths": ["./backend"]
+      "extraPaths": [".."]
     },
     {
       "root": "./backend",
-      "extraPaths": ["./backend"]
+      "extraPaths": ["."]
     }
   ],
   "reportCallInDefaultInitializer": "none",

@@ -49,7 +49,11 @@ const CalendarPage = lazy(() => import("./pages/CalendarPage"));
 const DocumentGeneratorPage = lazy(() => import("./pages/DocumentGeneratorPage"));
 const FaqPage = lazy(() => import("./pages/FaqPage"));
 const SharePage = lazy(() => import("./pages/SharePage"));
+const VerifyEmailPage = lazy(() => import("./pages/VerifyEmailPage"));
+const ForgotPasswordPage = lazy(() => import("./pages/ForgotPasswordPage"));
+const ResetPasswordPage = lazy(() => import("./pages/ResetPasswordPage"));
 const PaymentReturnPage = lazy(() => import("./pages/PaymentReturnPage"));
+const VipPage = lazy(() => import("./pages/VipPage"));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage"));
 
 // 懒加载管理后台页面
@@ -64,6 +68,7 @@ const LawFirmsManagePage = lazy(() => import("./pages/admin/LawFirmsManagePage")
 const SettingsPage = lazy(() => import("./pages/admin/SettingsPage"));
 const KnowledgeManagePage = lazy(() => import("./pages/admin/KnowledgeManagePage"));
 const TemplatesManagePage = lazy(() => import("./pages/admin/TemplatesManagePage"));
+const DocumentTemplatesManagePage = lazy(() => import("./pages/admin/DocumentTemplatesManagePage"));
 const ForumManagePage = lazy(() => import("./pages/admin/ForumManagePage"));
 const LawyerVerificationsPage = lazy(() => import("./pages/admin/LawyerVerificationsPage"));
 const LogsPage = lazy(() => import("./pages/admin/LogsPage"));
@@ -106,6 +111,7 @@ function App() {
                 <Route path="lawyer-verifications" element={<LawyerVerificationsPage />} />
                 <Route path="knowledge" element={<KnowledgeManagePage />} />
                 <Route path="templates" element={<TemplatesManagePage />} />
+                <Route path="document-templates" element={<DocumentTemplatesManagePage />} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="logs" element={<LogsPage />} />
                 <Route path="notifications" element={<NotificationsPage />} />
@@ -166,11 +172,15 @@ function App() {
                 <Route path="documents" element={<DocumentGeneratorPage />} />
                 <Route path="faq" element={<FaqPage />} />
                 <Route path="share/:token" element={<SharePage />} />
+                <Route path="verify-email" element={<VerifyEmailPage />} />
                 <Route path="login" element={<LoginPage />} />
                 <Route path="register" element={<RegisterPage />} />
+                <Route path="forgot-password" element={<ForgotPasswordPage />} />
+                <Route path="reset-password" element={<ResetPasswordPage />} />
                 <Route path="terms" element={<TermsPage />} />
                 <Route path="privacy" element={<PrivacyPolicyPage />} />
                 <Route path="ai-disclaimer" element={<AiDisclaimerPage />} />
+                <Route path="vip" element={<VipPage />} />
                 <Route path="profile" element={<ProfilePage />} />
                 <Route path="*" element={<NotFoundPage />} />
               </Route>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { CreditCard, ExternalLink, Eye, FileText, RefreshCw, XCircle } from 'lucide-react'
@@ -21,6 +21,13 @@ type ThirdPartyPayResponse = {
   pay_url?: string
 }
 
+type PaymentChannelStatus = {
+  alipay_configured: boolean
+  wechatpay_configured: boolean
+  ikunpay_configured: boolean
+  available_methods: string[]
+}
+
 function orderStatusToBadgeVariant(status: string): 'default' | 'primary' | 'success' | 'warning' | 'danger' | 'info' {
   const s = String(status || '').toLowerCase()
   if (s === 'paid') return 'success'
@@ -37,7 +44,7 @@ function orderStatusToLabel(status: string): string {
   if (s === 'pending') return '待支付'
   if (s === 'cancelled') return '已取消'
   if (s === 'refunded') return '已退款'
-  if (s === 'failed') return '失败'
+  if (s === 'failed') return '支付失败'
   return status || '未知'
 }
 
@@ -120,6 +127,7 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
   const [activeCancelOrderNo, setActiveCancelOrderNo] = useState<string | null>(null)
   const [activeBalancePayOrderNo, setActiveBalancePayOrderNo] = useState<string | null>(null)
   const [activeAlipayOrderNo, setActiveAlipayOrderNo] = useState<string | null>(null)
+  const [activeIkunpayOrderNo, setActiveIkunpayOrderNo] = useState<string | null>(null)
 
   const [paymentGuideOpen, setPaymentGuideOpen] = useState(false)
   const [paymentGuideOrderNo, setPaymentGuideOrderNo] = useState<string | null>(null)
@@ -149,12 +157,18 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
     placeholderData: (prev) => prev,
   })
 
-  useEffect(() => {
-    if (!listQuery.error) return
-    const status = (listQuery.error as any)?.response?.status
-    if (status === 401) return
-    toast.error(getApiErrorMessage(listQuery.error, '订单列表加载失败，请稍后重试'))
-  }, [listQuery.error, toast])
+  const channelStatusQuery = useQuery({
+    queryKey: queryKeys.paymentChannelStatus(),
+    queryFn: async () => {
+      const res = await api.get('/payment/channel-status')
+      return (res.data || {}) as PaymentChannelStatus
+    },
+    enabled: isAuthenticated,
+    retry: 1,
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  })
 
   const cancelMutation = useAppMutation<unknown, string>({
     mutationFn: async (orderNo) => {
@@ -229,7 +243,42 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
     },
   })
 
-  const actionBusy = cancelMutation.isPending || balancePayMutation.isPending || alipayMutation.isPending
+  const ikunpayMutation = useAppMutation<ThirdPartyPayResponse, string>({
+    mutationFn: async (orderNo) => {
+      const res = await api.post(`/payment/orders/${encodeURIComponent(orderNo)}/pay`, {
+        payment_method: 'ikunpay',
+      })
+      return (res.data || {}) as ThirdPartyPayResponse
+    },
+    errorMessageFallback: '获取支付链接失败，请稍后重试',
+    disableErrorToast: true,
+    onMutate: async (orderNo) => {
+      setActiveIkunpayOrderNo(orderNo)
+    },
+    onSuccess: (data, orderNo) => {
+      const url = String(data?.pay_url || '').trim()
+      if (!url) {
+        toast.error('未获取到支付链接')
+        return
+      }
+      window.open(url, '_blank', 'noopener,noreferrer')
+      toast.success('已打开支付页面')
+      setPaymentGuideOrderNo(String(orderNo || '').trim() || null)
+      setPaymentGuideOpen(true)
+    },
+    onError: (err) => {
+      toast.error(getApiErrorMessage(err, '获取支付链接失败，请稍后重试'))
+    },
+    onSettled: (_data, _err, orderNo) => {
+      setActiveIkunpayOrderNo((prev) => (prev === orderNo ? null : prev))
+    },
+  })
+
+  const actionBusy =
+    cancelMutation.isPending ||
+    balancePayMutation.isPending ||
+    alipayMutation.isPending ||
+    ikunpayMutation.isPending
 
   const [detailOpen, setDetailOpen] = useState(false)
   const [detailOrderNo, setDetailOrderNo] = useState<string | null>(null)
@@ -262,15 +311,35 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
   }
 
   const handleAlipayPay = (orderNo: string) => {
+    if (!channelStatusQuery.data && channelStatusQuery.isLoading) {
+      toast.info('支付渠道状态加载中，请稍后重试')
+      return
+    }
+    if (channelStatusQuery.data?.alipay_configured === false) {
+      toast.warning('支付宝未配置')
+      return
+    }
     if (alipayMutation.isPending) return
     alipayMutation.mutate(orderNo)
+  }
+
+  const handleIkunpayPay = (orderNo: string) => {
+    if (!channelStatusQuery.data && channelStatusQuery.isLoading) {
+      toast.info('支付渠道状态加载中，请稍后重试')
+      return
+    }
+    if (channelStatusQuery.data?.ikunpay_configured === false) {
+      toast.warning('爱坤支付未配置')
+      return
+    }
+    if (ikunpayMutation.isPending) return
+    ikunpayMutation.mutate(orderNo)
   }
 
   const handleRefreshStatus = async () => {
     setRefreshingTarget('__all__')
     const res = await listQuery.refetch()
     if (res.error) {
-      toast.error(getApiErrorMessage(res.error, '刷新失败，请稍后重试'))
       setRefreshingTarget(null)
       return
     }
@@ -278,7 +347,7 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
     if (detailOrderNo) {
       const detailRes = await detailQuery.refetch()
       if (detailRes.error) {
-        toast.error(getApiErrorMessage(detailRes.error, '订单详情刷新失败'))
+        // handled by global error handler
       }
     }
 
@@ -293,14 +362,13 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
     setRefreshingTarget(target)
     const res = await listQuery.refetch()
     if (res.error) {
-      toast.error(getApiErrorMessage(res.error, '刷新失败，请稍后重试'))
       setRefreshingTarget(null)
       return
     }
     if (detailOrderNo && detailOrderNo === target) {
       const detailRes = await detailQuery.refetch()
       if (detailRes.error) {
-        toast.error(getApiErrorMessage(detailRes.error, '订单详情刷新失败'))
+        // handled by global error handler
       }
     }
     setLastRefreshedAt(new Date().toLocaleString())
@@ -406,6 +474,18 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
 
         {listQuery.isLoading && items.length === 0 ? (
           <ListSkeleton count={4} />
+        ) : listQuery.isError && items.length === 0 ? (
+          <EmptyState
+            icon={XCircle}
+            title="订单加载失败"
+            description="请检查网络后重试"
+            tone={actualTheme}
+            action={
+              <Button variant="outline" size="sm" icon={RefreshCw} onClick={() => void listQuery.refetch()}>
+                重试
+              </Button>
+            }
+          />
         ) : items.length === 0 ? (
           <EmptyState icon={FileText} title="暂无订单" description="你的订单会显示在这里" tone={actualTheme} />
         ) : (
@@ -419,8 +499,9 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
               const nextStep = orderTypeToNextStep(o.order_type)
               const balancePayLoading = balancePayMutation.isPending && activeBalancePayOrderNo === o.order_no
               const alipayLoading = alipayMutation.isPending && activeAlipayOrderNo === o.order_no
+              const ikunpayLoading = ikunpayMutation.isPending && activeIkunpayOrderNo === o.order_no
               const cancelLoading = cancelMutation.isPending && activeCancelOrderNo === o.order_no
-              const rowBusy = actionBusy && !(balancePayLoading || alipayLoading || cancelLoading)
+              const rowBusy = actionBusy && !(balancePayLoading || alipayLoading || ikunpayLoading || cancelLoading)
               return (
                 <Card key={o.order_no} variant="surface" padding="md" className="border border-slate-200/70 dark:border-white/10">
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -432,6 +513,17 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
                         </Badge>
                       </div>
                       <div className="mt-1 text-xs text-slate-500 dark:text-white/50">{hint.description}</div>
+                      {statusLower === 'pending' || statusLower === 'failed' ? (
+                        <div className="mt-1">
+                          <Link
+                            to={`/payment/return?order_no=${encodeURIComponent(String(o.order_no || ''))}`}
+                            className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+                          >
+                            去支付结果页查看状态
+                            <ExternalLink className="h-3 w-3" />
+                          </Link>
+                        </div>
+                      ) : null}
                       <div className="mt-2 space-y-1 text-sm text-slate-600 dark:text-white/60">
                         <div>订单号：{o.order_no}</div>
                         <div>金额：{fmtMoney(o.actual_amount)}</div>
@@ -469,17 +561,32 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
                           >
                             {statusLower === 'failed' ? '重新余额支付' : '余额支付'}
                           </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            icon={ExternalLink}
-                            isLoading={alipayLoading}
-                            loadingText="获取中..."
-                            disabled={rowBusy || alipayLoading}
-                            onClick={() => handleAlipayPay(o.order_no)}
-                          >
-                            {statusLower === 'failed' ? '重新支付宝支付' : '支付宝支付'}
-                          </Button>
+                          {channelStatusQuery.data?.alipay_configured === false ? null : (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              icon={ExternalLink}
+                              isLoading={alipayLoading}
+                              loadingText="获取中..."
+                              disabled={rowBusy || alipayLoading}
+                              onClick={() => handleAlipayPay(o.order_no)}
+                            >
+                              {statusLower === 'failed' ? '重新支付宝支付' : '支付宝支付'}
+                            </Button>
+                          )}
+                          {channelStatusQuery.data?.ikunpay_configured === false ? null : (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              icon={ExternalLink}
+                              isLoading={ikunpayLoading}
+                              loadingText="获取中..."
+                              disabled={rowBusy || ikunpayLoading}
+                              onClick={() => handleIkunpayPay(o.order_no)}
+                            >
+                              {statusLower === 'failed' ? '重新爱坤支付' : '爱坤支付'}
+                            </Button>
+                          )}
                         </>
                       ) : null}
                       {canCancel ? (
@@ -590,6 +697,20 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
                   const detail = detailQuery.data
                   if (!detail) return null
                   const s = String(detail.status || '').toLowerCase()
+                  if (s !== 'pending' && s !== 'failed') return null
+                  return (
+                    <Link to={`/payment/return?order_no=${encodeURIComponent(String(detail.order_no || ''))}`}> 
+                      <Button variant="outline" size="sm" icon={ExternalLink}>
+                        去支付结果页
+                      </Button>
+                    </Link>
+                  )
+                })()}
+
+                {(() => {
+                  const detail = detailQuery.data
+                  if (!detail) return null
+                  const s = String(detail.status || '').toLowerCase()
                   const canPay = s === 'pending' || s === 'failed'
                   const canCancel = s === 'pending'
                   const next = orderTypeToNextStep(detail.order_type)
@@ -612,20 +733,38 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
                           >
                             {s === 'failed' ? '重新余额支付' : '余额支付'}
                           </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            icon={ExternalLink}
-                            isLoading={alipayMutation.isPending && activeAlipayOrderNo === detail.order_no}
-                            loadingText="获取中..."
-                            disabled={
-                              (actionBusy && activeAlipayOrderNo !== detail.order_no) ||
-                              alipayMutation.isPending
-                            }
-                            onClick={() => handleAlipayPay(detail.order_no)}
-                          >
-                            {s === 'failed' ? '重新支付宝支付' : '支付宝支付'}
-                          </Button>
+                          {channelStatusQuery.data?.alipay_configured === false ? null : (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              icon={ExternalLink}
+                              isLoading={alipayMutation.isPending && activeAlipayOrderNo === detail.order_no}
+                              loadingText="获取中..."
+                              disabled={
+                                (actionBusy && activeAlipayOrderNo !== detail.order_no) ||
+                                alipayMutation.isPending
+                              }
+                              onClick={() => handleAlipayPay(detail.order_no)}
+                            >
+                              {s === 'failed' ? '重新支付宝支付' : '支付宝支付'}
+                            </Button>
+                          )}
+                          {channelStatusQuery.data?.ikunpay_configured === false ? null : (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              icon={ExternalLink}
+                              isLoading={ikunpayMutation.isPending && activeIkunpayOrderNo === detail.order_no}
+                              loadingText="获取中..."
+                              disabled={
+                                (actionBusy && activeIkunpayOrderNo !== detail.order_no) ||
+                                ikunpayMutation.isPending
+                              }
+                              onClick={() => handleIkunpayPay(detail.order_no)}
+                            >
+                              {s === 'failed' ? '重新爱坤支付' : '爱坤支付'}
+                            </Button>
+                          )}
                         </>
                       ) : null}
                       {canCancel ? (
@@ -699,6 +838,17 @@ export default function OrdersPage({ embedded = false }: { embedded?: boolean })
           >
             我已支付，刷新状态
           </Button>
+
+          {paymentGuideOrderNo ? (
+            <Link
+              to={`/payment/return?order_no=${encodeURIComponent(paymentGuideOrderNo)}`}
+              className="block"
+            >
+              <Button fullWidth variant="outline" icon={ExternalLink}>
+                去支付结果页查看状态
+              </Button>
+            </Link>
+          ) : null}
 
           <Button
             fullWidth

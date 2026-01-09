@@ -3,20 +3,24 @@ from contextlib import asynccontextmanager
 import logging
 import asyncio
 import os
+import time
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.exceptions import ResponseValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import get_settings
 from .database import init_db
 from .services.cache_service import cache_service
+from .services.prometheus_metrics import prometheus_metrics
 from .database import AsyncSessionLocal
 from .routers import api_router, websocket
 from .middleware.logging_middleware import RequestLoggingMiddleware, ErrorLoggingMiddleware
 from .middleware.rate_limit import RateLimitMiddleware
+from .middleware.metrics_middleware import MetricsMiddleware
+from .middleware.envelope_middleware import EnvelopeMiddleware
 from .utils.periodic_task_runner import PeriodicLockedRunner
 # from .routers import ai  # AI module disabled - needs langchain dependencies
 
@@ -50,8 +54,20 @@ async def lifespan(app: FastAPI):
         return await news_service.process_scheduled_news(session)
 
     async def _scheduled_news_job_wrapper() -> object:
-        async with AsyncSessionLocal() as session:
-            return await _scheduled_news_job(session)
+        start = time.perf_counter()
+        ok = True
+        try:
+            async with AsyncSessionLocal() as session:
+                return await _scheduled_news_job(session)
+        except Exception:
+            ok = False
+            raise
+        finally:
+            prometheus_metrics.record_job(
+                name="scheduled_news",
+                ok=bool(ok),
+                duration_seconds=max(0.0, float(time.perf_counter() - start)),
+            )
 
     if settings.redis_url:
         redis_connected = bool(await cache_service.connect(settings.redis_url))
@@ -79,10 +95,22 @@ async def lifespan(app: FastAPI):
         rss_enabled = False
 
     async def _rss_ingest_job_wrapper() -> object:
-        async with AsyncSessionLocal() as session:
-            from .services.rss_ingest_service import rss_ingest_service
+        start = time.perf_counter()
+        ok = True
+        try:
+            async with AsyncSessionLocal() as session:
+                from .services.rss_ingest_service import rss_ingest_service
 
-            return await rss_ingest_service.run_once(session)
+                return await rss_ingest_service.run_once(session)
+        except Exception:
+            ok = False
+            raise
+        finally:
+            prometheus_metrics.record_job(
+                name="rss_ingest",
+                ok=bool(ok),
+                duration_seconds=max(0.0, float(time.perf_counter() - start)),
+            )
 
     rss_task: asyncio.Task[None] | None = None
     if rss_enabled:
@@ -102,10 +130,22 @@ async def lifespan(app: FastAPI):
         news_ai_enabled = False
 
     async def _news_ai_job_wrapper() -> object:
-        async with AsyncSessionLocal() as session:
-            from .services.news_ai_pipeline_service import news_ai_pipeline_service
+        start = time.perf_counter()
+        ok = True
+        try:
+            async with AsyncSessionLocal() as session:
+                from .services.news_ai_pipeline_service import news_ai_pipeline_service
 
-            return await news_ai_pipeline_service.run_once(session)
+                return await news_ai_pipeline_service.run_once(session)
+        except Exception:
+            ok = False
+            raise
+        finally:
+            prometheus_metrics.record_job(
+                name="news_ai_pipeline",
+                ok=bool(ok),
+                duration_seconds=max(0.0, float(time.perf_counter() - start)),
+            )
 
     news_ai_task: asyncio.Task[None] | None = None
     if news_ai_enabled:
@@ -126,10 +166,22 @@ async def lifespan(app: FastAPI):
         settlement_enabled = False
 
     async def _settlement_job_wrapper() -> object:
-        async with AsyncSessionLocal() as session:
-            from .services.settlement_service import settlement_service
+        start = time.perf_counter()
+        ok = True
+        try:
+            async with AsyncSessionLocal() as session:
+                from .services.settlement_service import settlement_service
 
-            return await settlement_service.settle_due_income_records(session)
+                return await settlement_service.settle_due_income_records(session)
+        except Exception:
+            ok = False
+            raise
+        finally:
+            prometheus_metrics.record_job(
+                name="settlement",
+                ok=bool(ok),
+                duration_seconds=max(0.0, float(time.perf_counter() - start)),
+            )
 
     settlement_task: asyncio.Task[None] | None = None
     if settlement_enabled:
@@ -151,48 +203,60 @@ async def lifespan(app: FastAPI):
         wechatpay_refresh_enabled = False
 
     async def _wechatpay_platform_certs_refresh_job_wrapper() -> object:
-        async with AsyncSessionLocal() as session:
-            if not (
-                settings.wechatpay_mch_id
-                and settings.wechatpay_mch_serial_no
-                and settings.wechatpay_private_key
-                and settings.wechatpay_api_v3_key
-            ):
-                return {"skipped": True, "reason": "wechatpay config missing"}
+        start = time.perf_counter()
+        ok = True
+        try:
+            async with AsyncSessionLocal() as session:
+                if not (
+                    settings.wechatpay_mch_id
+                    and settings.wechatpay_mch_serial_no
+                    and settings.wechatpay_private_key
+                    and settings.wechatpay_api_v3_key
+                ):
+                    return {"skipped": True, "reason": "wechatpay config missing"}
 
-            from .models.system import SystemConfig
-            from .utils.wechatpay_v3 import fetch_platform_certificates, dump_platform_certs_json
+                from .models.system import SystemConfig
+                from .utils.wechatpay_v3 import fetch_platform_certificates, dump_platform_certs_json
 
-            certs = await fetch_platform_certificates(
-                certificates_url=settings.wechatpay_certificates_url,
-                mch_id=settings.wechatpay_mch_id,
-                mch_serial_no=settings.wechatpay_mch_serial_no,
-                mch_private_key_pem=settings.wechatpay_private_key,
-                api_v3_key=settings.wechatpay_api_v3_key,
-            )
-            raw = dump_platform_certs_json(certs)
-
-            res = await session.execute(
-                select(SystemConfig).where(SystemConfig.key == "WECHATPAY_PLATFORM_CERTS_JSON")
-            )
-            row = res.scalar_one_or_none()
-            if row is None:
-                row = SystemConfig(
-                    key="WECHATPAY_PLATFORM_CERTS_JSON",
-                    value=raw,
-                    category="payment",
-                    description="WeChatPay platform certificates cache",
+                certs = await fetch_platform_certificates(
+                    certificates_url=settings.wechatpay_certificates_url,
+                    mch_id=settings.wechatpay_mch_id,
+                    mch_serial_no=settings.wechatpay_mch_serial_no,
+                    mch_private_key_pem=settings.wechatpay_private_key,
+                    api_v3_key=settings.wechatpay_api_v3_key,
                 )
-                session.add(row)
-            else:
-                row.value = raw
-                row.category = "payment"
-                if not (row.description or "").strip():
-                    row.description = "WeChatPay platform certificates cache"
-                session.add(row)
+                raw = dump_platform_certs_json(certs)
 
-            await session.commit()
-            return {"ok": True, "count": len(certs)}
+                res = await session.execute(
+                    select(SystemConfig).where(SystemConfig.key == "WECHATPAY_PLATFORM_CERTS_JSON")
+                )
+                row = res.scalar_one_or_none()
+                if row is None:
+                    row = SystemConfig(
+                        key="WECHATPAY_PLATFORM_CERTS_JSON",
+                        value=raw,
+                        category="payment",
+                        description="WeChatPay platform certificates cache",
+                    )
+                    session.add(row)
+                else:
+                    row.value = raw
+                    row.category = "payment"
+                    if not (row.description or "").strip():
+                        row.description = "WeChatPay platform certificates cache"
+                    session.add(row)
+
+                await session.commit()
+                return {"ok": True, "count": len(certs)}
+        except Exception:
+            ok = False
+            raise
+        finally:
+            prometheus_metrics.record_job(
+                name="wechatpay_platform_certs_refresh",
+                ok=bool(ok),
+                duration_seconds=max(0.0, float(time.perf_counter() - start)),
+            )
 
     wechatpay_task: asyncio.Task[None] | None = None
     if wechatpay_refresh_enabled:
@@ -326,6 +390,9 @@ app.add_middleware(
     trusted_proxies=settings.trusted_proxies,
 )
 
+app.add_middleware(MetricsMiddleware)
+app.add_middleware(EnvelopeMiddleware)
+
 app.include_router(api_router, prefix="/api")
 app.include_router(websocket.router)
 
@@ -345,6 +412,18 @@ async def root():
 async def health_check():
     """健康检查"""
     return {"status": "healthy"}
+
+
+@app.get("/metrics", include_in_schema=False)
+async def prometheus_metrics_endpoint(request: Request):
+    token = os.getenv("METRICS_AUTH_TOKEN", "").strip()
+    if token:
+        auth = str(request.headers.get("Authorization") or "").strip()
+        if auth != f"Bearer {token}":
+            return PlainTextResponse(content="unauthorized\n", status_code=401)
+
+    body = prometheus_metrics.render_prometheus()
+    return PlainTextResponse(content=body, media_type="text/plain; version=0.0.4")
 
 
 @app.get("/api/health")

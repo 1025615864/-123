@@ -1,9 +1,10 @@
 """法律文书生成API路由"""
 import os
 import time
-from typing import Annotated
+import urllib.parse
+from typing import Annotated, Protocol, cast
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
@@ -12,10 +13,12 @@ import json
 
 from ..database import get_db
 from ..models.document import GeneratedDocument
+from ..models.document_template import DocumentTemplate, DocumentTemplateVersion
 from ..models.user import User
 from ..utils.deps import get_current_user_optional, get_current_user
 from ..utils.rate_limiter import rate_limit, RateLimitConfig, rate_limiter, get_client_ip
 from ..services.quota_service import quota_service
+from ..services.document_templates_builtin import BUILTIN_DOCUMENT_TEMPLATES
 
 router = APIRouter(prefix="/documents", tags=["文书生成"])
 
@@ -78,6 +81,13 @@ class DocumentResponse(BaseModel):
     title: str
     content: str
     created_at: datetime
+    template_key: str | None = None
+    template_version: int | None = None
+
+
+class DocumentExportPdfRequest(BaseModel):
+    title: str
+    content: str
 
 
 # 文书模板
@@ -87,6 +97,7 @@ DOCUMENT_TEMPLATES = {
         "template": """民事起诉状
 
 原告：{plaintiff_name}
+
 被告：{defendant_name}
 
 诉讼请求：
@@ -187,6 +198,135 @@ DOCUMENT_TEMPLATES = {
 }
 
 
+async def _get_published_document_template(
+    db: AsyncSession, *, template_key: str
+) -> tuple[str, str | None, str, int] | None:
+    key = str(template_key or "").strip()
+    if not key:
+        return None
+
+    tpl_res = await db.execute(
+        select(DocumentTemplate).where(
+            DocumentTemplate.key == key,
+            DocumentTemplate.is_active.is_(True),
+        )
+    )
+    tpl = tpl_res.scalar_one_or_none()
+    if tpl is None:
+        return None
+
+    ver_res = await db.execute(
+        select(DocumentTemplateVersion)
+        .where(
+            DocumentTemplateVersion.template_id == int(tpl.id),
+            DocumentTemplateVersion.is_published.is_(True),
+        )
+        .order_by(DocumentTemplateVersion.version.desc())
+        .limit(1)
+    )
+    ver = ver_res.scalar_one_or_none()
+    if ver is None:
+        return None
+
+    content = str(ver.content or "").strip()
+    if not content:
+        return None
+
+    return (str(tpl.title), tpl.description, content, int(ver.version))
+
+
+def _escape_pdf_paragraph(text: str) -> str:
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\n", "<br/>")
+    )
+
+
+def _generate_document_pdf(*, title: str, content: str) -> bytes:
+    try:
+        from io import BytesIO
+
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.lib.units import mm
+        from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+        from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+    except Exception as e:
+        raise RuntimeError("PDF_DEPENDENCY_MISSING") from e
+
+    class _PdfMetrics(Protocol):
+        def registerFont(self, font: object) -> None: ...
+
+    class _DocBuilder(Protocol):
+        def build(self, flowables: list[object]) -> None: ...
+
+    cast(_PdfMetrics, cast(object, pdfmetrics)).registerFont(UnicodeCIDFont("STSong-Light"))
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        name="DocTitle",
+        parent=styles["Title"],
+        fontName="STSong-Light",
+        fontSize=18,
+        leading=24,
+        alignment=1,
+        spaceAfter=14,
+    )
+    meta_style = ParagraphStyle(
+        name="DocMeta",
+        parent=styles["BodyText"],
+        fontName="STSong-Light",
+        fontSize=9,
+        leading=14,
+        textColor=colors.grey,
+        spaceAfter=10,
+    )
+    body_style = ParagraphStyle(
+        name="DocBody",
+        parent=styles["BodyText"],
+        fontName="STSong-Light",
+        fontSize=11,
+        leading=18,
+    )
+
+    buf = BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        rightMargin=18 * mm,
+        leftMargin=18 * mm,
+        topMargin=18 * mm,
+        bottomMargin=18 * mm,
+    )
+
+    safe_title = str(title or "法律文书").strip() or "法律文书"
+    safe_content = str(content or "").strip()
+
+    story: list[object] = []
+    story.append(Paragraph(_escape_pdf_paragraph(safe_title), title_style))
+    story.append(Paragraph(_escape_pdf_paragraph(datetime.now().strftime("%Y年%m月%d日")), meta_style))
+    if safe_content:
+        story.append(Paragraph(_escape_pdf_paragraph(safe_content), body_style))
+    story.append(Spacer(1, 10))
+    story.append(
+        Paragraph(
+            _escape_pdf_paragraph(
+                "免责声明：本文书由系统生成，仅供参考。正式使用前，请务必咨询专业律师进行审核和修改。"
+            ),
+            meta_style,
+        )
+    )
+
+    cast(_DocBuilder, cast(object, doc)).build(story)
+    _ = buf.seek(0)
+    return buf.getvalue()
+
+
 @router.post("/generate", response_model=DocumentResponse)
 @rate_limit(*RateLimitConfig.DOCUMENT_GENERATE, by_ip=True, by_user=False)
 async def generate_document(
@@ -207,14 +347,28 @@ async def generate_document(
             detail="输入内容过长，请缩短事实/诉求/证据描述"
         )
 
-    if data.document_type not in DOCUMENT_TEMPLATES:
+    template_key = str(data.document_type or "").strip()
+    if not template_key:
+        raise HTTPException(status_code=400, detail="document_type 不能为空")
+
+    template_title: str | None = None
+    template_content: str | None = None
+    template_version: int | None = None
+
+    db_template = await _get_published_document_template(db, template_key=template_key)
+    if db_template is not None:
+        template_title, _desc, template_content, template_version = db_template
+    else:
+        builtin = BUILTIN_DOCUMENT_TEMPLATES.get(template_key)
+        if builtin is not None:
+            template_title = str(builtin.get("title") or template_key)
+            template_content = str(builtin.get("template") or "").strip() or None
+
+    if template_content is None or template_title is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"不支持的文书类型: {data.document_type}"
+            detail=f"不支持的文书类型: {template_key}",
         )
-    
-    template_info = DOCUMENT_TEMPLATES[data.document_type]
-    template = template_info["template"]
     
     # 准备证据部分
     evidence_section = ""
@@ -230,7 +384,7 @@ async def generate_document(
     date_str = datetime.now().strftime("%Y年%m月%d日")
     
     # 填充模板
-    content = template.format(
+    content = template_content.format(
         plaintiff_name=data.plaintiff_name,
         defendant_name=data.defendant_name,
         case_type=data.case_type,
@@ -249,21 +403,85 @@ async def generate_document(
             pass
 
     return DocumentResponse(
-        document_type=data.document_type,
-        title=template_info["title"],
+        document_type=template_key,
+        title=template_title,
         content=content,
-        created_at=datetime.now()
+        created_at=datetime.now(),
+        template_key=template_key,
+        template_version=template_version,
+    )
+
+
+@router.post("/export/pdf")
+@rate_limit(*RateLimitConfig.DOCUMENT_GENERATE, by_ip=True, by_user=False)
+async def export_document_pdf(
+    data: DocumentExportPdfRequest,
+):
+    try:
+        pdf_bytes = _generate_document_pdf(title=str(data.title or "").strip(), content=str(data.content or ""))
+    except RuntimeError as e:
+        if str(e) == "PDF_DEPENDENCY_MISSING":
+            raise HTTPException(status_code=501, detail="PDF 生成依赖未安装")
+        raise
+
+    ascii_filename = "document.pdf"
+    utf8_filename = f"{str(data.title or '法律文书').strip() or '法律文书'}.pdf"
+    quoted_utf8 = urllib.parse.quote(utf8_filename, safe="")
+    content_disposition = (
+        f"attachment; filename=\"{ascii_filename}\"; filename*=UTF-8''{quoted_utf8}"
+    )
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": content_disposition,
+        },
     )
 
 
 @router.get("/types")
-async def get_document_types():
+async def get_document_types(db: Annotated[AsyncSession, Depends(get_db)]):
     """获取支持的文书类型"""
+    try:
+        res = await db.execute(
+            select(DocumentTemplate).where(DocumentTemplate.is_active.is_(True)).order_by(DocumentTemplate.id.asc())
+        )
+        templates = res.scalars().all()
+
+        out: list[dict[str, str]] = []
+        for t in templates:
+            ver_res = await db.execute(
+                select(DocumentTemplateVersion)
+                .where(
+                    DocumentTemplateVersion.template_id == int(t.id),
+                    DocumentTemplateVersion.is_published.is_(True),
+                )
+                .order_by(DocumentTemplateVersion.version.desc())
+                .limit(1)
+            )
+            published = ver_res.scalar_one_or_none()
+            if published is None:
+                continue
+            out.append(
+                {
+                    "type": str(t.key),
+                    "name": str(t.title),
+                    "description": str(t.description or ""),
+                }
+            )
+
+        if out:
+            return out
+    except Exception:
+        pass
+
     return [
-        {"type": "complaint", "name": "民事起诉状", "description": "向法院提起民事诉讼的文书"},
-        {"type": "defense", "name": "民事答辩状", "description": "被告针对原告诉讼请求的答辩文书"},
-        {"type": "agreement", "name": "和解协议书", "description": "双方达成和解的协议文书"},
-        {"type": "letter", "name": "律师函", "description": "以律师名义发出的法律文书"},
+        {
+            "type": str(key),
+            "name": str(meta.get("title") or key),
+            "description": str(meta.get("description") or ""),
+        }
+        for key, meta in BUILTIN_DOCUMENT_TEMPLATES.items()
     ]
 
 
@@ -272,6 +490,8 @@ class DocumentSaveRequest(BaseModel):
     title: str
     content: str
     payload: dict[str, object] | None = None
+    template_key: str | None = None
+    template_version: int | None = None
 
 
 class DocumentItem(BaseModel):
@@ -299,11 +519,29 @@ async def save_document(
         except Exception:
             payload_json = None
 
+    template_key = str(data.template_key or data.document_type or "").strip() or None
+    template_version: int | None = None
+    if data.template_version is not None:
+        try:
+            template_version = int(data.template_version)
+        except Exception:
+            template_version = None
+
+    if template_version is None and template_key:
+        try:
+            published = await _get_published_document_template(db, template_key=template_key)
+            if published is not None:
+                template_version = int(published[3])
+        except Exception:
+            template_version = None
+
     doc = GeneratedDocument(
         user_id=current_user.id,
         document_type=str(data.document_type or "").strip(),
         title=str(data.title or "").strip() or "法律文书",
         content=str(data.content or "").strip(),
+        template_key=template_key,
+        template_version=template_version,
         payload_json=payload_json,
     )
     if not doc.document_type:
@@ -339,10 +577,10 @@ async def list_my_documents(
 
     items = [
         DocumentItem(
-            id=int(getattr(x, "id")),
-            document_type=str(getattr(x, "document_type")),
-            title=str(getattr(x, "title")),
-            created_at=getattr(x, "created_at"),
+            id=int(x.id),
+            document_type=str(x.document_type),
+            title=str(x.title),
+            created_at=x.created_at,
         )
         for x in rows
     ]
@@ -366,15 +604,60 @@ async def get_my_document(
         raise HTTPException(status_code=404, detail="文书不存在")
 
     return {
-        "id": int(getattr(doc, "id")),
-        "user_id": int(getattr(doc, "user_id")),
-        "document_type": str(getattr(doc, "document_type")),
-        "title": str(getattr(doc, "title")),
-        "content": str(getattr(doc, "content")),
-        "payload_json": getattr(doc, "payload_json"),
-        "created_at": getattr(doc, "created_at"),
-        "updated_at": getattr(doc, "updated_at"),
+        "id": int(doc.id),
+        "user_id": int(doc.user_id),
+        "document_type": str(doc.document_type),
+        "title": str(doc.title),
+        "content": str(doc.content),
+        "payload_json": doc.payload_json,
+        "created_at": doc.created_at,
+        "updated_at": doc.updated_at,
     }
+
+
+@router.get("/my/{doc_id}/export")
+async def export_my_document(
+    doc_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    format: Annotated[str, Query(max_length=10)] = "pdf",
+):
+    fmt = str(format or "").strip().lower()
+    if fmt != "pdf":
+        raise HTTPException(status_code=400, detail="暂不支持该格式")
+
+    res = await db.execute(
+        select(GeneratedDocument).where(
+            GeneratedDocument.id == int(doc_id),
+            GeneratedDocument.user_id == current_user.id,
+        )
+    )
+    doc = res.scalar_one_or_none()
+    if doc is None:
+        raise HTTPException(status_code=404, detail="文书不存在")
+
+    title = str(doc.title or "法律文书").strip() or "法律文书"
+    content = str(doc.content or "")
+    try:
+        pdf_bytes = _generate_document_pdf(title=title, content=content)
+    except RuntimeError as e:
+        if str(e) == "PDF_DEPENDENCY_MISSING":
+            raise HTTPException(status_code=501, detail="PDF 生成依赖未安装")
+        raise
+
+    ascii_filename = "document.pdf"
+    utf8_filename = f"{title}.pdf"
+    quoted_utf8 = urllib.parse.quote(utf8_filename, safe="")
+    content_disposition = (
+        f"attachment; filename=\"{ascii_filename}\"; filename*=UTF-8''{quoted_utf8}"
+    )
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": content_disposition,
+        },
+    )
 
 
 @router.delete("/my/{doc_id}")

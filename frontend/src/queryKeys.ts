@@ -46,6 +46,8 @@ export const queryKeys = {
   paymentOrderDetail: (orderNo: string | null) =>
     ["payment-order", { orderNo }] as const,
 
+  paymentChannelStatus: () => ["payment-channel-status"] as const,
+
   adminPaymentCallbackEvents: (
     page: number,
     pageSize: number,

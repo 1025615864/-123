@@ -40,10 +40,11 @@ from ..schemas.news import (
     NewsVersionItem, NewsVersionListResponse, NewsRollbackRequest,
     NewsAIGenerateRequest, NewsAIGenerationItem, NewsAIGenerationListResponse,
     NewsLinkCheckRequest, NewsLinkCheckItem, NewsLinkCheckResponse,
-    NewsBatchActionRequest, NewsBatchActionResponse,
+    NewsBatchActionRequest, NewsBatchActionResponse, NewsBatchQueryRequest,
     ScheduledNewsItem, ScheduledNewsListResponse,
     NewsSourceCreate, NewsSourceUpdate, NewsSourceResponse, NewsSourceListResponse,
     NewsIngestRunResponse, NewsIngestRunListResponse,
+    NewsSourceHealthItem, NewsSourceHealthListResponse,
 )
 from ..services.news_service import news_service
 from ..services.news_workbench_service import news_workbench_service
@@ -538,6 +539,85 @@ async def admin_list_news_sources(
     res = await db.execute(select(NewsSource).order_by(NewsSource.id.asc()))
     rows = list(res.scalars().all())
     return NewsSourceListResponse(items=[NewsSourceResponse.model_validate(s) for s in rows])
+
+
+@router.get(
+    "/admin/sources/health",
+    response_model=NewsSourceHealthListResponse,
+    summary="管理员获取采集来源健康度",
+)
+async def admin_list_news_sources_health(
+    _current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    limit_per_source: Annotated[int, Query(ge=1, le=200)] = 20,
+):
+    limit = max(1, min(200, int(limit_per_source)))
+
+    src_res = await db.execute(select(NewsSource).order_by(NewsSource.id.asc()))
+    sources = list(src_res.scalars().all())
+    source_ids = [int(s.id) for s in sources if _coerce_int(getattr(s, "id", None)) is not None]
+    if not source_ids:
+        return NewsSourceHealthListResponse(limit_per_source=int(limit), items=[])
+
+    rn = func.row_number().over(
+        partition_by=NewsIngestRun.source_id,
+        order_by=(desc(NewsIngestRun.created_at), desc(NewsIngestRun.id)),
+    ).label("rn")
+
+    runs_subq = (
+        select(
+            NewsIngestRun.source_id.label("source_id"),
+            NewsIngestRun.status.label("status"),
+            rn,
+        )
+        .where(NewsIngestRun.source_id.in_(source_ids))
+        .subquery()
+    )
+
+    runs_res = await db.execute(
+        select(runs_subq.c.source_id, runs_subq.c.status, runs_subq.c.rn).where(
+            runs_subq.c.rn <= int(limit)
+        )
+    )
+    rows = list(runs_res.all())
+
+    grouped: dict[int, list[tuple[int, str]]] = {}
+    for sid_obj, status_obj, rn_obj in rows:
+        sid = _coerce_int(sid_obj)
+        rni = _coerce_int(rn_obj)
+        if sid is None or sid <= 0 or rni is None or rni <= 0:
+            continue
+        st = str(status_obj or "").strip().lower()
+        grouped.setdefault(int(sid), []).append((int(rni), st))
+
+    items: list[NewsSourceHealthItem] = []
+    for s in sources:
+        sid2 = _coerce_int(getattr(s, "id", None))
+        if sid2 is None or sid2 <= 0:
+            continue
+        pairs = grouped.get(int(sid2), [])
+        pairs.sort(key=lambda x: x[0])
+        statuses = [p[1] for p in pairs]
+        recent_total = int(len(statuses))
+        recent_failed = int(sum(1 for x in statuses if x == "failed"))
+        failure_rate = float(recent_failed / recent_total) if recent_total > 0 else 0.0
+        last_status = statuses[0] if statuses else None
+
+        items.append(
+            NewsSourceHealthItem(
+                source_id=int(sid2),
+                recent_total=recent_total,
+                recent_failed=recent_failed,
+                failure_rate=float(failure_rate),
+                last_status=last_status,
+                last_run_at=getattr(s, "last_run_at", None),
+                last_success_at=getattr(s, "last_success_at", None),
+                last_error=getattr(s, "last_error", None),
+                last_error_at=getattr(s, "last_error_at", None),
+            )
+        )
+
+    return NewsSourceHealthListResponse(limit_per_source=int(limit), items=items)
 
 
 @router.post("/admin/sources", response_model=NewsSourceResponse, summary="管理员创建采集来源")
@@ -1420,14 +1500,13 @@ async def admin_news_ai_generate(
 ):
     from ..routers.system import log_admin_action
 
-    news_id = getattr(data, "news_id", None)
-    nid = int(news_id) if news_id is not None else None
+    nid = _coerce_int(data.news_id)
 
     title = getattr(data, "title", None)
     summary = getattr(data, "summary", None)
     content = getattr(data, "content", None)
 
-    use_news_content = bool(getattr(data, "use_news_content", True))
+    use_news_content = bool(data.use_news_content)
     if use_news_content and nid is not None and nid > 0:
         t0, s0, c0 = await news_workbench_service.get_news_content_for_task(db, int(nid))
         if title is None:
@@ -1444,8 +1523,8 @@ async def admin_news_ai_generate(
     if not task_type:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="task_type 不能为空")
 
-    wc_min = getattr(data, "word_count_min", None)
-    wc_max = getattr(data, "word_count_max", None)
+    wc_min = _coerce_int(data.word_count_min)
+    wc_max = _coerce_int(data.word_count_max)
     if wc_min is not None and wc_max is not None and int(wc_min) > int(wc_max):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="word_count_min 不能大于 word_count_max")
 
@@ -1509,11 +1588,10 @@ async def admin_check_news_links(
 ):
     from ..routers.system import log_admin_action
 
-    news_id = getattr(data, "news_id", None)
-    nid = int(news_id) if news_id is not None else None
-    markdown = getattr(data, "markdown", None)
+    nid = _coerce_int(data.news_id)
+    markdown = data.markdown
 
-    use_news_content = bool(getattr(data, "use_news_content", True))
+    use_news_content = bool(data.use_news_content)
     if (markdown is None) and use_news_content and nid is not None and nid > 0:
         _, _, c0 = await news_workbench_service.get_news_content_for_task(db, int(nid))
         markdown = c0
@@ -1527,8 +1605,8 @@ async def admin_check_news_links(
         user_id=int(current_user.id),
         news_id=nid,
         markdown=md,
-        timeout_seconds=float(getattr(data, "timeout_seconds", 6.0) or 6.0),
-        max_urls=int(getattr(data, "max_urls", 50) or 50),
+        timeout_seconds=float(data.timeout_seconds or 6.0),
+        max_urls=int(data.max_urls or 50),
     )
 
     await log_admin_action(
@@ -1701,6 +1779,76 @@ async def admin_batch_action_news(
         skipped=skipped,
         action=action,
         reason=reason,
+        message=msg,
+    )
+
+
+@router.post("/admin/batch/query", response_model=NewsBatchActionResponse, summary="新闻按筛选批量操作")
+async def admin_batch_action_news_by_query(
+    data: NewsBatchQueryRequest,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
+):
+    from ..routers.system import log_admin_action
+
+    action = str(data.action or "").strip().lower()
+    if action != "rerun_ai":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="action 仅支持 rerun_ai")
+
+    limit = int(data.limit or 200)
+    limit = max(1, min(500, limit))
+
+    topic_id = _coerce_int(data.topic_id)
+
+    news_list, total = await news_service.get_list(
+        db,
+        page=1,
+        page_size=limit,
+        category=data.category,
+        keyword=data.keyword,
+        published_only=False,
+        review_status=data.review_status,
+        ai_risk_level=data.risk_level,
+        source_site=data.source_site,
+        source=data.source,
+        topic_id=int(topic_id) if topic_id is not None else None,
+    )
+
+    ids = [int(n.id) for n in news_list]
+    processed: list[int] = []
+    skipped: list[int] = []
+
+    from ..services.news_ai_pipeline_service import news_ai_pipeline_service
+
+    for nid in ids:
+        try:
+            await news_ai_pipeline_service.rerun_news(db, int(nid))
+            processed.append(int(nid))
+        except Exception:
+            skipped.append(int(nid))
+
+    msg = (
+        f"已处理 {len(processed)} 条，跳过 {len(skipped)} 条，"
+        f"本次命中 {len(ids)} 条，筛选总数 {int(total)} 条"
+    )
+    await log_admin_action(
+        db,
+        int(current_user.id),
+        "batch_query_rerun_ai",
+        "news",
+        target_id=None,
+        description=msg,
+        request=request,
+    )
+
+    return NewsBatchActionResponse(
+        requested=ids,
+        processed=processed,
+        missing=[],
+        skipped=skipped,
+        action=action,
+        reason=None,
         message=msg,
     )
 
@@ -2098,6 +2246,9 @@ async def get_all_news(
     keyword: str | None = None,
     review_status: str | None = None,
     risk_level: str | None = None,
+    source_site: str | None = None,
+    source: str | None = None,
+    topic_id: int | None = None,
 ):
     """获取所有新闻，包括未发布的（需要管理员权限）"""
     _ = current_user
@@ -2110,6 +2261,9 @@ async def get_all_news(
         published_only=False,
         review_status=review_status,
         ai_risk_level=risk_level,
+        source_site=source_site,
+        source=source,
+        topic_id=int(topic_id) if topic_id is not None else None,
     )
 
     ids = [int(n.id) for n in news_list]

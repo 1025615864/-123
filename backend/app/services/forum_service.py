@@ -300,6 +300,7 @@ class ForumService:
         )
 
         await db.commit()
+
         await ForumService.invalidate_content_filter_config_cache()
         return await ForumService.apply_content_filter_config_from_db(db)
 
@@ -910,6 +911,25 @@ class ForumService:
             )
 
         await db.commit()
+
+    @staticmethod
+    async def restore_comment(db: AsyncSession, comment: Comment) -> Comment:
+        """恢复评论（撤销删除）"""
+        if not getattr(comment, "is_deleted", False):
+            return comment
+
+        comment.is_deleted = False
+
+        if comment.review_status in (None, "approved"):
+            _ = await db.execute(
+                update(Post)
+                .where(Post.id == comment.post_id)
+                .values(comment_count=func.coalesce(Post.comment_count, 0) + 1)
+            )
+
+        await db.commit()
+        await db.refresh(comment)
+        return comment
     
     @staticmethod
     async def get_comment(db: AsyncSession, comment_id: int) -> Comment | None:
@@ -919,6 +939,12 @@ class ForumService:
                 and_(Comment.id == comment_id, Comment.is_deleted == False)
             )
         )
+        return result.scalar_one_or_none()
+
+    @staticmethod
+    async def get_comment_any(db: AsyncSession, comment_id: int) -> Comment | None:
+        """获取评论（包含已删除）"""
+        result = await db.execute(select(Comment).where(Comment.id == comment_id))
         return result.scalar_one_or_none()
 
     @staticmethod

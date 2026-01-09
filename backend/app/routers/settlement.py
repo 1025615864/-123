@@ -87,7 +87,7 @@ async def _generate_csv_stream(fieldnames: list[str], rows_iter: AsyncIterator[M
 
 @router.get("/lawyer/wallet", response_model=LawyerWalletResponse, summary="律师-获取钱包")
 async def lawyer_get_wallet(
-    current_user: Annotated[User, Depends(require_lawyer)],
+    current_user: Annotated[User, Depends(require_lawyer_verified)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     lawyer = await settlement_service.get_current_lawyer(db, int(current_user.id))
@@ -104,7 +104,7 @@ async def lawyer_get_wallet(
     summary="律师-获取收入记录",
 )
 async def lawyer_list_income_records(
-    current_user: Annotated[User, Depends(require_lawyer)],
+    current_user: Annotated[User, Depends(require_lawyer_verified)],
     db: Annotated[AsyncSession, Depends(get_db)],
     status_filter: Annotated[str | None, Query(alias="status")] = None,
     page: Annotated[int, Query(ge=1)] = 1,
@@ -153,7 +153,7 @@ async def lawyer_list_income_records(
     summary="律师-导出收入记录",
 )
 async def lawyer_export_income_records(
-    current_user: Annotated[User, Depends(require_lawyer)],
+    current_user: Annotated[User, Depends(require_lawyer_verified)],
     db: Annotated[AsyncSession, Depends(get_db)],
     status_filter: Annotated[str | None, Query(alias="status")] = None,
 ):
@@ -231,7 +231,7 @@ async def lawyer_export_income_records(
     summary="律师-获取收款账户",
 )
 async def lawyer_list_bank_accounts(
-    current_user: Annotated[User, Depends(require_lawyer)],
+    current_user: Annotated[User, Depends(require_lawyer_verified)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     lawyer = await settlement_service.get_current_lawyer(db, int(current_user.id))
@@ -461,7 +461,7 @@ async def lawyer_set_default_bank_account(
     summary="律师-提现记录",
 )
 async def lawyer_list_withdrawals(
-    current_user: Annotated[User, Depends(require_lawyer)],
+    current_user: Annotated[User, Depends(require_lawyer_verified)],
     db: Annotated[AsyncSession, Depends(get_db)],
     status_filter: Annotated[str | None, Query(alias="status")] = None,
     page: Annotated[int, Query(ge=1)] = 1,
@@ -551,7 +551,7 @@ async def lawyer_list_withdrawals(
 )
 async def lawyer_get_withdrawal(
     withdrawal_id: int,
-    current_user: Annotated[User, Depends(require_lawyer)],
+    current_user: Annotated[User, Depends(require_lawyer_verified)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     lawyer = await settlement_service.get_current_lawyer(db, int(current_user.id))

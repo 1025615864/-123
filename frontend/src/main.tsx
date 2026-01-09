@@ -1,13 +1,67 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import App from './App'
 import { ThemeProvider } from './contexts/ThemeContext'
 import { LanguageProvider } from './contexts/LanguageContext'
+import { emitToast } from './hooks/useToast'
 import './index.css'
 
+import { getApiErrorMessage } from './utils'
+
+const toastDedupe = new Map<string, number>()
+
+function emitToastDeduped(type: 'success' | 'error' | 'info' | 'warning', message: string, dedupeMs = 2500) {
+  const key = `${type}:${message}`
+  const now = Date.now()
+  const last = toastDedupe.get(key) ?? 0
+  if (now - last < dedupeMs) return
+  toastDedupe.set(key, now)
+  emitToast(type, message)
+}
+
+function handleGlobalApiError(err: unknown, fallback: string) {
+  const anyErr = err as any
+  const status: number | undefined = anyErr?.response?.status
+
+  if (status === 401) {
+    emitToastDeduped('warning', '登录已失效，请重新登录')
+    return
+  }
+
+  const msgRaw = String(anyErr?.message ?? '')
+  if (!anyErr?.response && msgRaw) {
+    const lower = msgRaw.toLowerCase()
+    if (
+      lower.includes('network error') ||
+      lower.includes('failed to fetch') ||
+      lower.includes('timeout') ||
+      lower.includes('ecconnaborted')
+    ) {
+      emitToastDeduped('error', '网络异常，请检查网络后重试')
+      return
+    }
+  }
+
+  emitToastDeduped('error', getApiErrorMessage(err, fallback))
+}
+
 const queryClient = new QueryClient({
+  queryCache: new QueryCache({
+    onError: (error, query) => {
+      const meta = (query as any)?.meta
+      if (meta?.disableGlobalErrorToast === true) return
+      handleGlobalApiError(error, '请求失败，请稍后重试')
+    },
+  }),
+  mutationCache: new MutationCache({
+    onError: (error, _variables, _context, mutation) => {
+      const meta = (mutation as any)?.options?.meta
+      if (meta?.disableGlobalErrorToast === true) return
+      handleGlobalApiError(error, '操作失败，请稍后重试')
+    },
+  }),
   defaultOptions: {
     queries: {
       retry: 1,

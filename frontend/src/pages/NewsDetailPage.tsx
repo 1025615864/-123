@@ -571,7 +571,17 @@ export default function NewsDetailPage() {
           favorite_count: Number(res.favorite_count || 0),
         };
       });
-      toast.success(res?.message || (res?.favorited ? "收藏成功" : "取消收藏"));
+
+      const msg = res?.message || (res?.favorited ? "收藏成功" : "取消收藏");
+      toast.showToast("success", msg, {
+        durationMs: 7000,
+        action: {
+          label: "撤销",
+          onClick: () => {
+            bookmarkMutation.mutate();
+          },
+        },
+      });
     },
     onError: (err, _vars, ctx) => {
       if (newsId && ctx?.previous)

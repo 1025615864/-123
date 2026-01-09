@@ -1,5 +1,7 @@
 .env
 .env.*
+env.local
+backend/env.local
 *.db
 *.sqlite
 *.sqlite3

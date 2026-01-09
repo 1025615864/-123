@@ -330,6 +330,7 @@ class NewsService:
         ai_risk_level: str | None = None,
         source_site: str | None = None,
         source: str | None = None,
+        topic_id: int | None = None,
         from_dt: datetime | None = None,
         to_dt: datetime | None = None,
     ) -> tuple[list[News], int]:
@@ -372,6 +373,15 @@ class NewsService:
         if src:
             query = query.where(News.source == src)
             count_query = count_query.where(News.source == src)
+
+        tid = int(topic_id) if topic_id is not None else 0
+        if tid > 0:
+            query = query.join(NewsTopicItem, NewsTopicItem.news_id == News.id).where(
+                NewsTopicItem.topic_id == int(tid)
+            )
+            count_query = count_query.join(
+                NewsTopicItem, NewsTopicItem.news_id == News.id
+            ).where(NewsTopicItem.topic_id == int(tid))
 
         ts_expr = func.coalesce(News.published_at, News.created_at)
         if from_dt is not None:
@@ -562,7 +572,7 @@ class NewsService:
             raise ValueError("empty snapshot")
 
         try:
-            snap_obj: object = json.loads(raw)
+            snap_obj: object = cast(object, json.loads(raw))
         except Exception as e:
             raise ValueError("invalid snapshot") from e
         if not isinstance(snap_obj, dict):

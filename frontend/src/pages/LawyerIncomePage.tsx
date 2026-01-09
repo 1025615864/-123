@@ -70,7 +70,7 @@ function statusVariant(
 }
 
 export default function LawyerIncomePage() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const { actualTheme } = useTheme();
   const toast = useToast();
 
@@ -122,8 +122,31 @@ export default function LawyerIncomePage() {
     if (!err) return;
     const status = (err as any)?.response?.status;
     if (status === 401) return;
+    if (status === 403) {
+      const detail = String((err as any)?.response?.data?.detail || "");
+      if (user && user.phone_verified === false) {
+        toast.warning("请先完成手机号验证");
+        window.location.href = "/profile?phoneVerify=1";
+        return;
+      }
+      if (user && user.email_verified === false) {
+        toast.warning("请先完成邮箱验证");
+        window.location.href = "/profile?emailVerify=1";
+        return;
+      }
+      if (detail.includes("手机号")) {
+        toast.warning("请先完成手机号验证");
+        window.location.href = "/profile?phoneVerify=1";
+        return;
+      }
+      if (detail.includes("邮箱")) {
+        toast.warning("请先完成邮箱验证");
+        window.location.href = "/profile?emailVerify=1";
+        return;
+      }
+    }
     toast.error(getApiErrorMessage(err, "加载失败，请稍后重试"));
-  }, [walletQuery.error, listQuery.error, toast]);
+  }, [walletQuery.error, listQuery.error, toast, user]);
 
   const total = listQuery.data?.total ?? 0;
   const totalPages = useMemo(
@@ -165,6 +188,30 @@ export default function LawyerIncomePage() {
       a.remove();
       window.URL.revokeObjectURL(url);
     } catch (e) {
+      const status = (e as any)?.response?.status;
+      if (status === 403) {
+        const detail = String((e as any)?.response?.data?.detail || "");
+        if (user && user.phone_verified === false) {
+          toast.warning("请先完成手机号验证");
+          window.location.href = "/profile?phoneVerify=1";
+          return;
+        }
+        if (user && user.email_verified === false) {
+          toast.warning("请先完成邮箱验证");
+          window.location.href = "/profile?emailVerify=1";
+          return;
+        }
+        if (detail.includes("手机号")) {
+          toast.warning("请先完成手机号验证");
+          window.location.href = "/profile?phoneVerify=1";
+          return;
+        }
+        if (detail.includes("邮箱")) {
+          toast.warning("请先完成邮箱验证");
+          window.location.href = "/profile?emailVerify=1";
+          return;
+        }
+      }
       toast.error(getApiErrorMessage(e, "导出失败，请稍后重试"));
     } finally {
       setExporting(false);
