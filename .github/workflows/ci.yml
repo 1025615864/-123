@@ -162,6 +162,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Prepare backend data dir
+        run: |
+          mkdir -p backend/data
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
