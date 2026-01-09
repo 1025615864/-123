@@ -805,8 +805,13 @@ export default function NewsPage() {
         onFocus={() => prefetchNewsDetail(item.id)}
         className="group block rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
       >
-        <Card variant="surface" hover padding="none" className="overflow-hidden">
-          <div className="aspect-[16/10] bg-slate-900/5 relative dark:bg-white/[0.03]">
+        <Card
+          variant="surface"
+          hover
+          padding="none"
+          className="overflow-hidden h-full flex flex-col"
+        >
+          <div className="aspect-[16/10] bg-slate-900/5 relative shrink-0 dark:bg-white/[0.03]">
             {item.cover_image ? (
               <FadeInImage
                 src={item.cover_image}
@@ -821,8 +826,8 @@ export default function NewsPage() {
             )}
           </div>
 
-          <div className="p-5">
-            <div className="flex flex-wrap items-center gap-2 mb-3">
+          <div className="p-5 flex flex-col flex-1">
+            <div className="flex flex-wrap items-center gap-2 mb-3 min-h-[1.75rem] max-h-[3.5rem] overflow-hidden">
               <Badge variant="primary" size="sm" icon={Tag}>
                 {item.category}
               </Badge>
@@ -861,52 +866,54 @@ export default function NewsPage() {
               })()}
             </div>
 
-            <h3 className="text-base font-semibold text-slate-900 mb-2 line-clamp-2 leading-snug dark:text-white">
+            <h3 className="text-base font-semibold text-slate-900 mb-2 line-clamp-2 leading-snug min-h-[2.75rem] dark:text-white">
               {item.title}
             </h3>
-            <p className="text-slate-600 text-sm line-clamp-3 leading-relaxed dark:text-white/50">
-              {item.summary}
+            <p className="text-slate-600 text-sm line-clamp-3 leading-relaxed min-h-[4.5rem] dark:text-white/50">
+              {item.summary ?? ""}
             </p>
 
-            <div className="mt-4 flex items-center justify-between gap-3">
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  void toggleFavorite(item);
-                }}
-                disabled={!isAuthenticated || favLoading}
-                className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
-                  item.is_favorited
-                    ? "border-amber-300 bg-amber-500/10 text-amber-700 dark:border-amber-500/30 dark:text-amber-300"
-                    : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:bg-white/[0.02] dark:text-white/60 dark:hover:bg-white/[0.05]"
-                }`}
-                title={item.is_favorited ? "取消收藏" : "收藏"}
-              >
-                {favLoading ? (
-                  <span className="h-3.5 w-3.5 rounded-full border-2 border-current border-t-transparent animate-spin" />
-                ) : (
-                  <Bookmark className={`h-4 w-4 ${item.is_favorited ? "fill-amber-400" : ""}`} />
-                )}
-                <span>{item.is_favorited ? "已收藏" : "收藏"}</span>
-                <span className="text-slate-400 dark:text-white/40">{Number(item.favorite_count || 0)}</span>
-              </button>
+            <div className="mt-auto">
+              <div className="mt-4 flex items-center justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void toggleFavorite(item);
+                  }}
+                  disabled={!isAuthenticated || favLoading}
+                  className={`inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${
+                    item.is_favorited
+                      ? "border-amber-300 bg-amber-500/10 text-amber-700 dark:border-amber-500/30 dark:text-amber-300"
+                      : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:bg-white/[0.02] dark:text-white/60 dark:hover:bg-white/[0.05]"
+                  }`}
+                  title={item.is_favorited ? "取消收藏" : "收藏"}
+                >
+                  {favLoading ? (
+                    <span className="h-3.5 w-3.5 rounded-full border-2 border-current border-t-transparent animate-spin" />
+                  ) : (
+                    <Bookmark className={`h-4 w-4 ${item.is_favorited ? "fill-amber-400" : ""}`} />
+                  )}
+                  <span>{item.is_favorited ? "已收藏" : "收藏"}</span>
+                  <span className="text-slate-400 dark:text-white/40">{Number(item.favorite_count || 0)}</span>
+                </button>
 
-              <div className="text-xs text-slate-500 dark:text-white/55">
-                {mode === "favorites" ? "收藏夹" : ""}
+                <div className="text-xs text-slate-500 dark:text-white/55">
+                  {mode === "favorites" ? "收藏夹" : ""}
+                </div>
               </div>
-            </div>
 
-            <div className="flex items-center justify-between text-xs text-slate-500 pt-4 mt-4 border-t border-slate-200/70 dark:text-white/55 dark:border-white/10">
-              <span className="flex items-center gap-2">
-                <Calendar className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                {new Date(item.published_at || item.created_at).toLocaleDateString()}
-              </span>
-              <span className="flex items-center gap-2">
-                <Eye className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                {item.view_count} 阅读
-              </span>
+              <div className="flex items-center justify-between text-xs text-slate-500 pt-4 mt-4 border-t border-slate-200/70 dark:text-white/55 dark:border-white/10">
+                <span className="flex items-center gap-2">
+                  <Calendar className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                  {new Date(item.published_at || item.created_at).toLocaleDateString()}
+                </span>
+                <span className="flex items-center gap-2">
+                  <Eye className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                  {item.view_count} 阅读
+                </span>
+              </div>
             </div>
           </div>
         </Card>
