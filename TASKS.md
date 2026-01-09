@@ -136,6 +136,48 @@
   - 已做：补充 docs/DATABASE.md 中 Alembic 迁移流程（含 Windows 友好命令）
   - 已做：新增 backend/scripts/alembic_cmd.py 作为命令封装，避免 PATH/编码问题
 
+## 第七阶段：发布与交付流程（P1）
+
+- [ ] Release 规范化（tag / changelog / release note）
+  - [ ] 约定版本号策略（SemVer）与发布节奏（例如每周/每两周）
+  - [ ] `docs/CHANGELOG.md` 维护规则：Unreleased -> 版本号 -> 日期
+  - [ ] 发布清单（Checklist）：本地回归、CI 全绿、数据迁移、回滚方案、变更通知
+- [ ] GitHub Actions 增强：发布/制品产出
+  - [ ] 新增 `release.yml`：tag 推送后自动生成 GitHub Release（从 CHANGELOG 提取）
+  - [ ] 产出并上传构建产物（前端 dist / 后端 wheel 可选 / helm chart package 可选）
+  - [ ] Docker 镜像构建与推送（GHCR），并写入版本号标签
+- [ ] 环境与 Secrets 管理
+  - [ ] 生产环境变量清单与示例（补充到 docs/TECH_SPEC.md 或 docs/README.md）
+  - [ ] 将 CI 中用于 E2E 的测试 secrets 与生产 secrets 分离（避免误用）
+
+## 第八阶段：回归覆盖扩展（P1/P2）
+
+- [ ] Playwright E2E 扩展（在保持“最小闭环”稳定的前提下）
+  - [ ] `auth:` 登录/注册/邮箱验证/找回密码最小闭环
+  - [ ] `payment:` 下单->拉起支付->回跳->订单 paid（可用 mock/沙箱，保留真实渠道冒烟脚本）
+  - [ ] `admin:` 新闻审核/配置的关键路径冒烟
+- [ ] 前后端契约与兼容性
+  - [ ] 对关键接口补充 Schema/contract 测试（尤其是支付、文书、用户验证）
+  - [ ] 对 API envelope 切换行为补充边界用例（非 JSON/非 2xx/空响应）
+
+## 第九阶段：稳定性与可观测性深化（P2）
+
+- [ ] 指标与告警
+  - [ ] Prometheus 告警规则（5xx、P95 延迟、周期任务失败率）
+  - [ ] Grafana Dashboard（HTTP、News AI、支付回调、文书导出）
+- [ ] 日志与追踪
+  - [ ] 统一 request_id 贯穿（前端->后端->日志），并在文档中写明排障方法
+  - [ ] 关键异常上报与降级策略（AI/支付/News AI）
+
+## 第十阶段：产品体验与增长（P2）
+
+- [ ] 新用户引导与转化
+  - [ ] 新用户首次进入的引导（咨询/文书/资讯/订单）
+  - [ ] “权益与配额”展示更明确：剩余次数、到期时间、消耗记录
+- [ ] 反馈闭环
+  - [ ] 反馈工单的管理端处理流（分配、状态流转、统计）
+  - [ ] 常见问题（FAQ）与客服入口整合
+
 ## 持续性约束（Checklist）
 
 - [x] Secrets 不入库（SystemConfig 不允许保存 api_key/secret）
@@ -150,4 +192,4 @@
     - 仅跑该用例：`npm --prefix frontend run test:e2e -- --grep "documents:"`
 - [x] CI 自动回归（GitHub Actions）
   - 已做：新增 workflow：`.github/workflows/ci.yml`
-  - 覆盖：backend pytest、frontend build、Playwright 最小 documents E2E（`--grep "documents:"`）
+  - 覆盖：backend pytest、frontend build、Playwright 最小 documents E2E（`--grep "documents:"`)
