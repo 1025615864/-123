@@ -396,6 +396,7 @@ export default function VipPage() {
               }
 
               setPaymentMethodContext({ kind: "recharge", amount: amt });
+              setShowRechargeModal(false);
               setShowPaymentMethodModal(true);
             }}
           >
@@ -468,6 +469,19 @@ export default function VipPage() {
           if (buyVipMutation.isPending || rechargeMutation.isPending) return;
           setShowPaymentMethodModal(false);
         }}
+        onBack={(() => {
+          const ctx = paymentMethodContext;
+          if (!ctx) return undefined;
+          if (ctx.kind === "recharge") {
+            return () => {
+              if (rechargeMutation.isPending) return;
+              setShowPaymentMethodModal(false);
+              setShowRechargeModal(true);
+            };
+          }
+          return undefined;
+        })()}
+        backLabel="返回修改"
         title="选择支付方式"
         description={
           paymentMethodContext?.kind === "vip"

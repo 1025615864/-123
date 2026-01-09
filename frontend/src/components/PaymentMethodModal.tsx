@@ -14,6 +14,8 @@ export type PaymentMethodOption = {
 export interface PaymentMethodModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onBack?: () => void;
+  backLabel?: string;
   title: string;
   description?: string;
   options: PaymentMethodOption[];
@@ -29,6 +31,8 @@ function optionIcon(method: PaymentMethod) {
 export default function PaymentMethodModal({
   isOpen,
   onClose,
+  onBack,
+  backLabel = "返回修改",
   title,
   description,
   options,
@@ -98,15 +102,41 @@ export default function PaymentMethodModal({
           })}
         </div>
 
-        <Button
-          type="button"
-          variant="secondary"
-          fullWidth
-          onClick={onClose}
-          disabled={busy}
-        >
-          取消
-        </Button>
+        {onBack ? (
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              fullWidth
+              onClick={() => {
+                if (busy) return;
+                onBack();
+              }}
+              disabled={busy}
+            >
+              {backLabel}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              fullWidth
+              onClick={onClose}
+              disabled={busy}
+            >
+              取消
+            </Button>
+          </div>
+        ) : (
+          <Button
+            type="button"
+            variant="secondary"
+            fullWidth
+            onClick={onClose}
+            disabled={busy}
+          >
+            取消
+          </Button>
+        )}
       </div>
     </Modal>
   );
