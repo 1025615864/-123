@@ -194,6 +194,11 @@ jobs:
 
       - name: Run documents E2E
         working-directory: ./frontend
+        env:
+          DEBUG: "1"
+          JWT_SECRET_KEY: "test-secret-key-change-me-32chars-minimum"
+          PAYMENT_WEBHOOK_SECRET: "test-payment-webhook-secret"
+          E2E_DATABASE_URL: "sqlite+aiosqlite:////tmp/e2e_playwright.db"
         run: npm run test:e2e -- --grep "documents:"
 
   # Docker构建（仅main分支）
