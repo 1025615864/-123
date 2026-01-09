@@ -71,9 +71,45 @@ docker compose up -d --build
 
 ## 文档入口（建议先看）
 
-- `docs/PROJECT_REPORT.md`：项目报告（面向接手工程师的一站式说明；开发/部署/运维/架构/API/FAQ 已收敛到此）
-- `docs/_archive/`：历史文档归档（仅供追溯，不作为入口维护）
+- `docs/PRD.md`：产品需求文档（本项目口径版）
+- `docs/TECH_SPEC.md`：技术规范（本项目技术栈/结构/环境变量）
+- `docs/API_DESIGN.md`：API 设计（模块划分 + 关键接口汇总）
+- `docs/DATABASE.md`：数据库设计（以 SQLAlchemy models 为准）
+- `docs/CHANGELOG.md`：变更记录（对外可感知的交付节点）
+- `CLAUDE.md`：AI 编程助手规则（本仓库约束）
+- `TASKS.md`：任务追踪（建议的迭代路线）
+- `docs/_archive/PROJECT_REPORT.md`：项目报告（历史交付材料归档）
+- `docs/_archive/TECHNICAL_INTEGRATION_REPORT.md`：技术对接报告（历史交付材料归档）
+- `docs/_archive/`：历史文档归档（仅供追溯）
 - `helm/baixing-assistant/README.md`：Helm Chart 部署说明（K8s + Ingress）
+
+## 本地/CI 回归命令（建议）
+
+后端：
+
+```bash
+cd backend
+py -m pip install -r requirements-dev.txt
+py -m pytest -q
+```
+
+前端：
+
+```bash
+cd frontend
+npm ci
+npm run build
+```
+
+E2E（Playwright，最小文书闭环）：
+
+```bash
+# 安装浏览器（首次/Playwright 更新后）
+npm --prefix frontend run test:e2e:install
+
+# 仅跑 documents 用例
+npm --prefix frontend run test:e2e -- --grep "documents:"
+```
 
 ## 快速启动
 
@@ -194,7 +230,7 @@ docker compose -f docker-compose.prod.yml up -d --build
 
 ### 生产配置与运维
 
-- 生产配置要点 + 冒烟流程（News AI）：见 `docs/PROJECT_REPORT.md`
+- 生产配置要点 + 冒烟流程（News AI）：见 `docs/_archive/PROJECT_REPORT.md`
 - Helm（Kubernetes）部署：`helm/baixing-assistant/README.md`
 - Docker Compose 生产示例：`docker-compose.prod.yml` + 仓库根目录 `env.example.txt`
 

@@ -344,6 +344,18 @@ class NewsBatchActionRequest(BaseModel):
     reason: str | None = Field(None, max_length=200)
 
 
+class NewsBatchQueryRequest(BaseModel):
+    action: str = Field(..., min_length=1, max_length=50)
+    limit: int = Field(200, ge=1, le=500)
+    category: str | None = None
+    keyword: str | None = None
+    review_status: str | None = None
+    risk_level: str | None = None
+    source_site: str | None = None
+    source: str | None = None
+    topic_id: int | None = Field(None, ge=1)
+
+
 class NewsBatchActionResponse(BaseModel):
     requested: list[int]
     processed: list[int]
@@ -571,3 +583,20 @@ class NewsIngestRunListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class NewsSourceHealthItem(BaseModel):
+    source_id: int
+    recent_total: int
+    recent_failed: int
+    failure_rate: float
+    last_status: str | None = None
+    last_run_at: datetime | None = None
+    last_success_at: datetime | None = None
+    last_error: str | None = None
+    last_error_at: datetime | None = None
+
+
+class NewsSourceHealthListResponse(BaseModel):
+    limit_per_source: int
+    items: list[NewsSourceHealthItem]

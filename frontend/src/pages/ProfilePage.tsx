@@ -46,6 +46,9 @@ import {
   Skeleton,
 } from "../components/ui";
 import PageHeader from "../components/PageHeader";
+import PaymentMethodModal, {
+  type PaymentMethod,
+} from "../components/PaymentMethodModal";
 import { useTheme } from "../contexts/ThemeContext";
 import type { Post } from "../types";
 import { getApiErrorMessage } from "../utils";
@@ -86,6 +89,13 @@ export default function ProfilePage() {
   type BalanceTxListResp = {
     items: BalanceTxItem[];
     total: number;
+  };
+
+  type PaymentChannelStatus = {
+    alipay_configured: boolean;
+    wechatpay_configured: boolean;
+    ikunpay_configured: boolean;
+    available_methods: string[];
   };
 
   type UserQuotaDailyResponse = {
@@ -136,10 +146,18 @@ export default function ProfilePage() {
     placeholderData: (prev) => prev,
   });
 
-  useEffect(() => {
-    if (!quotasQuery.error) return;
-    toast.error(getApiErrorMessage(quotasQuery.error, "配额加载失败"));
-  }, [quotasQuery.error, toast]);
+  const channelStatusQuery = useQuery({
+    queryKey: queryKeys.paymentChannelStatus(),
+    queryFn: async () => {
+      const res = await api.get("/payment/channel-status");
+      return (res.data || {}) as PaymentChannelStatus;
+    },
+    enabled: Boolean(user),
+    retry: 1,
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
 
   const vipPlan = pricingQuery.data?.vip;
   const vipDays = Number(vipPlan?.days || 30);
@@ -192,48 +210,8 @@ export default function ProfilePage() {
     if (!user) return;
     if (buyVipMutation.isPending) return;
 
-    const useBalance = window.confirm(
-      `开通/续费 VIP（${vipDays}天 ¥${vipPrice.toFixed(
-        2
-      )}）：确定使用余额支付吗？取消将使用支付宝支付`
-    );
-    const payment_method: "balance" | "alipay" | "ikunpay" = useBalance
-      ? "balance"
-      : "alipay";
-
-    buyVipMutation.mutate(
-      { payment_method },
-      {
-        onSuccess: async (data) => {
-          if (payment_method !== "balance") {
-            const url = String((data as any)?.pay_url || "").trim();
-            if (url) {
-              window.open(url, "_blank", "noopener,noreferrer");
-              toast.success("已打开支付页面");
-              openPaymentGuide(String((data as any)?.order_no || null));
-            } else {
-              toast.error("未获取到支付链接");
-            }
-            return;
-          }
-
-          toast.success("开通成功");
-          queryClient.invalidateQueries({ queryKey: ["user-me"] as any });
-          queryClient.invalidateQueries({
-            queryKey: queryKeys.userMeQuotas() as any,
-          });
-        },
-        onError: (err) => {
-          const msg = getApiErrorMessage(err, "开通失败");
-          if (String(msg).includes("余额不足")) {
-            toast.warning("余额不足，请先充值");
-            openRecharge(vipPrice);
-            return;
-          }
-          toast.error(msg);
-        },
-      }
-    );
+    setPaymentMethodContext({ kind: "vip" });
+    setShowPaymentMethodModal(true);
   };
 
   const requestEmailVerificationMutation = useAppMutation<any, void>({
@@ -293,11 +271,23 @@ export default function ProfilePage() {
     null
   );
 
+  const [showPaymentMethodModal, setShowPaymentMethodModal] = useState(false);
+  const [paymentMethodContext, setPaymentMethodContext] = useState<
+    | null
+    | { kind: "vip" }
+    | {
+        kind: "pack";
+        related_type: "ai_chat" | "document_generate";
+        opt: PricingPackItem;
+      }
+    | { kind: "recharge"; amount: number }
+  >(null);
+
   const rechargeMutation = useAppMutation<
     { order_no: string; pay_url?: string },
-    { amount: number }
+    { amount: number; payment_method: "alipay" | "ikunpay" }
   >({
-    mutationFn: async ({ amount }) => {
+    mutationFn: async ({ amount, payment_method }) => {
       const createRes = await api.post("/payment/orders", {
         order_type: "recharge",
         amount,
@@ -310,7 +300,7 @@ export default function ProfilePage() {
       const payRes = await api.post(
         `/payment/orders/${encodeURIComponent(orderNo)}/pay`,
         {
-          payment_method: "alipay",
+          payment_method,
         }
       );
 
@@ -416,57 +406,12 @@ export default function ProfilePage() {
     if (!user) return;
     if (buyVipMutation.isPending || buyPackMutation.isPending) return;
 
-    const label =
-      packRelatedType === "document_generate" ? "文书生成" : "AI 咨询";
-    const useBalance = window.confirm(
-      `购买${label}次数包（${opt.count}次 ¥${Number(opt.price || 0).toFixed(
-        2
-      )}）：确定使用余额支付吗？取消将使用支付宝支付`
-    );
-    const payment_method: "balance" | "alipay" | "ikunpay" = useBalance
-      ? "balance"
-      : "alipay";
-
-    buyPackMutation.mutate(
-      {
-        pack_count: opt.count,
-        related_type: packRelatedType,
-        amount: Number(opt.price || 0),
-        payment_method,
-      },
-      {
-        onSuccess: async (data) => {
-          if (payment_method !== "balance") {
-            const url = String((data as any)?.pay_url || "").trim();
-            if (url) {
-              window.open(url, "_blank", "noopener,noreferrer");
-              toast.success("已打开支付页面");
-              setShowPackModal(false);
-              openPaymentGuide(String((data as any)?.order_no || null));
-            } else {
-              toast.error("未获取到支付链接");
-            }
-            return;
-          }
-
-          toast.success("购买成功");
-          setShowPackModal(false);
-          queryClient.invalidateQueries({ queryKey: ["user-me"] as any });
-          queryClient.invalidateQueries({
-            queryKey: queryKeys.userMeQuotas() as any,
-          });
-        },
-        onError: (err) => {
-          const msg = getApiErrorMessage(err, "购买失败");
-          if (String(msg).includes("余额不足")) {
-            toast.warning("余额不足，请先充值");
-            openRecharge(Number(opt.price || 0));
-            return;
-          }
-          toast.error(msg);
-        },
-      }
-    );
+    setPaymentMethodContext({
+      kind: "pack",
+      related_type: packRelatedType,
+      opt,
+    });
+    setShowPaymentMethodModal(true);
   };
 
   const [urlParams, setUrlParams] = useSearchParams();
@@ -676,9 +621,27 @@ export default function ProfilePage() {
           ...prev,
           favorite_count: Math.max(0, (prev.favorite_count || 0) - 1),
         }));
-        toast.success("已取消收藏");
+        toast.showToast("success", "已取消收藏", {
+          durationMs: 7000,
+          action: {
+            label: "撤销",
+            onClick: () => {
+              toggleFavoriteMutation.mutate(postId);
+            },
+            closeOnAction: true,
+          },
+        });
       } else if (result?.favorited === true) {
-        toast.success("收藏成功");
+        toast.showToast("success", "收藏成功", {
+          durationMs: 7000,
+          action: {
+            label: "撤销",
+            onClick: () => {
+              toggleFavoriteMutation.mutate(postId);
+            },
+            closeOnAction: true,
+          },
+        });
         loadFavorites();
         loadUserStats();
       }
@@ -740,7 +703,6 @@ export default function ProfilePage() {
     mutationFn: async (id) => {
       await api.delete(`/forum/posts/${id}`);
     },
-    successMessage: "删除成功",
     errorMessageFallback: "删除失败，请稍后重试",
     onSuccess: (_, id) => {
       queryClient.setQueryData(myPostsQueryKey as any, (old: any) => {
@@ -763,6 +725,32 @@ export default function ProfilePage() {
         ...prev,
         post_count: Math.max(0, (prev.post_count || 0) - 1),
       }));
+
+      toast.showToast("success", "已移入回收站", {
+        durationMs: 7000,
+        action: {
+          label: "撤销",
+          onClick: () => {
+            void (async () => {
+              try {
+                await api.post(`/forum/posts/${id}/restore`);
+                await Promise.all([
+                  queryClient.invalidateQueries({ queryKey: myPostsQueryKey as any }),
+                  queryClient.invalidateQueries({ queryKey: favoritesQueryKey as any }),
+                  queryClient.invalidateQueries({ queryKey: statsQueryKey as any }),
+                ]);
+                loadMyPosts();
+                loadFavorites();
+                loadUserStats();
+                toast.success("已撤销删除");
+              } catch (e) {
+                toast.error(getApiErrorMessage(e, "撤销失败"));
+              }
+            })();
+          },
+          closeOnAction: true,
+        },
+      });
 
       if ((myPostsQuery.data?.items?.length ?? 0) <= 1 && myPostsPage > 1) {
         setMyPostsPage((p) => Math.max(1, p - 1));
@@ -1026,7 +1014,7 @@ export default function ProfilePage() {
 
   const updateProfileMutation = useAppMutation<void, typeof formData>({
     mutationFn: async (payload) => {
-      await api.put("/user/me", payload);
+      await api.put("/user/me", { nickname: payload.nickname });
     },
     successMessage: "个人信息更新成功",
     errorMessageFallback: "更新失败，请稍后重试",
@@ -1047,6 +1035,7 @@ export default function ProfilePage() {
     },
     successMessage: "密码修改成功",
     errorMessageFallback: "密码修改失败，请稍后重试",
+    disableErrorToast: true,
     onSuccess: () => {
       setShowPasswordModal(false);
       setPasswordForm({
@@ -1055,11 +1044,69 @@ export default function ProfilePage() {
         confirm_password: "",
       });
     },
+    onError: (err) => {
+      const status = (err as any)?.response?.status;
+      if (status === 403) {
+        const detail = String((err as any)?.response?.data?.detail || "");
+        if (detail.includes("手机号")) {
+          toast.warning("请先完成手机号验证");
+          setUrlParams(
+            (prev) => {
+              const p = new URLSearchParams(prev);
+              p.set("phoneVerify", "1");
+              return p;
+            },
+            { replace: true }
+          );
+          return;
+        }
+        if (detail.includes("邮箱")) {
+          toast.warning("请先完成邮箱验证");
+          setUrlParams(
+            (prev) => {
+              const p = new URLSearchParams(prev);
+              p.set("emailVerify", "1");
+              return p;
+            },
+            { replace: true }
+          );
+          return;
+        }
+      }
+      toast.error(getApiErrorMessage(err, "密码修改失败，请稍后重试"));
+    },
   });
 
   // 密码修改处理
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (!user) return;
+
+    if (!user.phone_verified) {
+      toast.warning("请先完成手机号验证");
+      setUrlParams(
+        (prev) => {
+          const p = new URLSearchParams(prev);
+          p.set("phoneVerify", "1");
+          return p;
+        },
+        { replace: true }
+      );
+      return;
+    }
+    if (!user.email_verified) {
+      toast.warning("请先完成邮箱验证");
+      setUrlParams(
+        (prev) => {
+          const p = new URLSearchParams(prev);
+          p.set("emailVerify", "1");
+          return p;
+        },
+        { replace: true }
+      );
+      return;
+    }
 
     if (passwordForm.new_password !== passwordForm.confirm_password) {
       toast.error("两次输入的新密码不一致");
@@ -1198,8 +1245,8 @@ export default function ProfilePage() {
                   {user.role === "admin"
                     ? "管理员"
                     : user.role === "lawyer"
-                    ? "认证律师"
-                    : "普通用户"}
+                      ? "认证律师"
+                      : "普通用户"}
                 </span>
               </div>
 
@@ -1310,8 +1357,21 @@ export default function ProfilePage() {
             </div>
 
             {balanceQuery.isError ? (
-              <div className="mt-3 text-xs text-red-500 dark:text-red-300">
-                {getApiErrorMessage(balanceQuery.error, "余额加载失败")}
+              <div className="mt-3 flex items-start justify-between gap-3">
+                <div className="text-xs text-red-500 dark:text-red-300">
+                  {getApiErrorMessage(balanceQuery.error, "余额加载失败")}
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  icon={RefreshCw}
+                  isLoading={balanceQuery.isFetching}
+                  loadingText="重试中..."
+                  onClick={() => void balanceQuery.refetch()}
+                  disabled={balanceQuery.isFetching}
+                >
+                  重试
+                </Button>
               </div>
             ) : null}
 
@@ -1340,7 +1400,6 @@ export default function ProfilePage() {
             </div>
           </Card>
 
-          {/* 账户状态 */}
           <Card variant="surface" padding="md">
             <h4 className="text-sm font-medium text-slate-600 mb-4 dark:text-white/60">
               账户状态
@@ -1370,12 +1429,12 @@ export default function ProfilePage() {
                   <span className="font-medium text-slate-800 dark:text-white">
                     {quotasQuery.data
                       ? `${Number(
-                          quotasQuery.data.ai_chat_remaining || 0
-                        )}/${Number(
-                          quotasQuery.data.ai_chat_limit || 0
-                        )} · 次数包 ${Number(
-                          quotasQuery.data.ai_chat_pack_remaining || 0
-                        )}`
+                        quotasQuery.data.ai_chat_remaining || 0
+                      )}/${Number(
+                        quotasQuery.data.ai_chat_limit || 0
+                      )} · 次数包 ${Number(
+                        quotasQuery.data.ai_chat_pack_remaining || 0
+                      )}`
                       : "—"}
                   </span>
                 </div>
@@ -1384,16 +1443,35 @@ export default function ProfilePage() {
                   <span className="font-medium text-slate-800 dark:text-white">
                     {quotasQuery.data
                       ? `${Number(
-                          quotasQuery.data.document_generate_remaining || 0
-                        )}/${Number(
-                          quotasQuery.data.document_generate_limit || 0
-                        )} · 次数包 ${Number(
-                          quotasQuery.data.document_generate_pack_remaining || 0
-                        )}`
+                        quotasQuery.data.document_generate_remaining || 0
+                      )}/${Number(
+                        quotasQuery.data.document_generate_limit || 0
+                      )} · 次数包 ${Number(
+                        quotasQuery.data.document_generate_pack_remaining || 0
+                      )}`
                       : "—"}
                   </span>
                 </div>
               </div>
+
+              {quotasQuery.isError ? (
+                <div className="mt-3 flex items-start justify-between gap-3">
+                  <div className="text-xs text-red-500 dark:text-red-300">
+                    {getApiErrorMessage(quotasQuery.error, "配额加载失败")}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    icon={RefreshCw}
+                    isLoading={quotasQuery.isFetching}
+                    loadingText="重试中..."
+                    onClick={() => void quotasQuery.refetch()}
+                    disabled={quotasQuery.isFetching}
+                  >
+                    重试
+                  </Button>
+                </div>
+              ) : null}
             </div>
 
             <div className="space-y-3">
@@ -1545,16 +1623,14 @@ export default function ProfilePage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <span
-                    className={`text-xs ${
-                      isVipActive
-                        ? "text-green-500"
-                        : "text-slate-500 dark:text-white/50"
-                    }`}
+                    className={`text-xs ${isVipActive
+                      ? "text-green-500"
+                      : "text-slate-500 dark:text-white/50"
+                      }`}
                   >
                     {isVipActive
-                      ? `有效期至 ${
-                          vipExpiresAt ? vipExpiresAt.toLocaleDateString() : ""
-                        }`
+                      ? `有效期至 ${vipExpiresAt ? vipExpiresAt.toLocaleDateString() : ""
+                      }`
                       : "未开通"}
                   </span>
                   <button
@@ -1568,8 +1644,8 @@ export default function ProfilePage() {
                     {buyVipMutation.isPending
                       ? "处理中..."
                       : isVipActive
-                      ? "续费"
-                      : "开通"}
+                        ? "续费"
+                        : "开通"}
                     {buyVipMutation.isPending ? (
                       <Loader2 className="h-3 w-3 animate-spin" />
                     ) : (
@@ -1730,9 +1806,7 @@ export default function ProfilePage() {
                   label="手机号"
                   icon={Phone}
                   value={formData.phone}
-                  onChange={(e) =>
-                    setFormData({ ...formData, phone: e.target.value })
-                  }
+                  readOnly
                   placeholder="绑定手机号"
                   className="py-3"
                   disabled={updateProfileMutation.isPending}
@@ -1783,7 +1857,21 @@ export default function ProfilePage() {
                 <Button
                   variant="secondary"
                   icon={Lock}
-                  onClick={() => setShowPasswordModal(true)}
+                  onClick={() => {
+                    if (!isEmailVerified) {
+                      toast.warning("请先完成邮箱验证");
+                      setUrlParams(
+                        (prev) => {
+                          const p = new URLSearchParams(prev);
+                          p.set("emailVerify", "1");
+                          return p;
+                        },
+                        { replace: true }
+                      );
+                      return;
+                    }
+                    setShowPasswordModal(true);
+                  }}
                 >
                   修改密码
                 </Button>
@@ -2076,8 +2164,8 @@ export default function ProfilePage() {
                 const color = positive
                   ? "text-emerald-600 dark:text-emerald-400"
                   : amount < 0
-                  ? "text-rose-600 dark:text-rose-400"
-                  : "text-slate-600 dark:text-white/60";
+                    ? "text-rose-600 dark:text-rose-400"
+                    : "text-slate-600 dark:text-white/60";
                 return (
                   <div
                     key={t.id}
@@ -2097,8 +2185,8 @@ export default function ProfilePage() {
                             : ""}
                           {t.balance_after != null
                             ? ` · 余额 ${fmtMoney(
-                                Number(t.balance_after || 0)
-                              )}`
+                              Number(t.balance_after || 0)
+                            )}`
                             : ""}
                         </div>
                       </div>
@@ -2135,6 +2223,207 @@ export default function ProfilePage() {
           </div>
         </div>
       </Modal>
+
+      <PaymentMethodModal
+        isOpen={showPaymentMethodModal}
+        onClose={() => {
+          if (
+            buyVipMutation.isPending ||
+            buyPackMutation.isPending ||
+            rechargeMutation.isPending
+          )
+            return;
+          setShowPaymentMethodModal(false);
+        }}
+        title={
+          paymentMethodContext?.kind === "vip"
+            ? "选择支付方式"
+            : paymentMethodContext?.kind === "pack"
+              ? "选择支付方式"
+              : "选择支付方式"
+        }
+        description={
+          paymentMethodContext?.kind === "vip"
+            ? `开通/续费 VIP（${vipDays}天 ¥${vipPrice.toFixed(2)}）`
+            : paymentMethodContext?.kind === "pack"
+              ? `购买次数包（${paymentMethodContext.opt.count}次 ¥${Number(
+                  paymentMethodContext.opt.price || 0
+                ).toFixed(2)}）`
+              : paymentMethodContext?.kind === "recharge"
+                ? `充值 ¥${Number(paymentMethodContext.amount || 0).toFixed(2)}`
+                : undefined
+        }
+        busy={
+          buyVipMutation.isPending ||
+          buyPackMutation.isPending ||
+          rechargeMutation.isPending
+        }
+        options={(() => {
+          const loadingChannels = !channelStatusQuery.data && channelStatusQuery.isLoading;
+          const canAlipay = channelStatusQuery.data?.alipay_configured === true;
+          const canIkunpay = channelStatusQuery.data?.ikunpay_configured === true;
+          const thirdPartyDisabledReason = loadingChannels
+            ? "加载中"
+            : "未配置";
+
+          if (paymentMethodContext?.kind === "recharge") {
+            return [
+              {
+                method: "alipay" as PaymentMethod,
+                label: "支付宝",
+                description: "跳转到支付宝完成支付",
+                enabled: canAlipay,
+                disabledReason: thirdPartyDisabledReason,
+              },
+              {
+                method: "ikunpay" as PaymentMethod,
+                label: "爱坤支付",
+                description: "跳转到爱坤支付完成支付",
+                enabled: canIkunpay,
+                disabledReason: thirdPartyDisabledReason,
+              },
+            ];
+          }
+
+          return [
+            {
+              method: "balance" as PaymentMethod,
+              label: "余额支付",
+              description: "即时生效",
+              enabled: true,
+            },
+            {
+              method: "alipay" as PaymentMethod,
+              label: "支付宝",
+              description: "跳转到支付宝完成支付",
+              enabled: canAlipay,
+              disabledReason: thirdPartyDisabledReason,
+            },
+            {
+              method: "ikunpay" as PaymentMethod,
+              label: "爱坤支付",
+              description: "跳转到爱坤支付完成支付",
+              enabled: canIkunpay,
+              disabledReason: thirdPartyDisabledReason,
+            },
+          ];
+        })()}
+        onSelect={(method) => {
+          const ctx = paymentMethodContext;
+          setShowPaymentMethodModal(false);
+
+          if (!ctx) return;
+
+          if (ctx.kind === "vip") {
+            buyVipMutation.mutate(
+              { payment_method: method as any },
+              {
+                onSuccess: async (data) => {
+                  if (method !== "balance") {
+                    const url = String((data as any)?.pay_url || "").trim();
+                    if (url) {
+                      window.open(url, "_blank", "noopener,noreferrer");
+                      toast.success("已打开支付页面");
+                      openPaymentGuide(String((data as any)?.order_no || null));
+                    } else {
+                      toast.error("未获取到支付链接");
+                    }
+                    return;
+                  }
+
+                  toast.success("开通成功");
+                  queryClient.invalidateQueries({ queryKey: ["user-me"] as any });
+                  queryClient.invalidateQueries({
+                    queryKey: queryKeys.userMeQuotas() as any,
+                  });
+                },
+                onError: (err) => {
+                  const msg = getApiErrorMessage(err, "开通失败");
+                  if (String(msg).includes("余额不足")) {
+                    toast.warning("余额不足，请先充值");
+                    openRecharge(vipPrice);
+                    return;
+                  }
+                  toast.error(msg);
+                },
+              }
+            );
+            return;
+          }
+
+          if (ctx.kind === "pack") {
+            buyPackMutation.mutate(
+              {
+                pack_count: ctx.opt.count,
+                related_type: ctx.related_type as any,
+                amount: Number(ctx.opt.price || 0),
+                payment_method: method as any,
+              },
+              {
+                onSuccess: async (data) => {
+                  if (method !== "balance") {
+                    const url = String((data as any)?.pay_url || "").trim();
+                    if (url) {
+                      window.open(url, "_blank", "noopener,noreferrer");
+                      toast.success("已打开支付页面");
+                      setShowPackModal(false);
+                      openPaymentGuide(String((data as any)?.order_no || null));
+                    } else {
+                      toast.error("未获取到支付链接");
+                    }
+                    return;
+                  }
+
+                  toast.success("购买成功");
+                  setShowPackModal(false);
+                  queryClient.invalidateQueries({ queryKey: ["user-me"] as any });
+                  queryClient.invalidateQueries({
+                    queryKey: queryKeys.userMeQuotas() as any,
+                  });
+                },
+                onError: (err) => {
+                  const msg = getApiErrorMessage(err, "购买失败");
+                  if (String(msg).includes("余额不足")) {
+                    toast.warning("余额不足，请先充值");
+                    openRecharge(Number(ctx.opt.price || 0));
+                    return;
+                  }
+                  toast.error(msg);
+                },
+              }
+            );
+            return;
+          }
+
+          if (ctx.kind === "recharge") {
+            if (method === "balance") {
+              toast.error("充值不支持余额支付");
+              return;
+            }
+
+            rechargeMutation.mutate(
+              { amount: ctx.amount, payment_method: method as any },
+              {
+                onSuccess: (data) => {
+                  const payUrl = String((data as any)?.pay_url || "").trim();
+                  if (payUrl) {
+                    window.open(payUrl, "_blank", "noopener,noreferrer");
+                    toast.success("已打开支付页面");
+                    openPaymentGuide(String((data as any)?.order_no || null));
+                    setShowRechargeModal(false);
+                    return;
+                  }
+                  toast.success("订单已创建，请前往订单页继续支付");
+                  setShowRechargeModal(false);
+                },
+                onError: (err) => {
+                  toast.error(getApiErrorMessage(err, "充值失败"));
+                },
+              }
+            );
+          }
+        }}
+      />
 
       <Modal
         isOpen={showRechargeModal}
@@ -2185,23 +2474,9 @@ export default function ProfilePage() {
                 toast.error("请输入正确的充值金额");
                 return;
               }
-              rechargeMutation.mutate(
-                { amount: amt },
-                {
-                  onSuccess: (data) => {
-                    const payUrl = String((data as any)?.pay_url || "").trim();
-                    if (payUrl) {
-                      window.open(payUrl, "_blank", "noopener,noreferrer");
-                      toast.success("已打开支付页面");
-                      openPaymentGuide(String((data as any)?.order_no || null));
-                      setShowRechargeModal(false);
-                      return;
-                    }
-                    toast.success("订单已创建，请前往订单页继续支付");
-                    setShowRechargeModal(false);
-                  },
-                }
-              );
+
+              setPaymentMethodContext({ kind: "recharge", amount: amt });
+              setShowPaymentMethodModal(true);
             }}
           >
             去支付
@@ -2245,6 +2520,19 @@ export default function ProfilePage() {
           >
             我已支付，刷新余额/权益
           </Button>
+
+          {paymentGuideOrderNo ? (
+            <Link
+              to={`/payment/return?order_no=${encodeURIComponent(
+                paymentGuideOrderNo
+              )}`}
+              className="block"
+            >
+              <Button variant="outline" fullWidth icon={ExternalLink}>
+                去支付结果页查看状态
+              </Button>
+            </Link>
+          ) : null}
 
           <Link to="/orders?tab=payment" className="block">
             <Button variant="outline" fullWidth icon={ExternalLink}>
@@ -2475,13 +2763,13 @@ export default function ProfilePage() {
         <div className="space-y-4">
           <div className="grid grid-cols-3 gap-3">
             {(pricingQuery.data?.packs?.[packRelatedType] &&
-            Array.isArray(pricingQuery.data?.packs?.[packRelatedType])
+              Array.isArray(pricingQuery.data?.packs?.[packRelatedType])
               ? pricingQuery.data?.packs?.[packRelatedType]
               : ([
-                  { count: 10, price: 12 },
-                  { count: 50, price: 49 },
-                  { count: 100, price: 79 },
-                ] as PricingPackItem[])
+                { count: 10, price: 12 },
+                { count: 50, price: 49 },
+                { count: 100, price: 79 },
+              ] as PricingPackItem[])
             ).map((opt) => (
               <Button
                 key={opt.count}

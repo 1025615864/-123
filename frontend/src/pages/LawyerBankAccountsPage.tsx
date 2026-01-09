@@ -76,8 +76,33 @@ export default function LawyerBankAccountsPage() {
     if (!listQuery.error) return;
     const status = (listQuery.error as any)?.response?.status;
     if (status === 401) return;
+    if (status === 403) {
+      const detail = String(
+        (listQuery.error as any)?.response?.data?.detail || ""
+      );
+      if (user && user.phone_verified === false) {
+        toast.warning("请先完成手机号验证");
+        window.location.href = "/profile?phoneVerify=1";
+        return;
+      }
+      if (user && user.email_verified === false) {
+        toast.warning("请先完成邮箱验证");
+        window.location.href = "/profile?emailVerify=1";
+        return;
+      }
+      if (detail.includes("手机号")) {
+        toast.warning("请先完成手机号验证");
+        window.location.href = "/profile?phoneVerify=1";
+        return;
+      }
+      if (detail.includes("邮箱")) {
+        toast.warning("请先完成邮箱验证");
+        window.location.href = "/profile?emailVerify=1";
+        return;
+      }
+    }
     toast.error(getApiErrorMessage(listQuery.error, "加载失败，请稍后重试"));
-  }, [listQuery.error, toast]);
+  }, [listQuery.error, toast, user]);
 
   const items = listQuery.data?.items ?? [];
 

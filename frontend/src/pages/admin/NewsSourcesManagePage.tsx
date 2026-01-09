@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Plus, Edit, Trash2, Power, Play, RefreshCw, Rss } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import api from "../../api/client";
@@ -36,6 +37,23 @@ interface NewsSourceListResponse {
   items: NewsSource[];
 }
 
+type NewsSourceHealthItem = {
+  source_id: number;
+  recent_total: number;
+  recent_failed: number;
+  failure_rate: number;
+  last_status?: string | null;
+  last_run_at?: string | null;
+  last_success_at?: string | null;
+  last_error?: string | null;
+  last_error_at?: string | null;
+};
+
+type NewsSourceHealthListResponse = {
+  limit_per_source: number;
+  items: NewsSourceHealthItem[];
+};
+
 type CreateOrUpdateForm = {
   name: string;
   feed_url: string;
@@ -68,8 +86,23 @@ function formatTime(value: string | null | undefined): string {
   });
 }
 
+function normalizeStatus(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase();
+}
+
+function getStatusBadge(statusRaw: unknown) {
+  const s = normalizeStatus(statusRaw);
+  if (s === "success") return { label: "成功", variant: "success" as const };
+  if (s === "running") return { label: "运行中", variant: "warning" as const };
+  if (s === "failed") return { label: "失败", variant: "danger" as const };
+  return { label: s || "-", variant: "default" as const };
+}
+
 export default function NewsSourcesManagePage() {
   const toast = useToast();
+  const navigate = useNavigate();
 
   const sourcesQueryKey = useMemo(() => ["admin-news-sources"] as const, []);
 
@@ -88,6 +121,40 @@ export default function NewsSourcesManagePage() {
     if (!sourcesQuery.error) return;
     toast.error(getApiErrorMessage(sourcesQuery.error, "来源列表加载失败"));
   }, [sourcesQuery.error, toast]);
+
+  const healthQueryKey = useMemo(
+    () => ["admin-news-sources-health", { limitPerSource: 20 }] as const,
+    []
+  );
+
+  const healthQuery = useQuery({
+    queryKey: healthQueryKey,
+    queryFn: async () => {
+      const res = await api.get("/news/admin/sources/health", {
+        params: { limit_per_source: 20 },
+      });
+      return res.data as NewsSourceHealthListResponse;
+    },
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  });
+
+  useEffect(() => {
+    if (!healthQuery.error) return;
+    toast.error(getApiErrorMessage(healthQuery.error, "健康度加载失败"));
+  }, [healthQuery.error, toast]);
+
+  const healthMap = useMemo(() => {
+    const items = Array.isArray(healthQuery.data?.items)
+      ? healthQuery.data?.items
+      : [];
+    const m = new Map<number, NewsSourceHealthItem>();
+    for (const it of items) {
+      if (typeof it?.source_id === "number") m.set(it.source_id, it);
+    }
+    return m;
+  }, [healthQuery.data?.items]);
 
   const sources = sourcesQuery.data?.items ?? [];
 
@@ -293,6 +360,7 @@ export default function NewsSourcesManagePage() {
 
   const busy =
     sourcesQuery.isFetching ||
+    healthQuery.isFetching ||
     deleteMutation.isPending ||
     toggleEnabledMutation.isPending ||
     runOnceMutation.isPending ||
@@ -313,8 +381,11 @@ export default function NewsSourcesManagePage() {
           <Button
             variant="outline"
             icon={RefreshCw}
-            onClick={() => sourcesQuery.refetch()}
-            isLoading={sourcesQuery.isFetching}
+            onClick={() => {
+              sourcesQuery.refetch();
+              healthQuery.refetch();
+            }}
+            isLoading={sourcesQuery.isFetching || healthQuery.isFetching}
             loadingText="刷新中..."
             disabled={busy}
           >
@@ -357,6 +428,9 @@ export default function NewsSourcesManagePage() {
                   </th>
                   <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
                     状态
+                  </th>
+                  <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
+                    健康度
                   </th>
                   <th className="text-left py-3 px-4 text-slate-500 text-sm font-medium dark:text-white/50">
                     最近运行
@@ -422,6 +496,46 @@ export default function NewsSourcesManagePage() {
                       >
                         {s.is_enabled ? "启用" : "停用"}
                       </Badge>
+                    </td>
+                    <td className="py-3 px-4 text-sm">
+                      {(() => {
+                        const h = healthMap.get(s.id);
+                        const total = Number(h?.recent_total ?? 0);
+                        const failed = Number(h?.recent_failed ?? 0);
+                        const rate = Number(h?.failure_rate ?? 0);
+                        const pct = Math.round(Math.max(0, Math.min(1, rate)) * 100);
+                        const st = getStatusBadge(h?.last_status);
+
+                        const rateVariant =
+                          total === 0
+                            ? ("default" as const)
+                            : pct === 0
+                              ? ("success" as const)
+                              : pct < 30
+                                ? ("warning" as const)
+                                : ("danger" as const);
+
+                        return (
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant={rateVariant} size="sm">
+                              失败率 {pct}% ({failed}/{total || 0})
+                            </Badge>
+                            <Badge variant={st.variant} size="sm">
+                              最近：{st.label}
+                            </Badge>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() =>
+                                navigate(`/admin/news/ingest-runs?source_id=${s.id}`)
+                              }
+                              disabled={busy}
+                            >
+                              运行记录
+                            </Button>
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="py-3 px-4 text-sm text-slate-600 dark:text-white/60">
                       <div className="space-y-1">
@@ -523,7 +637,7 @@ export default function NewsSourcesManagePage() {
                 {sources.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={7}
+                      colSpan={8}
                       className="py-10 text-center text-slate-500 text-sm dark:text-white/40"
                     >
                       暂无来源

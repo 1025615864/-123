@@ -94,6 +94,131 @@ class TestUserAPI:
         response = await client.post("/api/user/login", json=login_data)
         assert response.status_code == 401
 
+    @pytest.mark.asyncio
+    async def test_update_me_reject_phone_update(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        user = User(
+            username="u_update_me_phone",
+            email="u_update_me_phone@example.com",
+            nickname="u_update_me_phone",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        token = create_access_token({"sub": str(user.id)})
+
+        res = await client.put(
+            "/api/user/me",
+            json={"phone": "13800138000"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 400
+        assert "短信" in str(_json_dict(res).get("detail") or "")
+
+    @pytest.mark.asyncio
+    async def test_update_me_nickname_ok(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        from sqlalchemy import select
+
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        user = User(
+            username="u_update_me_nick",
+            email="u_update_me_nick@example.com",
+            nickname="old",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        token = create_access_token({"sub": str(user.id)})
+
+        res = await client.put(
+            "/api/user/me",
+            json={"nickname": "new_nickname"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 200
+        assert str(_json_dict(res).get("nickname") or "") == "new_nickname"
+
+        refreshed = (
+            await test_session.execute(select(User).where(User.id == int(user.id)))
+        ).scalar_one()
+        assert str(getattr(refreshed, "nickname", "") or "") == "new_nickname"
+
+    @pytest.mark.asyncio
+    async def test_change_password_requires_user_verified(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        user = User(
+            username="u_pwd_unverified",
+            email="u_pwd_unverified@example.com",
+            nickname="u_pwd_unverified",
+            hashed_password=hash_password("Old123456"),
+            role="user",
+            is_active=True,
+            email_verified=False,
+            phone_verified=False,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        token = create_access_token({"sub": str(user.id)})
+
+        blocked = await client.put(
+            "/api/user/me/password",
+            json={"old_password": "Old123456", "new_password": "New123456"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert blocked.status_code == 403
+        assert "手机号" in str(_json_dict(blocked).get("detail") or "")
+
+        user.phone_verified = True
+        test_session.add(user)
+        await test_session.commit()
+
+        blocked2 = await client.put(
+            "/api/user/me/password",
+            json={"old_password": "Old123456", "new_password": "New123456"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert blocked2.status_code == 403
+        assert "邮箱" in str(_json_dict(blocked2).get("detail") or "")
+
+        user.email_verified = True
+        test_session.add(user)
+        await test_session.commit()
+
+        ok = await client.put(
+            "/api/user/me/password",
+            json={"old_password": "Old123456", "new_password": "New123456"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert ok.status_code == 200
+
 
 class TestNewsAPI:
     """新闻API测试"""
@@ -1396,6 +1521,42 @@ class TestPaymentAPI:
         assert _json_dict(detail_res).get("status") == "paid"
 
     @pytest.mark.asyncio
+    async def test_pay_order_wechat_returns_400(self, client: AsyncClient, test_session: AsyncSession):
+        from app.models.user import User
+        from app.utils.security import hash_password, create_access_token
+
+        user = User(
+            username="u_payment_wechat_pay",
+            email="u_payment_wechat_pay@example.com",
+            nickname="u_payment_wechat_pay",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        token = create_access_token({"sub": str(user.id)})
+
+        create_res = await client.post(
+            "/api/payment/orders",
+            json={"order_type": "service", "amount": 10.0, "title": "t"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create_res.status_code == 200
+        order_no = str(create_res.json()["order_no"])
+        assert order_no
+
+        pay_res = await client.post(
+            f"/api/payment/orders/{order_no}/pay",
+            json={"payment_method": "wechat"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert pay_res.status_code == 400
+        assert "微信支付" in str(_json_dict(pay_res).get("detail") or "")
+
+    @pytest.mark.asyncio
     async def test_wechat_notify_ai_pack_document_generate_grants_credits_idempotent(
         self,
         client: AsyncClient,
@@ -2251,6 +2412,43 @@ class TestPaymentCallbackAdminAPI:
         assert "ikunpay_configured" in data
         assert "wechatpay_configured" in data
         assert "wechatpay_platform_certs_total" in data
+
+    @pytest.mark.asyncio
+    async def test_public_payment_channel_status(self, client: AsyncClient, monkeypatch: MonkeyPatch):
+        from app.routers import payment as payment_router
+
+        monkeypatch.setattr(payment_router.settings, "alipay_app_id", "", raising=False)
+        monkeypatch.setattr(payment_router.settings, "alipay_public_key", "", raising=False)
+        monkeypatch.setattr(payment_router.settings, "alipay_private_key", "", raising=False)
+        monkeypatch.setattr(payment_router.settings, "alipay_notify_url", "", raising=False)
+
+        monkeypatch.setattr(payment_router.settings, "ikunpay_pid", "", raising=False)
+        monkeypatch.setattr(payment_router.settings, "ikunpay_key", "", raising=False)
+        monkeypatch.setattr(payment_router.settings, "ikunpay_notify_url", "", raising=False)
+
+        res1 = await client.get("/api/payment/channel-status")
+        assert res1.status_code == 200
+        data1 = _json_dict(res1)
+        assert data1.get("alipay_configured") is False
+        assert data1.get("ikunpay_configured") is False
+        assert "available_methods" in data1
+        assert list(data1.get("available_methods") or []) == ["balance"]
+
+        monkeypatch.setattr(payment_router.settings, "alipay_app_id", "app", raising=False)
+        monkeypatch.setattr(payment_router.settings, "alipay_public_key", "pub", raising=False)
+        monkeypatch.setattr(payment_router.settings, "alipay_private_key", "priv", raising=False)
+        monkeypatch.setattr(payment_router.settings, "alipay_notify_url", "https://example.com/notify", raising=False)
+
+        monkeypatch.setattr(payment_router.settings, "ikunpay_pid", "pid", raising=False)
+        monkeypatch.setattr(payment_router.settings, "ikunpay_key", "key", raising=False)
+        monkeypatch.setattr(payment_router.settings, "ikunpay_notify_url", "https://example.com/notify2", raising=False)
+
+        res2 = await client.get("/api/payment/channel-status")
+        assert res2.status_code == 200
+        data2 = _json_dict(res2)
+        assert data2.get("alipay_configured") is True
+        assert data2.get("ikunpay_configured") is True
+        assert list(data2.get("available_methods") or []) == ["balance", "alipay", "ikunpay"]
 
     @pytest.mark.asyncio
     async def test_admin_import_wechat_platform_certs_json(

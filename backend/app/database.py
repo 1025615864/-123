@@ -69,6 +69,8 @@ async def init_db() -> None:
         "app.models.lawfirm",
         "app.models.settlement",
         "app.models.knowledge",
+        "app.models.document",
+        "app.models.document_template",
         "app.models.notification",
         "app.models.payment",
         "app.models.system",
@@ -106,6 +108,26 @@ async def init_db() -> None:
 
                 tables_result = await conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
                 tables = {row[0] for row in tables_result.fetchall()}
+
+                if "generated_documents" in tables:
+                    docs_cols_result = await conn.execute(text("PRAGMA table_info(generated_documents)"))
+                    docs_cols = {row[1] for row in docs_cols_result.fetchall()}
+                    if "template_key" not in docs_cols:
+                        _ = await conn.execute(
+                            text("ALTER TABLE generated_documents ADD COLUMN template_key VARCHAR(50)")
+                        )
+                    if "template_version" not in docs_cols:
+                        _ = await conn.execute(
+                            text("ALTER TABLE generated_documents ADD COLUMN template_version INTEGER")
+                        )
+                    try:
+                        _ = await conn.execute(
+                            text(
+                                "CREATE INDEX IF NOT EXISTS ix_generated_documents_template_key ON generated_documents(template_key)"
+                            )
+                        )
+                    except Exception:
+                        logger.exception("创建generated_documents模板索引失败")
 
                 if "payment_callback_events" not in tables:
                     _ = await conn.execute(
@@ -393,6 +415,21 @@ async def init_db() -> None:
                 _ = await conn.execute(text("ALTER TABLE news ADD COLUMN IF NOT EXISTS review_reason VARCHAR(200)"))
                 _ = await conn.execute(text("ALTER TABLE news ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ"))
 
+                _ = await conn.execute(
+                    text("ALTER TABLE generated_documents ADD COLUMN IF NOT EXISTS template_key VARCHAR(50)")
+                )
+                _ = await conn.execute(
+                    text("ALTER TABLE generated_documents ADD COLUMN IF NOT EXISTS template_version INTEGER")
+                )
+                try:
+                    _ = await conn.execute(
+                        text(
+                            "CREATE INDEX IF NOT EXISTS ix_generated_documents_template_key ON generated_documents(template_key)"
+                        )
+                    )
+                except Exception:
+                    logger.exception("创建generated_documents模板索引失败")
+
                 _ = await conn.execute(text("ALTER TABLE news_ai_annotations ADD COLUMN IF NOT EXISTS highlights TEXT"))
                 _ = await conn.execute(text("ALTER TABLE news_ai_annotations ADD COLUMN IF NOT EXISTS keywords TEXT"))
                 _ = await conn.execute(
@@ -571,3 +608,81 @@ async def init_db() -> None:
             )
         except Exception:
             logger.exception("创建唯一索引失败（可能存在历史重复数据）")
+
+    try:
+        from sqlalchemy import func, select
+
+        from .models.document_template import DocumentTemplate, DocumentTemplateVersion
+        from .services.document_templates_builtin import BUILTIN_DOCUMENT_TEMPLATES
+
+        async with AsyncSessionLocal() as session:
+            for key, meta in BUILTIN_DOCUMENT_TEMPLATES.items():
+                k = str(key or "").strip()
+                if not k:
+                    continue
+
+                tpl_res = await session.execute(
+                    select(DocumentTemplate).where(DocumentTemplate.key == k)
+                )
+                tpl = tpl_res.scalar_one_or_none()
+                if tpl is None:
+                    tpl = DocumentTemplate(
+                        key=k,
+                        title=str(meta.get("title") or k).strip() or k,
+                        description=str(meta.get("description") or "").strip() or None,
+                        is_active=True,
+                    )
+                    session.add(tpl)
+                    await session.flush()
+
+                pub_res = await session.execute(
+                    select(DocumentTemplateVersion)
+                    .where(
+                        DocumentTemplateVersion.template_id == int(tpl.id),
+                        DocumentTemplateVersion.is_published.is_(True),
+                    )
+                    .order_by(DocumentTemplateVersion.version.desc())
+                    .limit(1)
+                )
+                published = pub_res.scalar_one_or_none()
+                if published is not None:
+                    continue
+
+                max_res = await session.execute(
+                    select(func.max(DocumentTemplateVersion.version)).where(
+                        DocumentTemplateVersion.template_id == int(tpl.id)
+                    )
+                )
+                max_version = max_res.scalar_one_or_none()
+
+                if max_version is None:
+                    v = DocumentTemplateVersion(
+                        template_id=int(tpl.id),
+                        version=1,
+                        content=str(meta.get("template") or "").strip(),
+                        is_published=True,
+                    )
+                    if v.content:
+                        session.add(v)
+                    continue
+
+                versions_res = await session.execute(
+                    select(DocumentTemplateVersion).where(
+                        DocumentTemplateVersion.template_id == int(tpl.id)
+                    )
+                )
+                versions = versions_res.scalars().all()
+                target: DocumentTemplateVersion | None = None
+                for ver in versions:
+                    ver.is_published = False
+                    session.add(ver)
+                    if int(ver.version) == int(max_version):
+                        target = ver
+
+                if target is not None:
+                    target.is_published = True
+                    session.add(target)
+
+            await session.commit()
+    except Exception:
+        logger.exception("文书模板seed失败")

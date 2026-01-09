@@ -98,8 +98,31 @@ export default function LawyerWithdrawPage() {
     if (!err) return;
     const status = (err as any)?.response?.status;
     if (status === 401) return;
+    if (status === 403) {
+      const detail = String((err as any)?.response?.data?.detail || "");
+      if (user && user.phone_verified === false) {
+        toast.warning("请先完成手机号验证");
+        window.location.href = "/profile?phoneVerify=1";
+        return;
+      }
+      if (user && user.email_verified === false) {
+        toast.warning("请先完成邮箱验证");
+        window.location.href = "/profile?emailVerify=1";
+        return;
+      }
+      if (detail.includes("手机号")) {
+        toast.warning("请先完成手机号验证");
+        window.location.href = "/profile?phoneVerify=1";
+        return;
+      }
+      if (detail.includes("邮箱")) {
+        toast.warning("请先完成邮箱验证");
+        window.location.href = "/profile?emailVerify=1";
+        return;
+      }
+    }
     toast.error(getApiErrorMessage(err, "加载失败，请稍后重试"));
-  }, [walletQuery.error, bankQuery.error, toast]);
+  }, [walletQuery.error, bankQuery.error, toast, user]);
 
   const accounts = bankQuery.data?.items ?? [];
   const defaultAccount = useMemo(

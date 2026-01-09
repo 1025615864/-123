@@ -8,7 +8,7 @@ from typing import Annotated, cast
 from datetime import datetime, timedelta, timezone
 import uuid
 from decimal import Decimal, ROUND_HALF_UP
-from urllib.parse import urlencode, parse_qsl
+from urllib.parse import urlencode, parse_qsl, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -158,7 +158,7 @@ class CreateOrderRequest(BaseModel):
 
 
 class PayOrderRequest(BaseModel):
-    payment_method: str  # alipay/wechat/balance
+    payment_method: str  # alipay/wechat/balance/ikunpay
 
 
 class MarkPaidRequest(BaseModel):
@@ -246,6 +246,13 @@ class PaymentChannelStatusResponse(BaseModel):
     details: dict[str, object]
 
 
+class PublicPaymentChannelStatusResponse(BaseModel):
+    alipay_configured: bool
+    wechatpay_configured: bool
+    ikunpay_configured: bool
+    available_methods: list[str]
+
+
 class WechatPlatformCertImportRequest(BaseModel):
     platform_certs_json: str | None = None
     cert_pem: str | None = None
@@ -268,6 +275,22 @@ def _quantize_amount(amount: float) -> Decimal:
 
 def _decimal_to_cents(amount: Decimal) -> int:
     return int(amount * 100)
+
+
+def _append_query_param(url: str, key: str, value: str) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return raw
+    try:
+        parts = urlsplit(raw)
+        pairs = parse_qsl(parts.query, keep_blank_values=True)
+        pairs = [(k, v) for (k, v) in pairs if k != key]
+        pairs.append((key, str(value)))
+        query = urlencode(pairs)
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
+    except Exception:
+        sep = "&" if "?" in raw else "?"
+        return f"{raw}{sep}{key}={value}"
 
 
 async def _record_callback_event(
@@ -376,8 +399,9 @@ def _mask_payload(raw: str | None) -> str | None:
 
     def _mask_obj(obj: object) -> object:
         if isinstance(obj, dict):
+            obj_dict = cast(dict[object, object], obj)
             out: dict[object, object] = {}
-            for k, v in obj.items():
+            for k, v in obj_dict.items():
                 ks = str(k).strip().lower()
                 if ks in sensitive_keys:
                     out[k] = _mask_value(v)
@@ -385,11 +409,12 @@ def _mask_payload(raw: str | None) -> str | None:
                     out[k] = _mask_obj(v)
             return out
         if isinstance(obj, list):
-            return [_mask_obj(x) for x in obj]
+            obj_list = cast(list[object], obj)
+            return [_mask_obj(x) for x in obj_list]
         return obj
 
     try:
-        obj: object = json.loads(s)
+        obj = cast(object, json.loads(s))
         masked = _mask_obj(obj)
         return json.dumps(masked, ensure_ascii=False, indent=2)
     except Exception:
@@ -552,7 +577,7 @@ def _ikunpay_build_submit_pay_url(
     *,
     gateway_url: str,
     pid: str,
-    pay_type: str,
+    pay_type: str | None,
     out_trade_no: str,
     notify_url: str,
     return_url: str | None,
@@ -562,7 +587,6 @@ def _ikunpay_build_submit_pay_url(
 ) -> str:
     params: dict[str, str] = {
         "pid": str(pid).strip(),
-        "type": str(pay_type).strip(),
         "out_trade_no": str(out_trade_no).strip(),
         "notify_url": str(notify_url).strip(),
         "name": str(name).strip(),
@@ -570,6 +594,8 @@ def _ikunpay_build_submit_pay_url(
         "timestamp": str(int(datetime.now(timezone.utc).timestamp())),
         "sign_type": "MD5",
     }
+    if pay_type:
+        params["type"] = str(pay_type).strip()
     if return_url:
         params["return_url"] = str(return_url).strip()
     params["sign"] = _ikunpay_sign_md5(params, key)
@@ -961,6 +987,9 @@ async def pay_order(
     actual_amount = _quantize_amount(float(order.actual_amount))
     actual_amount_cents = _decimal_to_cents(actual_amount)
 
+    if data.payment_method == "wechat":
+        raise HTTPException(status_code=400, detail="微信支付暂未开放")
+
     # 余额支付
     if data.payment_method == "balance":
         trade_no = f"BAL{generate_order_no()}"
@@ -1063,12 +1092,16 @@ async def pay_order(
             await db.commit()
             await db.refresh(order)
 
-        pay_type = (settings.ikunpay_default_type or "").strip() or "alipay"
+        pay_type_raw = (settings.ikunpay_default_type or "").strip()
+        pay_type = pay_type_raw or None
         return_url = (settings.ikunpay_return_url or "").strip() or None
         if return_url is None:
             frontend_base = str(getattr(settings, "frontend_base_url", "") or "").strip().rstrip("/")
             if frontend_base:
                 return_url = f"{frontend_base}/payment/return"
+
+        if return_url:
+            return_url = _append_query_param(return_url, "order_no", order.order_no)
 
         pay_url = _ikunpay_build_submit_pay_url(
             gateway_url=(settings.ikunpay_gateway_url or "").strip() or "https://ikunpay.com/submit.php",
@@ -1106,6 +1139,9 @@ async def pay_order(
             frontend_base = str(getattr(settings, "frontend_base_url", "") or "").strip().rstrip("/")
             if frontend_base:
                 return_url = f"{frontend_base}/payment/return"
+
+        if return_url:
+            return_url = _append_query_param(return_url, "order_no", order.order_no)
 
         pay_url = _alipay_build_page_pay_url(
             gateway_url=settings.alipay_gateway_url,
@@ -1340,10 +1376,14 @@ async def alipay_notify(request: Request, db: Annotated[AsyncSession, Depends(ge
     return Response(content="success", media_type="text/plain")
 
 
-@router.post("/ikunpay/notify", summary="Ikunpay 异步通知")
+@router.api_route("/ikunpay/notify", methods=["GET", "POST"], summary="Ikunpay 异步通知")
 async def ikunpay_notify(request: Request, db: Annotated[AsyncSession, Depends(get_db)]):
-    form = await request.form()
-    params = {str(k): str(v) for k, v in form.items()}
+    params: dict[str, str]
+    if request.method == "GET":
+        params = {str(k): str(v) for k, v in request.query_params.items()}
+    else:
+        form = await request.form()
+        params = {str(k): str(v) for k, v in form.items()}
 
     payload_raw = json.dumps(params, ensure_ascii=False, separators=(",", ":"))
     order_no_raw = str(params.get("out_trade_no") or "").strip() or None
@@ -2619,6 +2659,40 @@ async def admin_payment_channel_status(
                 "api_v3_key_set": wechatpay_api_v3_key_set,
             },
         },
+    )
+
+
+@router.get("/channel-status", response_model=PublicPaymentChannelStatusResponse, summary="支付渠道配置状态")
+async def payment_channel_status():
+    alipay_configured = bool(
+        (settings.alipay_app_id or "").strip()
+        and (settings.alipay_public_key or "").strip()
+        and (settings.alipay_private_key or "").strip()
+        and (settings.alipay_notify_url or "").strip()
+    )
+    ikunpay_configured = bool(
+        (settings.ikunpay_pid or "").strip()
+        and (settings.ikunpay_key or "").strip()
+        and (settings.ikunpay_notify_url or "").strip()
+    )
+    wechatpay_configured = bool(
+        (settings.wechatpay_mch_id or "").strip()
+        and (settings.wechatpay_mch_serial_no or "").strip()
+        and (settings.wechatpay_private_key or "").strip()
+        and (settings.wechatpay_api_v3_key or "").strip()
+    )
+
+    available_methods: list[str] = ["balance"]
+    if alipay_configured:
+        available_methods.append("alipay")
+    if ikunpay_configured:
+        available_methods.append("ikunpay")
+
+    return PublicPaymentChannelStatusResponse(
+        alipay_configured=alipay_configured,
+        wechatpay_configured=wechatpay_configured,
+        ikunpay_configured=ikunpay_configured,
+        available_methods=available_methods,
     )
 
 

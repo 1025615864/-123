@@ -623,13 +623,13 @@ export default function NewsPage() {
 
   const [pendingFavoriteIds, setPendingFavoriteIds] = useState<number[]>([]);
 
-  const toggleFavorite = async (item: NewsListItem) => {
+  const toggleFavorite = async (item: NewsListItem, opts?: { force?: boolean }) => {
     if (!isAuthenticated) {
       toast.info("登录后可收藏");
       return;
     }
     if (!item || typeof item.id !== "number") return;
-    if (pendingFavoriteIds.includes(item.id)) return;
+    if (pendingFavoriteIds.includes(item.id) && !opts?.force) return;
 
     setPendingFavoriteIds((prev) => (prev.includes(item.id) ? prev : [...prev, item.id]));
 
@@ -774,7 +774,17 @@ export default function NewsPage() {
         return { ...old, is_favorited: favorited, favorite_count: favoriteCount };
       });
 
-      toast.success(payload?.message || (payload?.favorited ? "收藏成功" : "取消收藏"));
+      const msg = payload?.message || (payload?.favorited ? "收藏成功" : "取消收藏");
+      toast.showToast("success", msg, {
+        durationMs: 7000,
+        action: {
+          label: "撤销",
+          onClick: () => {
+            void toggleFavorite(item, { force: true });
+          },
+          closeOnAction: true,
+        },
+      });
     } catch (e) {
       const activeKey = isMobile ? infiniteQueryKey : listQueryKey;
       queryClient.setQueryData(activeKey, previousActive);

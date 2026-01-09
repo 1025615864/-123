@@ -349,7 +349,28 @@ export default function PostDetailPage() {
           queryKey: queryKeys.forumPostComments(id),
         });
       }
-      toast.success("已移入回收站");
+      toast.showToast("success", "已移入回收站", {
+        durationMs: 7000,
+        action: {
+          label: "撤销",
+          onClick: () => {
+            if (!id) return;
+            void (async () => {
+              try {
+                await api.post(`/forum/posts/${id}/restore`);
+                await queryClient.invalidateQueries({
+                  queryKey: queryKeys.forumPostsRoot(),
+                });
+                navigate(`/forum/post/${id}`);
+                toast.success("已撤销删除");
+              } catch (e) {
+                toast.error(getApiErrorMessage(e, "撤销失败"));
+              }
+            })();
+          },
+          closeOnAction: true,
+        },
+      });
       navigate("/forum/recycle-bin");
       await queryClient.invalidateQueries({
         queryKey: queryKeys.forumPostsRoot(),
@@ -504,6 +525,18 @@ export default function PostDetailPage() {
           };
         }
       );
+
+      const msg = result.liked ? "已点赞" : "已取消点赞";
+      toast.showToast("success", msg, {
+        durationMs: 5000,
+        action: {
+          label: "撤销",
+          onClick: () => {
+            commentLikeMutation.mutate(commentId);
+          },
+          closeOnAction: true,
+        },
+      });
     },
     onError: (err, _commentId, ctx) => {
       if (ctx && typeof ctx === "object") {
@@ -608,9 +641,32 @@ export default function PostDetailPage() {
 
       return { previousCache, previousPostState, previousPostCache };
     },
-    onSuccess: async () => {
+    onSuccess: async (_data, commentId) => {
       if (!postId) return;
-      toast.success("已删除");
+      toast.showToast("success", "已删除", {
+        durationMs: 7000,
+        action: {
+          label: "撤销",
+          onClick: () => {
+            const id = postId;
+            void (async () => {
+              try {
+                await api.post(`/forum/comments/${commentId}/restore`);
+                await Promise.all([
+                  queryClient.invalidateQueries({
+                    queryKey: queryKeys.forumPostComments(id),
+                  }),
+                  queryClient.invalidateQueries({ queryKey: postQueryKey }),
+                ]);
+                toast.success("已撤销删除");
+              } catch (e) {
+                toast.error(getApiErrorMessage(e, "撤销失败"));
+              }
+            })();
+          },
+          closeOnAction: true,
+        },
+      });
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.forumPostComments(postId) }),
         queryClient.invalidateQueries({ queryKey: postQueryKey }),
@@ -887,6 +943,18 @@ export default function PostDetailPage() {
           ? { ...old, is_liked: result.liked, like_count: result.like_count }
           : old
       );
+
+      const msg = result.liked ? "已点赞" : "已取消点赞";
+      toast.showToast("success", msg, {
+        durationMs: 5000,
+        action: {
+          label: "撤销",
+          onClick: () => {
+            likeMutation.mutate();
+          },
+          closeOnAction: true,
+        },
+      });
     },
     onError: (err, _vars, ctx) => {
       if (ctx && typeof ctx === "object") {
@@ -970,6 +1038,18 @@ export default function PostDetailPage() {
             }
           : old
       );
+
+      const msg = result.favorited ? "收藏成功" : "已取消收藏";
+      toast.showToast("success", msg, {
+        durationMs: 7000,
+        action: {
+          label: "撤销",
+          onClick: () => {
+            favoriteMutation.mutate();
+          },
+          closeOnAction: true,
+        },
+      });
     },
     onError: (err, _vars, ctx) => {
       if (ctx && typeof ctx === "object") {

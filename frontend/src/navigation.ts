@@ -5,6 +5,7 @@ import {
   Building2,
   MessageSquare,
   User,
+  Crown,
   Calculator,
   Clock,
   Calendar,
@@ -21,6 +22,7 @@ export interface NavItem {
 export const primaryNavItems: NavItem[] = [
   { path: "/", label: "首页", icon: Home },
   { path: "/chat", label: "AI咨询", icon: MessageCircle },
+  { path: "/vip", label: "VIP会员", icon: Crown },
   { path: "/news", label: "新闻解读", icon: Newspaper },
   { path: "/lawfirm", label: "找律所", icon: Building2 },
   { path: "/forum", label: "法律论坛", icon: MessageSquare },

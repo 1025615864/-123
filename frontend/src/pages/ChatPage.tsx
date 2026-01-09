@@ -984,7 +984,7 @@ export default function ChatPage() {
       });
 
       if (!doneHandled) {
-        toast.warning("连接中断，回答可能不完整，可点击重试");
+        toast.error("网络异常，请检查网络后重试");
       }
       void requestQuickReplies(assistantText, pendingRefs);
       if (!isGuest) {
@@ -1011,7 +1011,20 @@ export default function ChatPage() {
       }
 
       const status = err?.status;
-      const message = err?.message || "请求失败，请稍后再试。";
+      const rawMessage = String(err?.message ?? "");
+      const lowerMessage = rawMessage.toLowerCase();
+      const isNetworkError =
+        !status &&
+        (lowerMessage.includes("network error") ||
+          lowerMessage.includes("failed to fetch") ||
+          lowerMessage.includes("timeout") ||
+          lowerMessage.includes("ecconnaborted") ||
+          lowerMessage.includes("load failed"));
+
+      const message =
+        isNetworkError
+          ? "网络异常，请检查网络后重试"
+          : rawMessage || "请求失败，请稍后再试。";
 
       if (status === 401) {
         try {
@@ -1021,20 +1034,24 @@ export default function ChatPage() {
           // ignore
         }
 
-        toast.info("登录已过期，请重新登录");
+        toast.warning("登录已失效，请重新登录");
         updateStreamingAssistant((m) => ({
           ...m,
           content: String(m.content ?? "").trim()
             ? m.content
-            : "登录已过期，请重新登录后继续使用。",
+            : "登录已失效，请重新登录后继续使用。",
           isThinking: false,
           streamState: "error",
-          streamError: "登录已过期",
+          streamError: "登录已失效",
           streamRequestId: err?.requestId,
           streamErrorCode: err?.errorCode,
         }));
         setInput((prev) => (String(prev ?? "").trim() ? prev : userMessage));
         return;
+      }
+
+      if (isNetworkError) {
+        toast.error("网络异常，请检查网络后重试");
       }
 
       if (status === 429) {
@@ -1912,6 +1929,7 @@ function AssistantMessage({
   const toast = useToast();
   const [rated, setRated] = useState<number | null>(null);
   const [showMeta, setShowMeta] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(true);
 
   const FAVORITES_KEY = "chat_favorite_messages_v1";
 
@@ -2100,6 +2118,8 @@ function AssistantMessage({
 
     const conclusionSection = findSection(["结论", "总结", "答案"]);
     const highlightsSection = findSection(["要点", "重点", "关键点"]);
+    const suggestionsSection = findSection(["建议", "行动建议", "处理建议", "下一步"]);
+    const risksSection = findSection(["风险提示", "风险点", "注意事项", "风险"]);
 
     const conclusion =
       (conclusionSection && conclusionSection[0]) || fallbackConclusion();
@@ -2111,14 +2131,22 @@ function AssistantMessage({
         return list.length > 0 ? list : null;
       })();
 
+    const suggestions = Array.isArray(suggestionsSection) ? suggestionsSection : [];
+    const risks = Array.isArray(risksSection) ? risksSection : [];
+
     const shouldShow =
-      (strip(conclusion).length >= 16 || (highlights?.length ?? 0) > 0) &&
+      (strip(conclusion).length >= 16 ||
+        (highlights?.length ?? 0) > 0 ||
+        suggestions.length > 0 ||
+        risks.length > 0) &&
       blocks.length >= 6;
 
     return {
       shouldShow,
       conclusion: strip(conclusion),
       highlights: Array.isArray(highlights) ? highlights : [],
+      suggestions,
+      risks,
     };
   }, [blocks]);
 
@@ -2683,33 +2711,76 @@ function AssistantMessage({
       {structuredSummary.shouldShow && (
         <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 shadow-sm dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-200">
           <div className="flex items-center justify-between gap-3">
-            <div className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-              结论与要点
-            </div>
+            <button
+              type="button"
+              onClick={() => setSummaryOpen((v) => !v)}
+              className="flex items-center gap-2 text-xs font-semibold text-slate-600 hover:text-slate-800 dark:text-slate-300 dark:hover:text-white"
+            >
+              <span>结构化摘要</span>
+              {summaryOpen ? (
+                <ChevronUp className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronDown className="h-3.5 w-3.5" />
+              )}
+            </button>
           </div>
 
-          {structuredSummary.conclusion && (
-            <div className="mt-2 rounded-xl bg-white px-3 py-2 text-sm leading-relaxed text-slate-800 dark:bg-slate-900/40 dark:text-slate-100">
-              <span className="mr-2 text-xs font-semibold text-blue-700 dark:text-blue-300">
-                结论
-              </span>
-              <span className="whitespace-pre-wrap">{structuredSummary.conclusion}</span>
-            </div>
-          )}
+          {summaryOpen && (
+            <>
+              {structuredSummary.conclusion && (
+                <div className="mt-2 rounded-xl bg-white px-3 py-2 text-sm leading-relaxed text-slate-800 dark:bg-slate-900/40 dark:text-slate-100">
+                  <span className="mr-2 text-xs font-semibold text-blue-700 dark:text-blue-300">
+                    结论
+                  </span>
+                  <span className="whitespace-pre-wrap">{structuredSummary.conclusion}</span>
+                </div>
+              )}
 
-          {structuredSummary.highlights.length > 0 && (
-            <div className="mt-2">
-              <div className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-                要点
-              </div>
-              <ul className="mt-1 space-y-1 pl-5 list-disc marker:text-slate-400">
-                {structuredSummary.highlights.slice(0, 4).map((t, i) => (
-                  <li key={`hl-${i}`} className="text-sm text-slate-700 dark:text-slate-200">
-                    <span className="whitespace-pre-wrap">{t}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
+              {structuredSummary.highlights.length > 0 && (
+                <div className="mt-2">
+                  <div className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                    要点
+                  </div>
+                  <ul className="mt-1 space-y-1 pl-5 list-disc marker:text-slate-400">
+                    {structuredSummary.highlights.slice(0, 4).map((t, i) => (
+                      <li key={`hl-${i}`} className="text-sm text-slate-700 dark:text-slate-200">
+                        <span className="whitespace-pre-wrap">{t}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {structuredSummary.suggestions.length > 0 && (
+                <div className="mt-2">
+                  <div className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                    建议
+                  </div>
+                  <ul className="mt-1 space-y-1 pl-5 list-disc marker:text-slate-400">
+                    {structuredSummary.suggestions.slice(0, 6).map((t, i) => (
+                      <li key={`sg-${i}`} className="text-sm text-slate-700 dark:text-slate-200">
+                        <span className="whitespace-pre-wrap">{t}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {structuredSummary.risks.length > 0 && (
+                <div className="mt-2">
+                  <div className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                    风险提示
+                  </div>
+                  <ul className="mt-1 space-y-1 pl-5 list-disc marker:text-rose-400">
+                    {structuredSummary.risks.slice(0, 6).map((t, i) => (
+                      <li key={`rk-${i}`} className="text-sm text-slate-700 dark:text-slate-200">
+                        <span className="whitespace-pre-wrap">{t}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}

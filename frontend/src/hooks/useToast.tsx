@@ -3,16 +3,42 @@ import { X, CheckCircle2, AlertCircle, Info, AlertTriangle } from 'lucide-react'
 
 type ToastType = 'success' | 'error' | 'info' | 'warning'
 
+export type GlobalToastType = ToastType
+
+export function emitToast(type: GlobalToastType, message: string) {
+  try {
+    window.dispatchEvent(new CustomEvent('app:toast', { detail: { type, message } }))
+  } catch {
+  }
+}
+
 interface Toast {
   id: string
   type: ToastType
   message: string
   leaving: boolean
   paused: boolean
+  durationMs?: number
+  action?: {
+    label: string
+    onClick: () => void
+    closeOnAction?: boolean
+  }
 }
 
 interface ToastContextType {
-  showToast: (type: ToastType, message: string) => void
+  showToast: (
+    type: ToastType,
+    message: string,
+    options?: {
+      durationMs?: number
+      action?: {
+        label: string
+        onClick: () => void
+        closeOnAction?: boolean
+      }
+    }
+  ) => void
   success: (message: string) => void
   error: (message: string) => void
   info: (message: string) => void
@@ -72,17 +98,53 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     }, toastExitMs)
   }, [toastExitMs])
 
-  const showToast = useCallback((type: ToastType, message: string) => {
+  const showToast = useCallback((
+    type: ToastType,
+    message: string,
+    options?: {
+      durationMs?: number
+      action?: {
+        label: string
+        onClick: () => void
+        closeOnAction?: boolean
+      }
+    }
+  ) => {
     const id = Math.random().toString(36).substring(7)
-    setToasts((prev) => [...prev, { id, type, message, leaving: false, paused: false }])
+    const durationMs = Math.max(0, Number(options?.durationMs ?? toastDurationMs))
+    const action = options?.action
+    setToasts((prev) => [
+      ...prev,
+      {
+        id,
+        type,
+        message,
+        leaving: false,
+        paused: false,
+        durationMs,
+        action,
+      },
+    ])
 
-    scheduleRemove(id, Math.max(0, toastDurationMs - toastExitMs))
+    scheduleRemove(id, Math.max(0, durationMs - toastExitMs))
   }, [scheduleRemove, toastDurationMs, toastExitMs])
 
   const success = useCallback((message: string) => showToast('success', message), [showToast])
   const error = useCallback((message: string) => showToast('error', message), [showToast])
   const info = useCallback((message: string) => showToast('info', message), [showToast])
   const warning = useCallback((message: string) => showToast('warning', message), [showToast])
+
+  useEffect(() => {
+    const handler = (evt: Event) => {
+      const e = evt as CustomEvent<{ type?: ToastType; message?: string }>
+      const type = e?.detail?.type
+      const message = e?.detail?.message
+      if (!type || !message) return
+      showToast(type, message)
+    }
+    window.addEventListener('app:toast', handler as EventListener)
+    return () => window.removeEventListener('app:toast', handler as EventListener)
+  }, [showToast])
 
   const contextValue = useMemo(
     () => ({ showToast, success, error, info, warning }),
@@ -180,6 +242,24 @@ export function ToastProvider({ children }: { children: ReactNode }) {
               {getIcon(toast.type)}
             </div>
             <p className="flex-1 text-sm font-medium">{toast.message}</p>
+
+            {toast.action ? (
+              <button
+                onClick={() => {
+                  try {
+                    toast.action?.onClick?.()
+                  } finally {
+                    if (toast.action?.closeOnAction !== false) {
+                      removeToast(toast.id)
+                    }
+                  }
+                }}
+                className="flex-shrink-0 rounded-lg border border-black/10 bg-white px-2 py-1 text-xs font-medium hover:bg-black/5 transition dark:border-white/10 dark:bg-white/5 dark:hover:bg-white/10"
+              >
+                {toast.action.label}
+              </button>
+            ) : null}
+
             <button
               onClick={() => removeToast(toast.id)}
               className="flex-shrink-0 p-1 rounded-lg hover:bg-black/5 transition dark:hover:bg-white/10"
@@ -190,7 +270,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             <div className="absolute left-0 right-0 bottom-0 h-1 bg-black/5 dark:bg-white/10">
               <div
                 className={`h-full toast-progress ${getProgressStyles(toast.type)}`}
-                style={{ animationDuration: `${toastDurationMs}ms`, animationPlayState: toast.leaving || toast.paused ? 'paused' : 'running' }}
+                style={{ animationDuration: `${toast.durationMs ?? toastDurationMs}ms`, animationPlayState: toast.leaving || toast.paused ? 'paused' : 'running' }}
               />
             </div>
           </div>

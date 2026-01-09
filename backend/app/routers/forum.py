@@ -849,6 +849,29 @@ async def delete_comment(
     return {"message": "删除成功"}
 
 
+@router.post("/comments/{comment_id}/restore", summary="恢复评论")
+async def restore_comment(
+    comment_id: int,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """恢复评论（撤销删除，仅作者、版主或管理员可操作）"""
+    from ..utils.permissions import is_owner_or_admin
+
+    comment = await forum_service.get_comment_any(db, comment_id)
+    if not comment:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="评论不存在")
+
+    if not is_owner_or_admin(current_user, comment.user_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="只有作者、版主或管理员可以恢复评论",
+        )
+
+    _ = await forum_service.restore_comment(db, comment)
+    return {"message": "已恢复"}
+
+
 @router.post("/comments/{comment_id}/like", response_model=LikeResponse, summary="点赞/取消点赞评论")
 async def toggle_comment_like(
     comment_id: int,
@@ -1601,7 +1624,7 @@ async def add_word(
     request: Request,
 ):
     """添加敏感词"""
-    await forum_service.add_sensitive_word(db, word=data.word, updated_by=current_user.id)
+    _ = await forum_service.add_sensitive_word(db, word=data.word, updated_by=current_user.id)
 
     await _log_forum_admin_action(
         db,
@@ -1624,7 +1647,7 @@ async def delete_word(
     request: Request,
 ):
     """删除敏感词"""
-    await forum_service.remove_sensitive_word(db, word=word, updated_by=current_user.id)
+    _ = await forum_service.remove_sensitive_word(db, word=word, updated_by=current_user.id)
 
     await _log_forum_admin_action(
         db,
@@ -1647,7 +1670,7 @@ async def add_advertisement_word(
     request: Request,
 ):
     """添加广告词"""
-    await forum_service.add_ad_word(db, word=data.word, updated_by=current_user.id)
+    _ = await forum_service.add_ad_word(db, word=data.word, updated_by=current_user.id)
 
     await _log_forum_admin_action(
         db,
@@ -1670,7 +1693,7 @@ async def delete_advertisement_word(
     request: Request,
 ):
     """删除广告词"""
-    await forum_service.remove_ad_word(db, word=word, updated_by=current_user.id)
+    _ = await forum_service.remove_ad_word(db, word=word, updated_by=current_user.id)
 
     await _log_forum_admin_action(
         db,

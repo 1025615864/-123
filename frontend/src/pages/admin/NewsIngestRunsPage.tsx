@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { Calendar, Filter, RefreshCw } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import api from "../../api/client";
@@ -69,6 +70,7 @@ function formatTime(value: string | null | undefined): string {
 
 export default function NewsIngestRunsPage() {
   const toast = useToast();
+  const [searchParams] = useSearchParams();
 
   const [page, setPage] = useState(1);
   const pageSize = 20;
@@ -77,6 +79,11 @@ export default function NewsIngestRunsPage() {
   const [status, setStatus] = useState<string>("");
   const [fromDt, setFromDt] = useState<string>("");
   const [toDt, setToDt] = useState<string>("");
+
+  useEffect(() => {
+    const sid = String(searchParams.get("source_id") || "").trim();
+    if (sid) setSourceId(sid);
+  }, [searchParams]);
 
   useEffect(() => {
     setPage(1);

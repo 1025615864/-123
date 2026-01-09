@@ -34,6 +34,7 @@ async def test_engine():
         "app.models.settlement",
         "app.models.knowledge",
         "app.models.document",
+        "app.models.document_template",
         "app.models.notification",
         "app.models.payment",
         "app.models.system",

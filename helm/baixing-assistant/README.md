@@ -139,7 +139,7 @@ helm uninstall baixing-assistant -n baixing
   - 确保 `backend.secret.REDIS_URL` 可用（`DEBUG=false` 且 Redis 不可用时 pipeline 会被禁用）
 
 - 发布后冒烟：
-  - 参考：`../../docs/PROJECT_REPORT.md`
+  - 参考：`../../docs/_archive/PROJECT_REPORT.md`
   - 建议直接运行：`../../scripts/smoke-news-ai.sh` 或 `../../scripts/smoke-news-ai.ps1`
 
 ---

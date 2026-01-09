@@ -31,8 +31,14 @@ export function useAppMutation<TData = unknown, TVariables = void, TContext = un
     ...rest
   } = options
 
+  const meta = {
+    ...(rest as any)?.meta,
+    disableGlobalErrorToast: true,
+  }
+
   return useMutation<TData, UnknownError, TVariables, TContext>({
     ...rest,
+    meta,
     mutationFn,
     onSuccess: async (data, variables, context, ...extra) => {
       await (onSuccess as any)?.(data, variables, context, ...extra)

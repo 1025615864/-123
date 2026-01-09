@@ -18,6 +18,9 @@
 cd backend
 pip install -r requirements.txt
 
+# 如需运行测试/CI 同步依赖（包含 pytest 等）：
+pip install -r requirements-dev.txt
+
 # Windows 提示：若 `python` 指向 WindowsApps stub，优先使用 `py -m pip ...` / `py -m uvicorn ...`
 ```
 
@@ -47,7 +50,7 @@ cp env.example .env
 - 管理后台 SystemConfig **禁止保存** API Key/secret（后端会硬拦截）。
 - 生产启用 News AI 周期任务时，务必配置可用的 `REDIS_URL`（用于分布式锁，避免多副本重复跑）。
 
-详见：`../docs/PROJECT_REPORT.md`
+详见：`../docs/_archive/PROJECT_REPORT.md`
 
 ### 3. 初始化法律知识库
 
@@ -69,6 +72,14 @@ python -m app.main
 
 - Swagger UI: http://localhost:8000/docs
 - ReDoc: http://localhost:8000/redoc
+
+### 6. 运行测试
+
+```bash
+cd backend
+py -m pip install -r requirements-dev.txt
+py -m pytest -q
+```
 
 ## 数据库备份 / 恢复 / 演练（运维）
 
@@ -225,4 +236,4 @@ backend/
 
 ## 相关文档
 
-- `../docs/PROJECT_REPORT.md`：项目报告（面向接手工程师的一站式说明）
+- `../docs/_archive/PROJECT_REPORT.md`：项目报告（面向接手工程师的一站式说明）

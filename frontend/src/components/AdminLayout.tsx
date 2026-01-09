@@ -45,6 +45,7 @@ const sidebarItems: SidebarItem[] = [
   { icon: Shield, label: '律师认证', path: '/admin/lawyer-verifications' },
   { icon: Database, label: '知识库管理', path: '/admin/knowledge' },
   { icon: FileQuestion, label: '咨询模板', path: '/admin/templates' },
+  { icon: FileText, label: '文书模板', path: '/admin/document-templates' },
   { icon: FileText, label: '操作日志', path: '/admin/logs' },
   { icon: Bell, label: '通知管理', path: '/admin/notifications' },
   { icon: MessageSquare, label: '客服反馈', path: '/admin/feedback' },

@@ -68,7 +68,7 @@ function statusLabel(s: string): string {
 }
 
 export default function LawyerWithdrawalsPage() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, user } = useAuth();
   const { actualTheme } = useTheme();
   const toast = useToast();
 
@@ -104,8 +104,33 @@ export default function LawyerWithdrawalsPage() {
     if (!listQuery.error) return;
     const status = (listQuery.error as any)?.response?.status;
     if (status === 401) return;
+    if (status === 403) {
+      const detail = String(
+        (listQuery.error as any)?.response?.data?.detail || ""
+      );
+      if (user && user.phone_verified === false) {
+        toast.warning("请先完成手机号验证");
+        window.location.href = "/profile?phoneVerify=1";
+        return;
+      }
+      if (user && user.email_verified === false) {
+        toast.warning("请先完成邮箱验证");
+        window.location.href = "/profile?emailVerify=1";
+        return;
+      }
+      if (detail.includes("手机号")) {
+        toast.warning("请先完成手机号验证");
+        window.location.href = "/profile?phoneVerify=1";
+        return;
+      }
+      if (detail.includes("邮箱")) {
+        toast.warning("请先完成邮箱验证");
+        window.location.href = "/profile?emailVerify=1";
+        return;
+      }
+    }
     toast.error(getApiErrorMessage(listQuery.error, "加载失败，请稍后重试"));
-  }, [listQuery.error, toast]);
+  }, [listQuery.error, toast, user]);
 
   const items = listQuery.data?.items ?? [];
   const total = listQuery.data?.total ?? 0;
@@ -121,6 +146,30 @@ export default function LawyerWithdrawalsPage() {
       const res = await api.get(`/lawyer/withdrawals/${id}`);
       setDetail(res.data as DetailResp);
     } catch (e) {
+      const status = (e as any)?.response?.status;
+      if (status === 403) {
+        const detail = String((e as any)?.response?.data?.detail || "");
+        if (user && user.phone_verified === false) {
+          toast.warning("请先完成手机号验证");
+          window.location.href = "/profile?phoneVerify=1";
+          return;
+        }
+        if (user && user.email_verified === false) {
+          toast.warning("请先完成邮箱验证");
+          window.location.href = "/profile?emailVerify=1";
+          return;
+        }
+        if (detail.includes("手机号")) {
+          toast.warning("请先完成手机号验证");
+          window.location.href = "/profile?phoneVerify=1";
+          return;
+        }
+        if (detail.includes("邮箱")) {
+          toast.warning("请先完成邮箱验证");
+          window.location.href = "/profile?emailVerify=1";
+          return;
+        }
+      }
       toast.error(getApiErrorMessage(e, "加载详情失败"));
     }
   };
@@ -228,10 +277,16 @@ export default function LawyerWithdrawalsPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Button variant="outline" size="sm" onClick={() => openDetail(w.id)}>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openDetail(w.id)}
+                    >
                       查看详情
                     </Button>
-                    <div className="text-xs text-slate-500 dark:text-white/40">#{w.id}</div>
+                    <div className="text-xs text-slate-500 dark:text-white/40">
+                      #{w.id}
+                    </div>
                   </div>
                 </div>
               </Card>
@@ -277,13 +332,28 @@ export default function LawyerWithdrawalsPage() {
                 </Badge>
               </div>
               <div className="mt-2 text-xs text-slate-600 dark:text-white/60 space-y-1 break-words">
-                <div>手续费：¥{Number(detail.fee || 0).toFixed(2)}，实际到账：¥{Number(detail.actual_amount || 0).toFixed(2)}</div>
+                <div>
+                  手续费：¥{Number(detail.fee || 0).toFixed(2)}，实际到账：¥
+                  {Number(detail.actual_amount || 0).toFixed(2)}
+                </div>
                 <div>收款账户：{detail.account_info_masked}</div>
-                <div>申请时间：{new Date(detail.created_at).toLocaleString()}</div>
-                {detail.reviewed_at ? <div>审核时间：{new Date(detail.reviewed_at).toLocaleString()}</div> : null}
-                {detail.completed_at ? <div>完成时间：{new Date(detail.completed_at).toLocaleString()}</div> : null}
+                <div>
+                  申请时间：{new Date(detail.created_at).toLocaleString()}
+                </div>
+                {detail.reviewed_at ? (
+                  <div>
+                    审核时间：{new Date(detail.reviewed_at).toLocaleString()}
+                  </div>
+                ) : null}
+                {detail.completed_at ? (
+                  <div>
+                    完成时间：{new Date(detail.completed_at).toLocaleString()}
+                  </div>
+                ) : null}
                 {detail.reject_reason ? (
-                  <div className="text-red-600 dark:text-red-300">驳回原因：{detail.reject_reason}</div>
+                  <div className="text-red-600 dark:text-red-300">
+                    驳回原因：{detail.reject_reason}
+                  </div>
                 ) : null}
                 {detail.remark ? <div>备注：{detail.remark}</div> : null}
               </div>

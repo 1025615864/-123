@@ -249,11 +249,17 @@ export default function ForumPage() {
         };
       });
 
-      if (result?.favorited) {
-        toast.success("已收藏");
-      } else {
-        toast.success("已取消收藏");
-      }
+      const msg = result?.favorited ? "已收藏" : "已取消收藏";
+      toast.showToast("success", msg, {
+        durationMs: 7000,
+        action: {
+          label: "撤销",
+          onClick: () => {
+            toggleFavoriteMutation.mutate(postId);
+          },
+          closeOnAction: true,
+        },
+      });
     },
   });
 

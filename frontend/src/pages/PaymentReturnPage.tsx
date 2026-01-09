@@ -7,7 +7,6 @@ import { Badge, Button, Card, EmptyState, Skeleton } from "../components/ui";
 import api from "../api/client";
 import { useTheme } from "../contexts/ThemeContext";
 import { useToast } from "../hooks";
-import { getApiErrorMessage } from "../utils";
 
 type OrderDetail = {
   order_no: string;
@@ -44,6 +43,26 @@ function statusToText(status: string): string {
   if (s === "failed") return "支付失败";
   if (s === "refunded") return "已退款";
   return status || "未知";
+}
+
+function orderTypeToNextStep(orderType: string | null | undefined): {
+  label: string;
+  to: string;
+} | null {
+  const t = String(orderType || "")
+    .trim()
+    .toLowerCase();
+  if (!t) return null;
+  if (t === "vip" || t === "ai_pack" || t === "recharge") {
+    return { label: "去个人中心查看余额/权益", to: "/profile" };
+  }
+  if (t === "consultation") {
+    return { label: "查看我的预约", to: "/orders?tab=consultations" };
+  }
+  if (t === "service") {
+    return { label: "去律所服务", to: "/lawfirm" };
+  }
+  return null;
 }
 
 export default function PaymentReturnPage() {
@@ -138,13 +157,31 @@ export default function PaymentReturnPage() {
     }
   }, [detailQuery.data?.status]);
 
-  useEffect(() => {
-    if (!detailQuery.error) return;
-    toast.error(getApiErrorMessage(detailQuery.error, "订单状态加载失败"));
-  }, [detailQuery.error, toast]);
-
   const detail = detailQuery.data;
   const normalizedStatus = String(detail?.status || "").toLowerCase();
+  const nextStep = useMemo(
+    () => orderTypeToNextStep(detail?.order_type),
+    [detail?.order_type]
+  );
+
+  const statusHint = useMemo(() => {
+    if (normalizedStatus === "paid") {
+      return "订单已支付成功。你可以前往对应功能查看权益或服务进度。";
+    }
+    if (normalizedStatus === "pending") {
+      return "如果你已完成支付，异步通知可能会有延迟；请稍后刷新或前往订单页确认状态。";
+    }
+    if (normalizedStatus === "failed") {
+      return "支付失败，可前往订单页重新支付或更换支付方式。";
+    }
+    if (normalizedStatus === "cancelled") {
+      return "订单已取消。如需继续购买，请前往订单页重新下单。";
+    }
+    if (normalizedStatus === "refunded") {
+      return "订单已退款。退款通常原路返回，到账时间以支付渠道为准。";
+    }
+    return "如状态未更新，请稍后刷新或前往订单页查看。";
+  }, [normalizedStatus]);
 
   const headline = useMemo(() => {
     if (!orderNo) return "支付结果";
@@ -182,7 +219,6 @@ export default function PaymentReturnPage() {
               onClick={async () => {
                 const res = await detailQuery.refetch();
                 if (res.error) {
-                  toast.error(getApiErrorMessage(res.error, "刷新失败"));
                   return;
                 }
                 toast.success("已刷新订单状态");
@@ -248,26 +284,59 @@ export default function PaymentReturnPage() {
 
           {normalizedStatus === "pending" ? (
             <div className="mt-5 rounded-xl border border-slate-200/70 bg-slate-900/5 px-4 py-3 text-sm text-slate-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-white/70">
-              <div>支付成功后，异步通知可能会有延迟。</div>
-              <div className="mt-1">
-                建议：点击右上角“刷新”或前往订单页查看最新状态。
-              </div>
+              <div>{statusHint}</div>
               {pollingLeft > 0 ? (
                 <div className="mt-1 text-xs text-slate-500 dark:text-white/45">
                   自动刷新中（剩余约 {pollingLeft * 3}s）
                 </div>
               ) : null}
             </div>
+          ) : normalizedStatus ? (
+            <div className="mt-5 rounded-xl border border-slate-200/70 bg-slate-900/5 px-4 py-3 text-sm text-slate-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-white/70">
+              <div>{statusHint}</div>
+            </div>
           ) : null}
 
           <div className="mt-6 grid sm:grid-cols-2 gap-3">
-            <Link to="/orders?tab=payment" className="block">
-              <Button variant="outline" fullWidth icon={ExternalLink}>
-                去订单页查看
+            {normalizedStatus === "paid" && nextStep ? (
+              <Link to={nextStep.to} className="block">
+                <Button fullWidth icon={ExternalLink}>
+                  {nextStep.label}
+                </Button>
+              </Link>
+            ) : (
+              <Link to="/orders?tab=payment" className="block">
+                <Button fullWidth icon={ExternalLink}>
+                  {normalizedStatus === "failed"
+                    ? "去订单页重新支付"
+                    : normalizedStatus === "cancelled"
+                      ? "去订单页重新下单"
+                      : "去订单页查看"}
+                </Button>
+              </Link>
+            )}
+
+            <Link
+              to={
+                normalizedStatus === "paid" && nextStep && nextStep.to !== "/profile"
+                  ? "/orders?tab=payment"
+                  : "/profile"
+              }
+              className="block"
+            >
+              <Button
+                variant={
+                  normalizedStatus === "paid" && nextStep && nextStep.to !== "/profile"
+                    ? "outline"
+                    : "primary"
+                }
+                fullWidth
+                icon={ExternalLink}
+              >
+                {normalizedStatus === "paid" && nextStep && nextStep.to !== "/profile"
+                  ? "去订单页查看"
+                  : "去个人中心查看余额/权益"}
               </Button>
-            </Link>
-            <Link to="/profile" className="block">
-              <Button fullWidth>去个人中心查看余额/权益</Button>
             </Link>
           </div>
         </Card>

@@ -54,11 +54,18 @@ export default function DocumentGeneratorPage() {
     claims: '',
     evidence: '',
   })
-  const [generatedDocument, setGeneratedDocument] = useState<{title: string; content: string} | null>(null)
+  const [generatedDocument, setGeneratedDocument] = useState<
+    { title: string; content: string; template_key?: string | null; template_version?: number | null } | null
+  >(null)
   const [copied, setCopied] = useState(false)
   const toast = useToast()
   const queryClient = useQueryClient()
   const { actualTheme } = useTheme()
+
+  const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false)
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
+  const [pdfPreviewTitle, setPdfPreviewTitle] = useState<string>('')
+  const [pdfPreviewBusy, setPdfPreviewBusy] = useState(false)
 
   const quotasQuery = useQuery({
     queryKey: queryKeys.userMeQuotas(),
@@ -171,17 +178,25 @@ export default function DocumentGeneratorPage() {
   const myDocsData: MyDocListResponse = myDocsQuery.data ?? ({ items: [], total: 0 } satisfies MyDocListResponse)
   const myDocsItems = myDocsData.items ?? []
 
-  const generateMutation = useAppMutation<{ title: string; content: string }, void>({
+  const generateMutation = useAppMutation<
+    { title: string; content: string; template_key?: string | null; template_version?: number | null },
+    void
+  >({
     mutationFn: async (_: void) => {
       const res = await api.post('/documents/generate', {
         document_type: selectedType?.type,
         ...formData,
       })
-      return res.data as { title: string; content: string }
+      return res.data as { title: string; content: string; template_key?: string | null; template_version?: number | null }
     },
     errorMessageFallback: '生成失败，请稍后重试',
     onSuccess: (response) => {
-      setGeneratedDocument({ title: response.title, content: response.content })
+      setGeneratedDocument({
+        title: response.title,
+        content: response.content,
+        template_key: response.template_key,
+        template_version: response.template_version,
+      })
       setStep(3)
 
       if (isAuthenticated) {
@@ -210,6 +225,8 @@ export default function DocumentGeneratorPage() {
         document_type: selectedType.type,
         title: generatedDocument.title,
         content: generatedDocument.content,
+        template_key: generatedDocument.template_key ?? selectedType.type,
+        template_version: generatedDocument.template_version ?? null,
         payload: {
           case_type: formData.case_type,
           plaintiff_name: formData.plaintiff_name,
@@ -312,6 +329,109 @@ export default function DocumentGeneratorPage() {
     URL.revokeObjectURL(url)
     toast.success('文件已下载')
   }
+
+  const downloadBlobAsFile = (blob: Blob, filename: string) => {
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  }
+
+  const fetchPdfBlobByContent = async (title: string, content: string): Promise<Blob> => {
+    const res = await api.post(
+      '/documents/export/pdf',
+      { title, content },
+      {
+        responseType: 'blob',
+        headers: { Accept: 'application/pdf' },
+      }
+    )
+    return res.data as Blob
+  }
+
+  const fetchPdfBlobByDocId = async (docId: number): Promise<Blob> => {
+    const res = await api.get(`/documents/my/${docId}/export`, {
+      params: { format: 'pdf' },
+      responseType: 'blob',
+      headers: { Accept: 'application/pdf' },
+    })
+    return res.data as Blob
+  }
+
+  const handleDownloadPdfForGenerated = async () => {
+    if (!generatedDocument) return
+    try {
+      const blob = await fetchPdfBlobByContent(generatedDocument.title, generatedDocument.content)
+      downloadBlobAsFile(blob, `${generatedDocument.title}.pdf`)
+      toast.success('PDF 已下载')
+    } catch (err) {
+      toast.error(getApiErrorMessage(err, 'PDF 导出失败'))
+    }
+  }
+
+  const openPdfPreviewWithBlob = (blob: Blob, title: string) => {
+    if (pdfPreviewUrl) {
+      URL.revokeObjectURL(pdfPreviewUrl)
+    }
+    const url = URL.createObjectURL(blob)
+    setPdfPreviewUrl(url)
+    setPdfPreviewTitle(title)
+    setPdfPreviewOpen(true)
+  }
+
+  const handlePreviewPdfForGenerated = async () => {
+    if (!generatedDocument) return
+    if (pdfPreviewBusy) return
+    try {
+      setPdfPreviewBusy(true)
+      const blob = await fetchPdfBlobByContent(generatedDocument.title, generatedDocument.content)
+      openPdfPreviewWithBlob(blob, generatedDocument.title)
+    } catch (err) {
+      toast.error(getApiErrorMessage(err, 'PDF 预览失败'))
+    } finally {
+      setPdfPreviewBusy(false)
+    }
+  }
+
+  const handleDownloadPdfForMyDoc = async () => {
+    const docId = selectedDocId
+    if (typeof docId !== 'number' || docId <= 0) return
+    const title = String(myDocDetailQuery.data?.title ?? '法律文书')
+    try {
+      const blob = await fetchPdfBlobByDocId(docId)
+      downloadBlobAsFile(blob, `${title}.pdf`)
+      toast.success('PDF 已下载')
+    } catch (err) {
+      toast.error(getApiErrorMessage(err, 'PDF 导出失败'))
+    }
+  }
+
+  const handlePreviewPdfForMyDoc = async () => {
+    const docId = selectedDocId
+    if (typeof docId !== 'number' || docId <= 0) return
+    if (pdfPreviewBusy) return
+    const title = String(myDocDetailQuery.data?.title ?? '法律文书')
+    try {
+      setPdfPreviewBusy(true)
+      const blob = await fetchPdfBlobByDocId(docId)
+      openPdfPreviewWithBlob(blob, title)
+    } catch (err) {
+      toast.error(getApiErrorMessage(err, 'PDF 预览失败'))
+    } finally {
+      setPdfPreviewBusy(false)
+    }
+  }
+
+  useEffect(() => {
+    if (pdfPreviewOpen) return
+    if (!pdfPreviewUrl) return
+    URL.revokeObjectURL(pdfPreviewUrl)
+    setPdfPreviewUrl(null)
+  }, [pdfPreviewOpen, pdfPreviewUrl])
 
   const handleReset = () => {
     setStep(1)
@@ -562,7 +682,15 @@ export default function DocumentGeneratorPage() {
               </Button>
               <Button variant="outline" size="sm" onClick={handleDownload}>
                 <Download className="h-4 w-4 mr-2" />
-                下载
+                下载TXT
+              </Button>
+              <Button variant="outline" size="sm" onClick={handlePreviewPdfForGenerated} disabled={pdfPreviewBusy}>
+                <Eye className="h-4 w-4 mr-2" />
+                预览PDF
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleDownloadPdfForGenerated} disabled={pdfPreviewBusy}>
+                <Download className="h-4 w-4 mr-2" />
+                下载PDF
               </Button>
               {isAuthenticated ? (
                 <Button
@@ -713,20 +841,35 @@ export default function DocumentGeneratorPage() {
                       <div className="text-sm font-semibold text-slate-900 dark:text-white truncate">
                         {myDocDetailQuery.data.title}
                       </div>
-                      <Button variant="outline" size="sm" onClick={() => {
-                        const blob = new Blob([myDocDetailQuery.data?.content ?? ''], { type: 'text/plain;charset=utf-8' })
-                        const url = URL.createObjectURL(blob)
-                        const a = document.createElement('a')
-                        a.href = url
-                        a.download = `${myDocDetailQuery.data.title}.txt`
-                        document.body.appendChild(a)
-                        a.click()
-                        document.body.removeChild(a)
-                        URL.revokeObjectURL(url)
-                        toast.success('文件已下载')
-                      }}>
-                        下载
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            const blob = new Blob([myDocDetailQuery.data?.content ?? ''], { type: 'text/plain;charset=utf-8' })
+                            downloadBlobAsFile(blob, `${myDocDetailQuery.data.title}.txt`)
+                            toast.success('文件已下载')
+                          }}
+                        >
+                          下载TXT
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handlePreviewPdfForMyDoc}
+                          disabled={pdfPreviewBusy}
+                        >
+                          预览PDF
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleDownloadPdfForMyDoc}
+                          disabled={pdfPreviewBusy}
+                        >
+                          下载PDF
+                        </Button>
+                      </div>
                     </div>
                     <pre className="whitespace-pre-wrap text-sm text-slate-800 dark:text-white/90">{myDocDetailQuery.data.content}</pre>
                   </div>
@@ -736,6 +879,28 @@ export default function DocumentGeneratorPage() {
               </Card>
             ) : null}
           </div>
+        )}
+      </Modal>
+
+      <Modal
+        isOpen={pdfPreviewOpen}
+        onClose={() => {
+          if (pdfPreviewBusy) return
+          setPdfPreviewOpen(false)
+        }}
+        title={pdfPreviewTitle ? `PDF 预览：${pdfPreviewTitle}` : 'PDF 预览'}
+        size="xl"
+      >
+        {pdfPreviewUrl ? (
+          <div className="w-full">
+            <iframe
+              title="pdf-preview"
+              src={pdfPreviewUrl}
+              className="w-full h-[75vh] rounded-xl border border-slate-200 dark:border-white/10"
+            />
+          </div>
+        ) : (
+          <div className="text-sm text-slate-500 dark:text-white/50">PDF 加载中...</div>
         )}
       </Modal>
     </div>

@@ -93,10 +93,7 @@ async def get_current_user_optional(
 async def require_admin(current_user: Annotated[User, Depends(get_current_user)]) -> User:
     """要求管理员权限"""
     if not has_any_role(current_user, [Role.ADMIN, Role.SUPER_ADMIN]):
-        logger.warning(
-            f"权限检查失败: 用户 {current_user.username} (role={current_user.role}) "
-            f"尝试访问管理员资源"
-        )
+        logger.warning(f"权限检查失败: 用户 {current_user.username} (role={current_user.role}) 尝试访问管理员资源")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="需要管理员权限"
@@ -107,10 +104,7 @@ async def require_admin(current_user: Annotated[User, Depends(get_current_user)]
 async def require_moderator(current_user: Annotated[User, Depends(get_current_user)]) -> User:
     """要求版主或管理员权限"""
     if not has_any_role(current_user, [Role.MODERATOR, Role.ADMIN, Role.SUPER_ADMIN]):
-        logger.warning(
-            f"权限检查失败: 用户 {current_user.username} (role={current_user.role}) "
-            f"尝试访问版主资源"
-        )
+        logger.warning(f"权限检查失败: 用户 {current_user.username} (role={current_user.role}) 尝试访问版主资源")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="需要版主或管理员权限"
@@ -121,10 +115,7 @@ async def require_moderator(current_user: Annotated[User, Depends(get_current_us
 async def require_lawyer(current_user: Annotated[User, Depends(get_current_user)]) -> User:
     """要求律师权限"""
     if not has_role(current_user, Role.LAWYER):
-        logger.warning(
-            f"权限检查失败: 用户 {current_user.username} (role={current_user.role}) "
-            f"尝试访问律师资源"
-        )
+        logger.warning(f"权限检查失败: 用户 {current_user.username} (role={current_user.role}) 尝试访问律师资源")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="需要律师权限"
@@ -144,6 +135,20 @@ async def require_phone_verified(current_user: Annotated[User, Depends(get_curre
 
 async def require_email_verified(current_user: Annotated[User, Depends(get_current_user)]) -> User:
     """要求邮箱已验证（敏感操作兜底）"""
+    if not bool(getattr(current_user, "email_verified", False)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="请先完成邮箱验证",
+        )
+    return current_user
+
+
+async def require_user_verified(current_user: Annotated[User, Depends(get_current_user)]) -> User:
+    if not bool(getattr(current_user, "phone_verified", False)):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="请先完成手机号验证",
+        )
     if not bool(getattr(current_user, "email_verified", False)):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

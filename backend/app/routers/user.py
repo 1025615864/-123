@@ -25,7 +25,7 @@ from ..services.forum_service import forum_service
 from ..services.email_service import email_service
 from ..services.cache_service import cache_service
 from ..utils.security import create_access_token, verify_password, hash_password
-from ..utils.deps import get_current_user, require_admin
+from ..utils.deps import get_current_user, require_admin, require_user_verified
 from ..utils.rate_limiter import rate_limit, RateLimitConfig
 from ..config import get_settings
 from ..services.quota_service import quota_service
@@ -201,6 +201,12 @@ async def update_me(
     - **avatar**: 头像URL
     - **phone**: 手机号
     """
+    payload = user_data.model_dump(exclude_unset=True)
+    if "phone" in payload:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="手机号请通过短信验证码完成绑定",
+        )
     updated_user = await user_service.update(db, current_user, user_data)
     return UserResponse.model_validate(updated_user)
 
@@ -222,7 +228,7 @@ async def get_user(user_id: int, db: Annotated[AsyncSession, Depends(get_db)]):
 @router.put("/me/password", response_model=MessageResponse, summary="修改密码")
 async def change_password(
     password_data: PasswordChange,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: Annotated[User, Depends(require_user_verified)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """
