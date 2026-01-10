@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { Crown, ExternalLink, RefreshCw, Sparkles, Wallet } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import api from "../api/client";
@@ -9,17 +9,14 @@ import { useAppMutation, useToast } from "../hooks";
 import { queryKeys } from "../queryKeys";
 import { getApiErrorMessage } from "../utils";
 import PageHeader from "../components/PageHeader";
-import PaymentMethodModal, {
-  type PaymentMethod,
-} from "../components/PaymentMethodModal";
-import { Badge, Button, Card, Input, Modal } from "../components/ui";
+import PaymentMethodPicker, { type PaymentMethod } from "../components/PaymentMethodPicker";
+import { Badge, Button, Card, Input, Modal, SideBySideModal } from "../components/ui";
 
 export default function VipPage() {
   const { user, refreshUser } = useAuth();
   const { actualTheme } = useTheme();
   const toast = useToast();
   const queryClient = useQueryClient();
-  const navigate = useNavigate();
 
   type PricingResp = {
     vip: { days: number; price: number };
@@ -80,7 +77,8 @@ export default function VipPage() {
     null
   );
 
-  const [showPaymentMethodModal, setShowPaymentMethodModal] = useState(false);
+  const [showVipPayModal, setShowVipPayModal] = useState(false);
+  const [showPaymentPanel, setShowPaymentPanel] = useState(false);
   const [paymentMethodContext, setPaymentMethodContext] = useState<
     | null
     | { kind: "vip" }
@@ -91,6 +89,9 @@ export default function VipPage() {
     if (typeof amount === "number" && Number.isFinite(amount) && amount > 0) {
       setRechargeAmount(String(amount));
     }
+    setShowVipPayModal(false);
+    setShowPaymentPanel(false);
+    setPaymentMethodContext(null);
     setShowRechargeModal(true);
   };
 
@@ -156,15 +157,13 @@ export default function VipPage() {
   });
 
   const handleBuyVip = () => {
-    if (!user) {
-      toast.info("登录后可开通 VIP");
-      navigate("/login");
-      return;
-    }
+    if (!user) return;
     if (buyVipMutation.isPending) return;
 
     setPaymentMethodContext({ kind: "vip" });
-    setShowPaymentMethodModal(true);
+    setShowRechargeModal(false);
+    setShowPaymentPanel(true);
+    setShowVipPayModal(true);
   };
 
   const benefits = [
@@ -344,76 +343,311 @@ export default function VipPage() {
         </div>
       </Card>
 
-      <Modal
+      <SideBySideModal
+        isOpen={showVipPayModal}
+        onClose={() => {
+          if (buyVipMutation.isPending) return;
+          setShowVipPayModal(false);
+          setShowPaymentPanel(false);
+          setPaymentMethodContext(null);
+        }}
+        leftTitle="VIP 会员"
+        leftDescription={`开通/续费 ${vipDays} 天 ¥${vipPrice.toFixed(2)}`}
+        left={
+          <div className="space-y-4">
+            <div className="rounded-xl border border-slate-200/70 bg-slate-900/5 px-4 py-3 text-sm text-slate-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-white/70">
+              <div>开通后即时提升每日额度。</div>
+              <div className="mt-1">第三方支付完成后可使用“支付提示”刷新权益。</div>
+            </div>
+
+            {!showPaymentPanel ? (
+              <Button
+                type="button"
+                fullWidth
+                onClick={() => setShowPaymentPanel(true)}
+                disabled={buyVipMutation.isPending}
+              >
+                选择支付方式
+              </Button>
+            ) : null}
+
+            <Button
+              type="button"
+              variant="secondary"
+              fullWidth
+              onClick={() => {
+                if (buyVipMutation.isPending) return;
+                setShowVipPayModal(false);
+                setShowPaymentPanel(false);
+                setPaymentMethodContext(null);
+              }}
+              disabled={buyVipMutation.isPending}
+            >
+              取消
+            </Button>
+          </div>
+        }
+        rightTitle={showPaymentPanel ? "选择支付方式" : undefined}
+        rightDescription={
+          showPaymentPanel && paymentMethodContext?.kind === "vip"
+            ? `开通/续费 VIP（${vipDays}天 ¥${vipPrice.toFixed(2)}）`
+            : undefined
+        }
+        right={
+          showPaymentPanel && paymentMethodContext?.kind === "vip" ? (
+            <PaymentMethodPicker
+              busy={buyVipMutation.isPending}
+              options={(() => {
+                const loadingChannels =
+                  !channelStatusQuery.data && channelStatusQuery.isLoading;
+                const canAlipay = channelStatusQuery.data?.alipay_configured === true;
+                const canIkunpay = channelStatusQuery.data?.ikunpay_configured === true;
+                const thirdPartyDisabledReason = loadingChannels ? "加载中" : "未配置";
+
+                return [
+                  {
+                    method: "balance" as PaymentMethod,
+                    label: "余额支付",
+                    description: "即时生效",
+                    enabled: true,
+                  },
+                  {
+                    method: "alipay" as PaymentMethod,
+                    label: "支付宝",
+                    description: "跳转到支付宝完成支付",
+                    enabled: canAlipay,
+                    disabledReason: thirdPartyDisabledReason,
+                  },
+                  {
+                    method: "ikunpay" as PaymentMethod,
+                    label: "爱坤支付",
+                    description: "跳转到爱坤支付完成支付",
+                    enabled: canIkunpay,
+                    disabledReason: thirdPartyDisabledReason,
+                  },
+                ];
+              })()}
+              onBack={() => {
+                if (buyVipMutation.isPending) return;
+                setShowPaymentPanel(false);
+              }}
+              onCancel={() => {
+                if (buyVipMutation.isPending) return;
+                setShowVipPayModal(false);
+                setShowPaymentPanel(false);
+                setPaymentMethodContext(null);
+              }}
+              onSelect={(method) => {
+                const ctx = paymentMethodContext;
+                if (!ctx || ctx.kind !== "vip") return;
+
+                setShowVipPayModal(false);
+                setShowPaymentPanel(false);
+                setPaymentMethodContext(null);
+
+                buyVipMutation.mutate(
+                  { payment_method: method as any },
+                  {
+                    onSuccess: async (data) => {
+                      if (method !== "balance") {
+                        const url = String((data as any)?.pay_url || "").trim();
+                        if (url) {
+                          window.open(url, "_blank", "noopener,noreferrer");
+                          toast.success("已打开支付页面");
+                          openPaymentGuide(String((data as any)?.order_no || null));
+                        } else {
+                          toast.error("未获取到支付链接");
+                        }
+                        return;
+                      }
+
+                      toast.success("开通成功");
+                      await refreshUser();
+                      queryClient.invalidateQueries({ queryKey: ["user-me"] as any });
+                      queryClient.invalidateQueries({
+                        queryKey: queryKeys.userMeQuotas() as any,
+                      });
+                    },
+                    onError: (err) => {
+                      const msg = getApiErrorMessage(err, "开通失败");
+                      if (String(msg).includes("余额不足")) {
+                        toast.warning("余额不足，请先充值");
+                        openRecharge(vipPrice);
+                        return;
+                      }
+                      toast.error(msg);
+                    },
+                  }
+                );
+              }}
+            />
+          ) : undefined
+        }
+        onRightClose={() => {
+          if (buyVipMutation.isPending) return;
+          setShowPaymentPanel(false);
+        }}
+      />
+
+      <SideBySideModal
         isOpen={showRechargeModal}
         onClose={() => {
           if (rechargeMutation.isPending) return;
           setShowRechargeModal(false);
+          setShowPaymentPanel(false);
+          setPaymentMethodContext(null);
         }}
-        title="余额充值"
-        description="选择充值金额并跳转支付"
-        size="sm"
-      >
-        <div className="space-y-4">
-          <div className="grid grid-cols-3 gap-3">
-            {[50, 100, 200].map((amt) => (
-              <Button
-                key={amt}
-                type="button"
-                variant={
-                  String(amt) === String(rechargeAmount).trim()
-                    ? "primary"
-                    : "outline"
+        leftTitle="余额充值"
+        leftDescription="选择充值金额并跳转支付"
+        left={
+          <div className="space-y-4">
+            <div className="grid grid-cols-3 gap-3">
+              {[50, 100, 200].map((amt) => (
+                <Button
+                  key={amt}
+                  type="button"
+                  variant={
+                    String(amt) === String(rechargeAmount).trim()
+                      ? "primary"
+                      : "outline"
+                  }
+                  disabled={rechargeMutation.isPending}
+                  onClick={() => setRechargeAmount(String(amt))}
+                >
+                  ¥{amt}
+                </Button>
+              ))}
+            </div>
+
+            <Input
+              label="自定义金额（元）"
+              value={rechargeAmount}
+              onChange={(e) => setRechargeAmount(e.target.value)}
+              disabled={rechargeMutation.isPending}
+              placeholder="例如：100"
+            />
+
+            <Button
+              type="button"
+              fullWidth
+              icon={ExternalLink}
+              isLoading={rechargeMutation.isPending}
+              loadingText="创建订单中..."
+              disabled={rechargeMutation.isPending}
+              onClick={() => {
+                const amt = Number(String(rechargeAmount || "").trim());
+                if (!Number.isFinite(amt) || amt <= 0) {
+                  toast.error("请输入正确的充值金额");
+                  return;
                 }
-                disabled={rechargeMutation.isPending}
-                onClick={() => setRechargeAmount(String(amt))}
-              >
-                ¥{amt}
-              </Button>
-            ))}
+
+                setPaymentMethodContext({ kind: "recharge", amount: amt });
+                setShowPaymentPanel(true);
+              }}
+            >
+              去支付
+            </Button>
+
+            <Button
+              type="button"
+              variant="secondary"
+              fullWidth
+              onClick={() => {
+                if (rechargeMutation.isPending) return;
+                setShowRechargeModal(false);
+                setShowPaymentPanel(false);
+                setPaymentMethodContext(null);
+              }}
+              disabled={rechargeMutation.isPending}
+            >
+              取消
+            </Button>
           </div>
+        }
+        rightTitle={showPaymentPanel ? "选择支付方式" : undefined}
+        rightDescription={
+          showPaymentPanel && paymentMethodContext?.kind === "recharge"
+            ? `充值 ¥${Number(paymentMethodContext.amount || 0).toFixed(2)}`
+            : undefined
+        }
+        right={
+          showPaymentPanel && paymentMethodContext?.kind === "recharge" ? (
+            <PaymentMethodPicker
+              busy={rechargeMutation.isPending}
+              options={(() => {
+                const loadingChannels =
+                  !channelStatusQuery.data && channelStatusQuery.isLoading;
+                const canAlipay = channelStatusQuery.data?.alipay_configured === true;
+                const canIkunpay = channelStatusQuery.data?.ikunpay_configured === true;
+                const thirdPartyDisabledReason = loadingChannels ? "加载中" : "未配置";
 
-          <Input
-            label="自定义金额（元）"
-            value={rechargeAmount}
-            onChange={(e) => setRechargeAmount(e.target.value)}
-            disabled={rechargeMutation.isPending}
-            placeholder="例如：100"
-          />
+                return [
+                  {
+                    method: "alipay" as PaymentMethod,
+                    label: "支付宝",
+                    description: "跳转到支付宝完成支付",
+                    enabled: canAlipay,
+                    disabledReason: thirdPartyDisabledReason,
+                  },
+                  {
+                    method: "ikunpay" as PaymentMethod,
+                    label: "爱坤支付",
+                    description: "跳转到爱坤支付完成支付",
+                    enabled: canIkunpay,
+                    disabledReason: thirdPartyDisabledReason,
+                  },
+                ];
+              })()}
+              onBack={() => {
+                if (rechargeMutation.isPending) return;
+                setShowPaymentPanel(false);
+              }}
+              onCancel={() => {
+                if (rechargeMutation.isPending) return;
+                setShowRechargeModal(false);
+                setShowPaymentPanel(false);
+                setPaymentMethodContext(null);
+              }}
+              onSelect={(method) => {
+                const ctx = paymentMethodContext;
+                if (!ctx || ctx.kind !== "recharge") return;
 
-          <Button
-            type="button"
-            fullWidth
-            icon={ExternalLink}
-            isLoading={rechargeMutation.isPending}
-            loadingText="创建订单中..."
-            disabled={rechargeMutation.isPending}
-            onClick={() => {
-              const amt = Number(String(rechargeAmount || "").trim());
-              if (!Number.isFinite(amt) || amt <= 0) {
-                toast.error("请输入正确的充值金额");
-                return;
-              }
+                setShowRechargeModal(false);
+                setShowPaymentPanel(false);
+                setPaymentMethodContext(null);
 
-              setPaymentMethodContext({ kind: "recharge", amount: amt });
-              setShowRechargeModal(false);
-              setShowPaymentMethodModal(true);
-            }}
-          >
-            去支付
-          </Button>
+                if (method === "balance") {
+                  toast.error("充值不支持余额支付");
+                  return;
+                }
 
-          <Button
-            type="button"
-            variant="secondary"
-            fullWidth
-            onClick={() => setShowRechargeModal(false)}
-            disabled={rechargeMutation.isPending}
-          >
-            取消
-          </Button>
-        </div>
-      </Modal>
+                rechargeMutation.mutate(
+                  { amount: ctx.amount, payment_method: method as any },
+                  {
+                    onSuccess: (data) => {
+                      const payUrl = String((data as any)?.pay_url || "").trim();
+                      if (payUrl) {
+                        window.open(payUrl, "_blank", "noopener,noreferrer");
+                        toast.success("已打开支付页面");
+                        openPaymentGuide(String((data as any)?.order_no || null));
+                        return;
+                      }
+                      toast.success("订单已创建，请前往订单页继续支付");
+                    },
+                    onError: (err) => {
+                      toast.error(getApiErrorMessage(err, "充值失败"));
+                    },
+                  }
+                );
+              }}
+            />
+          ) : undefined
+        }
+        onRightClose={() => {
+          if (rechargeMutation.isPending) return;
+          setShowPaymentPanel(false);
+        }}
+      />
 
       <Modal
         isOpen={showPaymentGuideModal}
@@ -462,154 +696,6 @@ export default function VipPage() {
           ) : null}
         </div>
       </Modal>
-
-      <PaymentMethodModal
-        isOpen={showPaymentMethodModal}
-        onClose={() => {
-          if (buyVipMutation.isPending || rechargeMutation.isPending) return;
-          setShowPaymentMethodModal(false);
-        }}
-        onBack={(() => {
-          const ctx = paymentMethodContext;
-          if (!ctx) return undefined;
-          if (ctx.kind === "recharge") {
-            return () => {
-              if (rechargeMutation.isPending) return;
-              setShowPaymentMethodModal(false);
-              setShowRechargeModal(true);
-            };
-          }
-          return undefined;
-        })()}
-        backLabel="返回修改"
-        title="选择支付方式"
-        description={
-          paymentMethodContext?.kind === "vip"
-            ? `开通/续费 VIP（${vipDays}天 ¥${vipPrice.toFixed(2)}）`
-            : paymentMethodContext?.kind === "recharge"
-              ? `充值 ¥${Number(paymentMethodContext.amount || 0).toFixed(2)}`
-              : undefined
-        }
-        busy={buyVipMutation.isPending || rechargeMutation.isPending}
-        options={(() => {
-          const loadingChannels = !channelStatusQuery.data && channelStatusQuery.isLoading;
-          const canAlipay = channelStatusQuery.data?.alipay_configured === true;
-          const canIkunpay = channelStatusQuery.data?.ikunpay_configured === true;
-          const thirdPartyDisabledReason = loadingChannels ? "加载中" : "未配置";
-
-          if (paymentMethodContext?.kind === "recharge") {
-            return [
-              {
-                method: "alipay" as PaymentMethod,
-                label: "支付宝",
-                description: "跳转到支付宝完成支付",
-                enabled: canAlipay,
-                disabledReason: thirdPartyDisabledReason,
-              },
-              {
-                method: "ikunpay" as PaymentMethod,
-                label: "爱坤支付",
-                description: "跳转到爱坤支付完成支付",
-                enabled: canIkunpay,
-                disabledReason: thirdPartyDisabledReason,
-              },
-            ];
-          }
-
-          return [
-            {
-              method: "balance" as PaymentMethod,
-              label: "余额支付",
-              description: "即时生效",
-              enabled: true,
-            },
-            {
-              method: "alipay" as PaymentMethod,
-              label: "支付宝",
-              description: "跳转到支付宝完成支付",
-              enabled: canAlipay,
-              disabledReason: thirdPartyDisabledReason,
-            },
-            {
-              method: "ikunpay" as PaymentMethod,
-              label: "爱坤支付",
-              description: "跳转到爱坤支付完成支付",
-              enabled: canIkunpay,
-              disabledReason: thirdPartyDisabledReason,
-            },
-          ];
-        })()}
-        onSelect={(method) => {
-          const ctx = paymentMethodContext;
-          setShowPaymentMethodModal(false);
-          if (!ctx) return;
-
-          if (ctx.kind === "vip") {
-            buyVipMutation.mutate(
-              { payment_method: method as any },
-              {
-                onSuccess: async (data) => {
-                  if (method !== "balance") {
-                    const url = String((data as any)?.pay_url || "").trim();
-                    if (url) {
-                      window.open(url, "_blank", "noopener,noreferrer");
-                      toast.success("已打开支付页面");
-                      openPaymentGuide(String((data as any)?.order_no || null));
-                    } else {
-                      toast.error("未获取到支付链接");
-                    }
-                    return;
-                  }
-
-                  toast.success("开通成功");
-                  await refreshUser();
-                  queryClient.invalidateQueries({ queryKey: ["user-me"] as any });
-                  queryClient.invalidateQueries({
-                    queryKey: queryKeys.userMeQuotas() as any,
-                  });
-                },
-                onError: (err) => {
-                  const msg = getApiErrorMessage(err, "开通失败");
-                  if (String(msg).includes("余额不足")) {
-                    toast.warning("余额不足，请先充值");
-                    openRecharge(vipPrice);
-                    return;
-                  }
-                  toast.error(msg);
-                },
-              }
-            );
-            return;
-          }
-
-          if (ctx.kind === "recharge") {
-            if (method === "balance") {
-              toast.error("充值不支持余额支付");
-              return;
-            }
-            rechargeMutation.mutate(
-              { amount: ctx.amount, payment_method: method as any },
-              {
-                onSuccess: async (data) => {
-                  const payUrl = String((data as any)?.pay_url || "").trim();
-                  if (payUrl) {
-                    window.open(payUrl, "_blank", "noopener,noreferrer");
-                    toast.success("已打开支付页面");
-                    openPaymentGuide(String((data as any)?.order_no || null));
-                    setShowRechargeModal(false);
-                    return;
-                  }
-                  toast.success("订单已创建，请前往订单页继续支付");
-                  setShowRechargeModal(false);
-                },
-                onError: (err) => {
-                  toast.error(getApiErrorMessage(err, "充值失败"));
-                },
-              }
-            );
-          }
-        }}
-      />
     </div>
   );
 }
