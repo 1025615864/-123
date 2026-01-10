@@ -11,6 +11,12 @@
 
 为保证两种数据库下的结构一致，建议统一采用 Alembic 做“正式迁移”；同时保留 `init_db()` 中少量 **SQLite 自修复**（用于历史版本平滑升级/兜底）。
 
+> 注意：从第十二阶段（P0.1）开始，生产环境（`DEBUG=false`）将逐步收敛为 **Alembic Only**：
+>
+> - 生产环境默认 **禁止运行时 DDL**（建表/补列/补索引）。
+> - 启动时会校验 DB 是否已升级到 Alembic `head`，否则启动失败并提示迁移命令。
+> - 如需临时放行（不建议长期使用），可设置 `DB_ALLOW_RUNTIME_DDL=1`。
+
 ### 1) 基本约定
 
 - **模型是权威**：以 `backend/app/models` 的 SQLAlchemy 模型为最终结构来源。
@@ -47,6 +53,17 @@
 
 - `alembic upgrade head`
 - 或：`py scripts/alembic_cmd.py upgrade head`
+
+#### 3.5 生产启动前的“门禁”说明
+
+当 `DEBUG=false` 时，后端启动会检查当前 DB 的 Alembic 版本是否为 `head`：
+
+- 若不是 `head`：启动失败，并提示你运行 `py scripts/alembic_cmd.py upgrade head`
+- 若 DB 已经是“正确结构”但没有 alembic 版本记录：可以执行 `py scripts/alembic_cmd.py stamp head`
+
+临时兜底开关（不建议长期使用）：
+
+- `DB_ALLOW_RUNTIME_DDL=1`：允许 `init_db()` 执行运行时 DDL（仅用于应急/临时兼容）
 
 #### 3.4 回滚迁移
 

@@ -1,7 +1,7 @@
 """add news workbench tables
 
 Revision ID: b9c7a0f3d2a1
-Revises: 
+Revises: 796321fd1c74
 Create Date: 2025-12-27
 
 """
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = "b9c7a0f3d2a1"
-down_revision: str | None = None
+down_revision: str | None = "796321fd1c74"
 branch_labels: str | None = None
 depends_on: str | None = None
 

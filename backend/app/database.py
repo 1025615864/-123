@@ -3,9 +3,14 @@ import importlib
 import logging
 import os
 from pathlib import Path
+
+from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import text
+from sqlalchemy.engine import Connection
 from .config import get_settings
 
 settings = get_settings()
@@ -46,6 +51,46 @@ class Base(DeclarativeBase):
     pass
 
 
+def _env_truthy(name: str) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _get_backend_dir() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _get_alembic_script_directory() -> ScriptDirectory:
+    backend_dir = _get_backend_dir()
+    ini_path = backend_dir / "alembic.ini"
+    config = Config(str(ini_path))
+    config.set_main_option("script_location", str(backend_dir / "alembic"))
+    return ScriptDirectory.from_config(config)
+
+
+def _get_alembic_expected_heads() -> tuple[str, ...]:
+    script = _get_alembic_script_directory()
+    return tuple(script.get_heads())
+
+
+def _get_alembic_current_heads(conn: Connection) -> tuple[str, ...]:
+    ctx = MigrationContext.configure(conn)
+    return tuple(ctx.get_current_heads())
+
+
+def _assert_alembic_head(conn: Connection) -> None:
+    expected = _get_alembic_expected_heads()
+    current = _get_alembic_current_heads(conn)
+    if set(current) != set(expected):
+        raise RuntimeError(
+            "Database schema is not at Alembic head. "
+            f"current={list(current)} expected={list(expected)}. "
+            "Run `py scripts/alembic_cmd.py upgrade head` (or `alembic upgrade head`). "
+            "If the database already has the full schema and you only want to mark it, run `py scripts/alembic_cmd.py stamp head`. "
+            "You may temporarily set DB_ALLOW_RUNTIME_DDL=1 to bypass this check."
+        )
+
+
 async def get_db():
     """获取数据库会话"""
     async with AsyncSessionLocal() as session:
@@ -78,6 +123,14 @@ async def init_db() -> None:
         "app.models.feedback",
     ):
         _ = importlib.import_module(module_name)
+
+    allow_runtime_ddl = bool(settings.debug) or _env_truthy("DB_ALLOW_RUNTIME_DDL")
+    if not allow_runtime_ddl:
+        async with engine.connect() as conn:
+            _ = await conn.execute(text("SELECT 1"))
+            await conn.run_sync(_assert_alembic_head)
+        return
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 

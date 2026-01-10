@@ -122,6 +122,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
+      - name: Run migrations (upgrade head)
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+          JWT_SECRET_KEY: test-secret-key-change-me-32chars-minimum
+          PAYMENT_WEBHOOK_SECRET: test-payment-webhook-secret
+        run: |
+          python scripts/alembic_cmd.py upgrade head
+
       - name: Run tests
         env:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db

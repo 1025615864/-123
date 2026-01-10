@@ -35,7 +35,10 @@ class Settings(BaseSettings):
     debug: bool = Field(default_factory=_running_tests)
     
     # 数据库配置
-    database_url: str = "sqlite+aiosqlite:///./data/app.db"
+    database_url: str = Field(
+        default="sqlite+aiosqlite:///./data/app.db",
+        validation_alias=AliasChoices("DATABASE_URL", "DB_URL", "SQLALCHEMY_DATABASE_URL"),
+    )
     
     # JWT配置
     secret_key: str = Field(

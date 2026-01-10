@@ -236,29 +236,29 @@
 
 ### P0.1 DB 迁移“单轨化”（Alembic Only，消除 Schema Drift）
 
-- [ ] 明确策略：**生产环境不允许运行任何运行时 DDL**（建表/补列/补索引）
+- [x] 明确策略：**生产环境不允许运行任何运行时 DDL**（建表/补列/补索引）
 
-  - [ ] 代码改造：`backend/app/database.py:init_db()`
-    - [ ] 移除/禁用 `Base.metadata.create_all()`
-    - [ ] 移除/禁用“自修复”DDL（SQLite/PG 的补列/补索引逻辑）
-    - [ ] 保留仅用于健康检查的连接校验（可选）
-  - [ ] 配置门禁：当 `DEBUG=false` 时
-    - [ ] 若 DB schema 未升级到 `head`，启动失败并给出明确错误指引（避免“运行时才报 Unknown column”）
+  - [x] 代码改造：`backend/app/database.py:init_db()`
+    - [x] 移除/禁用 `Base.metadata.create_all()`
+    - [x] 移除/禁用“自修复”DDL（SQLite/PG 的补列/补索引逻辑）
+    - [x] 保留仅用于健康检查的连接校验（可选）
+  - [x] 配置门禁：当 `DEBUG=false` 时
+    - [x] 若 DB schema 未升级到 `head`，启动失败并给出明确错误指引（避免“运行时才报 Unknown column”）
 
-- [ ] 生成并确立“基线迁移（baseline）”
+- [x] 生成并确立“基线迁移（baseline）”
 
-  - [ ] 清空开发库（SQLite）并以 **当前 ORM** 为权威生成：`alembic revision --autogenerate -m "baseline"`
-  - [ ] 统一生产流程：只允许 `alembic upgrade head` 演进
-  - [ ] 补充 runbook：
-    - [ ] Windows：初始化/升级/回滚命令
-    - [ ] Docker/Helm：容器启动前执行 migration（initContainer 或 entrypoint）
+  - [x] 清空开发库（SQLite）并以 **当前 ORM** 为权威生成：`alembic revision --autogenerate -m "baseline"`
+  - [x] 统一生产流程：只允许 `alembic upgrade head` 演进
+  - [x] 补充 runbook：
+    - [x] Windows：初始化/升级/回滚命令
+    - [x] Docker/Helm：容器启动前执行 migration（initContainer 或 entrypoint）
 
-- [ ] 增加“迁移可用性”冒烟测试（防止上线事故）
+- [x] 增加“迁移可用性”冒烟测试（防止上线事故）
 
-  - [ ] 在 CI/本地脚本中新增一条链路：
-    - [ ] 起一个全新 PostgreSQL（空库）
-    - [ ] `alembic upgrade head`
-    - [ ] 跑 `py -m pytest -q`
+  - [x] 在 CI/本地脚本中新增一条链路：
+    - [x] 起一个全新 PostgreSQL（空库）
+    - [x] `alembic upgrade head`
+    - [x] 跑 `py -m pytest -q`
 
 - [ ] 验收标准
   - [ ] 空 PG 库可通过 `alembic upgrade head` 一次性建出全部表

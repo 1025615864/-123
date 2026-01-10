@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -15,7 +16,12 @@ def main(argv: list[str] | None = None) -> int:
     ini_path = backend_dir / "alembic.ini"
 
     cmd = CommandLine(prog="alembic")
-    cmd.main(["-c", str(ini_path), *args])
+    old_cwd = os.getcwd()
+    try:
+        os.chdir(str(backend_dir))
+        cmd.main(["-c", str(ini_path), *args])
+    finally:
+        os.chdir(old_cwd)
     return 0
 
 
