@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   Search,
@@ -15,7 +15,6 @@ import {
   RotateCcw,
   Link2,
   History,
-  Upload,
 } from "lucide-react";
 import {
   Card,
@@ -36,6 +35,7 @@ import { useAppMutation, useToast } from "../../hooks";
 import { getApiErrorMessage } from "../../utils";
 import RichTextEditor from "../../components/RichTextEditor";
 import MarkdownContent from "../../components/MarkdownContent";
+import ImageUploadButton from "../../components/ImageUploadButton";
 
 function extractMarkdownImageUrls(content: string): string[] {
   if (!content) return [];
@@ -293,10 +293,6 @@ export default function NewsManagePage() {
   const [editImages, setEditImages] = useState<string[]>([]);
   const [editingAi, setEditingAi] = useState<NewsAIAnnotation | null>(null);
   const [editingAiRisk, setEditingAiRisk] = useState<string>("unknown");
-
-  const [coverUploading, setCoverUploading] = useState(false);
-  const createCoverInputRef = useRef<HTMLInputElement>(null);
-  const editCoverInputRef = useRef<HTMLInputElement>(null);
 
   const [createForm, setCreateForm] = useState({
     title: "",
@@ -656,59 +652,6 @@ export default function NewsManagePage() {
 
     if (content) {
       setEditImages(extractMarkdownImageUrls(content));
-    }
-  };
-
-  const uploadCoverFile = async (file: File) => {
-    const formData = new FormData();
-    formData.append("file", file);
-    const res = await api.post("/upload/image", formData, {
-      headers: { "Content-Type": "multipart/form-data" },
-    });
-    const url = String((res.data as any)?.url || "").trim();
-    if (!url) throw new Error("未获取到上传结果");
-    return url;
-  };
-
-  const handleCreateCoverUpload = async (e: ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    e.target.value = "";
-    if (!f) return;
-    if (!String(f.type || "").startsWith("image/")) {
-      toast.error("请选择图片文件");
-      return;
-    }
-    if (coverUploading) return;
-    setCoverUploading(true);
-    try {
-      const url = await uploadCoverFile(f);
-      setCreateForm((prev) => ({ ...prev, cover_image: url }));
-      toast.success("封面上传成功");
-    } catch (err) {
-      toast.error(getApiErrorMessage(err, "封面上传失败"));
-    } finally {
-      setCoverUploading(false);
-    }
-  };
-
-  const handleEditCoverUpload = async (e: ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    e.target.value = "";
-    if (!f) return;
-    if (!String(f.type || "").startsWith("image/")) {
-      toast.error("请选择图片文件");
-      return;
-    }
-    if (coverUploading) return;
-    setCoverUploading(true);
-    try {
-      const url = await uploadCoverFile(f);
-      setEditForm((prev) => ({ ...prev, cover_image: url }));
-      toast.success("封面上传成功");
-    } catch (err) {
-      toast.error(getApiErrorMessage(err, "封面上传失败"));
-    } finally {
-      setCoverUploading(false);
     }
   };
 
@@ -2656,26 +2599,14 @@ export default function NewsManagePage() {
             disabled={aiGenerateMutation.isPending || createMutation.isPending}
           />
 
-          <div className="flex items-center gap-2">
-            <input
-              ref={createCoverInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={handleCreateCoverUpload}
-              disabled={coverUploading || aiGenerateMutation.isPending || createMutation.isPending}
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              icon={Upload}
-              disabled={coverUploading || aiGenerateMutation.isPending || createMutation.isPending}
-              onClick={() => createCoverInputRef.current?.click()}
-            >
-              上传封面
-            </Button>
-          </div>
+          <ImageUploadButton
+            buttonText="上传封面"
+            loadingText="上传中..."
+            successMessage="封面上传成功"
+            errorMessageFallback="封面上传失败"
+            disabled={aiGenerateMutation.isPending || createMutation.isPending}
+            onUploaded={(url) => setCreateForm((prev) => ({ ...prev, cover_image: url }))}
+          />
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">
               分类
@@ -3240,26 +3171,14 @@ export default function NewsManagePage() {
             disabled={editMutation.isPending}
           />
 
-          <div className="flex items-center gap-2">
-            <input
-              ref={editCoverInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={handleEditCoverUpload}
-              disabled={coverUploading || editMutation.isPending}
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              icon={Upload}
-              disabled={coverUploading || editMutation.isPending}
-              onClick={() => editCoverInputRef.current?.click()}
-            >
-              上传封面
-            </Button>
-          </div>
+          <ImageUploadButton
+            buttonText="上传封面"
+            loadingText="上传中..."
+            successMessage="封面上传成功"
+            errorMessageFallback="封面上传失败"
+            disabled={editMutation.isPending}
+            onUploaded={(url) => setEditForm((prev) => ({ ...prev, cover_image: url }))}
+          />
 
           {editForm.cover_image?.trim() ? (
             <div className="rounded-xl border border-slate-200/70 bg-white p-3 dark:border-white/10 dark:bg-white/5">
