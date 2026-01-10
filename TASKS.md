@@ -162,21 +162,25 @@
 
 ## 第九阶段：稳定性与可观测性深化（P2）
 
-- [ ] 指标与告警
-  - [ ] Prometheus 告警规则（5xx、P95 延迟、周期任务失败率）
-  - [ ] Grafana Dashboard（HTTP、News AI、支付回调、文书导出）
+- [x] 指标与告警
+  - [x] Prometheus 告警规则（5xx、P95 延迟、周期任务失败率）
+  - [x] Grafana Dashboard（HTTP、News AI、支付回调、文书导出）
 - [ ] 日志与追踪
-  - [ ] 统一 request_id 贯穿（前端->后端->日志），并在文档中写明排障方法
-  - [ ] 关键异常上报与降级策略（AI/支付/News AI）
+  - [x] 统一 request_id 贯穿（前端->后端->日志），并在文档中写明排障方法
+  - [x] 关键异常上报与降级策略（AI/支付/News AI）
+    - [x] 可选 webhook（默认关闭；异步上报；限频/去重）
+    - [x] AI/支付回调/News AI pipeline 集成（不影响主流程）
+    - [x] Helm values/secret/externalSecret 支持，并补充 TECH_SPEC/Helm README
+    - 验证：backend `py -m pytest -q` 通过
 
 ## 第十阶段：产品体验与增长（P2）
 
-- [ ] 新用户引导与转化
-  - [ ] 新用户首次进入的引导（咨询/文书/资讯/订单）
-  - [ ] “权益与配额”展示更明确：剩余次数、到期时间、消耗记录
-- [ ] 反馈闭环
-  - [ ] 反馈工单的管理端处理流（分配、状态流转、统计）
-  - [ ] 常见问题（FAQ）与客服入口整合
+- [x] 新用户引导与转化
+  - [x] 新用户首次进入的引导（咨询/文书/资讯/订单）
+  - [x] “权益与配额”展示更明确：剩余次数、到期时间、消耗记录
+- [x] 反馈闭环
+  - [x] 反馈工单的管理端处理流（分配、状态流转、统计）
+  - [x] 常见问题（FAQ）与客服入口整合
 
 ## 第十一阶段：体验细节与后台配置增强（P1）
 
@@ -223,4 +227,193 @@
     - 仅跑该用例：`npm --prefix frontend run test:e2e -- --grep "documents:"`
 - [x] CI 自动回归（GitHub Actions）
   - 已做：新增 workflow：`.github/workflows/ci.yml`
-  - 覆盖：backend pytest、frontend build、Playwright 最小 documents E2E（`--grep "documents:"`)
+  - 覆盖：backend pytest、frontend build、Playwright 最小 documents E2E（`--grep "documents:"`）
+
+## 第十二阶段：生产级固底（P0，专家建议落地）
+
+> 目标：把当前“单机演示可用”的能力，收敛为“可上生产多副本”的工程底座。
+> 说明：本阶段不改动第九/第十阶段的任务内容，仅在其后补充“上线前必须做”的硬化项，避免影响并行开发。
+
+### P0.1 DB 迁移“单轨化”（Alembic Only，消除 Schema Drift）
+
+- [ ] 明确策略：**生产环境不允许运行任何运行时 DDL**（建表/补列/补索引）
+
+  - [ ] 代码改造：`backend/app/database.py:init_db()`
+    - [ ] 移除/禁用 `Base.metadata.create_all()`
+    - [ ] 移除/禁用“自修复”DDL（SQLite/PG 的补列/补索引逻辑）
+    - [ ] 保留仅用于健康检查的连接校验（可选）
+  - [ ] 配置门禁：当 `DEBUG=false` 时
+    - [ ] 若 DB schema 未升级到 `head`，启动失败并给出明确错误指引（避免“运行时才报 Unknown column”）
+
+- [ ] 生成并确立“基线迁移（baseline）”
+
+  - [ ] 清空开发库（SQLite）并以 **当前 ORM** 为权威生成：`alembic revision --autogenerate -m "baseline"`
+  - [ ] 统一生产流程：只允许 `alembic upgrade head` 演进
+  - [ ] 补充 runbook：
+    - [ ] Windows：初始化/升级/回滚命令
+    - [ ] Docker/Helm：容器启动前执行 migration（initContainer 或 entrypoint）
+
+- [ ] 增加“迁移可用性”冒烟测试（防止上线事故）
+
+  - [ ] 在 CI/本地脚本中新增一条链路：
+    - [ ] 起一个全新 PostgreSQL（空库）
+    - [ ] `alembic upgrade head`
+    - [ ] 跑 `py -m pytest -q`
+
+- [ ] 验收标准
+  - [ ] 空 PG 库可通过 `alembic upgrade head` 一次性建出全部表
+  - [ ] 从旧版本升级到新版本时：无运行时 DDL、无“Unknown column/table”类错误
+  - [ ] `init_db()` 不再修改 schema（可通过 grep/测试断言）
+
+### P0.2 Redis 生产强依赖（替换内存限流/锁/关键缓存）
+
+- [ ] 生产强制要求 `REDIS_URL`
+
+  - [ ] 当 `DEBUG=false` 且 `REDIS_URL` 缺失时，后端启动失败（给出原因与配置提示）
+
+- [ ] 限流：将 `backend/app/utils/rate_limiter.py` 从内存滑窗迁移为 Redis
+
+  - [ ] 实现策略：`INCR` + `EXPIRE`（或 Lua 滑窗）
+  - [ ] 覆盖关键接口（至少）：
+    - [ ] `/api/ai/*`（chat/stream）
+    - [ ] `/api/documents/generate`
+    - [ ] `/api/user/sms/*`（发送/验证）
+    - [ ] `/api/payment/*/notify`（回调入口防滥用）
+  - [ ] 保留开发兜底：`DEBUG=true` 时允许内存限流（可选）
+
+- [ ] 分布式锁：新增 Redis Lock 工具（SETNX + PX + token）
+
+  - [ ] 支付回调：按 `provider:trade_no`（或 `order_no`）加锁，保证并发幂等
+  - [ ] 周期任务：统一通过分布式锁运行（替代/统一目前的“Redis 可用时启用”策略）
+
+- [ ] 验收标准
+  - [ ] 多实例下限流生效（总量不随副本数线性放大）
+  - [ ] 并发回调不会导致重复发放权益/重复记账
+  - [ ] 周期任务在多副本下最多仅 1 个实例执行
+
+### P0.3 上传存储去本地化（对象存储/共享存储）
+
+- [ ] 抽象存储层：为 `backend/app/routers/upload.py` 增加 `StorageProvider`
+
+  - [ ] `LocalStorageProvider`（开发默认）
+  - [ ] `S3CompatibleProvider`（MinIO/OSS/S3）
+  - [ ] 配置项：bucket、endpoint、access_key/secret_key、public_base_url 或 signed url
+  - [ ] 文件命名策略：内容哈希或 UUID；目录按日期/类型分桶
+
+- [ ] 兼容与迁移策略
+
+  - [ ] 保持现有返回 URL 格式兼容（前端无需改或最小改）
+  - [ ] 迁移脚本（可选）：把历史本地文件搬迁到对象存储并更新引用（若 DB 存了 URL）
+
+- [ ] 验收标准
+  - [ ] 容器重启/Pod 漂移后，历史上传文件仍可访问
+  - [ ] 上传/下载在生产多副本下稳定可用
+
+### P0.4 支付资产安全加固（幂等 + 并发防守 + 审计增强）
+
+- [ ] 支付回调接口增加 Redis Lock（见 P0.2），并对关键写入加事务保护
+- [ ] 补充“并发回调”测试用例
+  - [ ] 同一 `trade_no`/`order_no` 同时打入两次，最终只能产生一次权益发放/一次余额入账
+- [ ] 审计增强（不含敏感信息）
+  - [ ] `payment_callback_events` 增加：来源 IP、User-Agent、raw 参数 hash（可选）
+
+### P0.5 依赖与版本稳定性（避免 React 19 生态抖动）
+
+- [ ] 前端依赖版本策略收敛
+  - [ ] 评估将 `package.json` 中关键依赖从 `^` 改为固定版本（或至少锁定 React 生态）
+  - [ ] 强制使用 `npm ci`（已在 CI 中使用则记录）
+- [ ] 后端依赖瘦身
+  - [ ] 清理 `requirements.txt` 中未使用依赖（减少镜像体积与供应链风险）
+
+---
+
+## 第十三阶段：可观测性与线上排障体系（P1）
+
+### P1.1 错误上报与追踪
+
+- [ ] 引入 Sentry（或等价方案）
+  - [ ] 后端：捕获未处理异常、记录 `request_id/user_id/path`（脱敏）
+  - [ ] 前端：捕获运行时错误、请求错误聚合、source map 上传（生产）
+
+### P1.2 结构化日志与 request_id 全链路
+
+- [ ] 后端：结构化日志（JSON）+ 统一 `request_id`
+  - [ ] 每个请求生成/透传 `X-Request-Id`
+  - [ ] 日志字段统一：request_id、user_id、path、method、status、duration_ms
+- [ ] 前端：在 axios 请求头注入 `X-Request-Id`（或从后端返回透传）
+- [ ] 文档：补充“按 request_id 排障”runbook
+
+---
+
+## 第十四阶段：信任增强（RAG 引用 + PII 脱敏）（P1，业务品质护城河）
+
+### P1.3 法律法规 RAG（回答必须可溯源）
+
+- [ ] 建设法律语料库（法条/司法解释/指导案例）
+  - [ ] ingestion：抓取/导入 → 清洗 → 分段（chunk）→ 向量化 → 入库（ChromaDB 已有依赖）
+  - [ ] 版本化：语料来源/更新时间/哈希，用于追溯
+- [ ] AI 回答支持引用
+  - [ ] 输出结构：结论 + 风险提示 + 依据（法条编号/原文片段/链接）
+  - [ ] 前端展示：引用折叠、复制、跳转原文
+
+### P1.4 PII 脱敏（Privacy by Design）
+
+- [ ] 在调用 LLM 前增加“敏感信息清洗层”
+  - [ ] 身份证/手机号/地址/银行卡/姓名等规则脱敏
+  - [ ] 保留可读性：替换为 `【当事人A】/【手机号已脱敏】`
+- [ ] 合规提示：前端对话区显式提示“默认脱敏处理”与免责声明
+
+---
+
+## 第十五阶段：高价值业务扩展（合同审查）（P1/P2）
+
+### P1.5 智能合同审查（AI Contract Review）
+
+- [ ] 后端：新增合同审查模块（router/service/model）
+  - [ ] 上传合同（PDF/Word）→ 文本提取（pypdf/docx2txt 已有）
+  - [ ] 生成“风险体检报告”（结构化 JSON + 可渲染 Markdown）
+  - [ ] 支持导出 PDF（复用现有文书导出能力）
+- [ ] 前端：新增合同审查页面
+  - [ ] 上传 → 解析进度 → 报告展示（风险等级/条款列表/修改建议）
+  - [ ] 支持购买：单次/会员权益（复用订单体系）
+- [ ] 验收标准
+  - [ ] 对 3 份示例合同（劳动/租赁/服务）可稳定输出报告
+  - [ ] 报告可保存、可导出、可追溯引用依据（若已完成第十四阶段）
+
+---
+
+## 第十六阶段：人机协作闭环（律师复核）（P2）
+
+### P2.1 “AI 初诊 + 律师复核”产品化
+
+- [ ] 工作流：AI 生成 → 律师工作台审核/修改 → 用户收到“律师已复核”结果
+- [ ] 权限与审计：
+  - [ ] 律师仅可处理分配给自己的订单
+  - [ ] 修改历史可追溯（版本/操作日志）
+- [ ] 计费与结算：
+  - [ ] 新订单类型：`light_consult_review`（示例）
+  - [ ] 复用现有 payment_orders + settlement 流程
+- [ ] 验收标准
+  - [ ] 用户可购买复核服务；律师可在后台完成审核；结算记录可生成
+
+---
+
+## 第十七阶段：内容生态与增长（结构化案例库 + SEO）（P2）
+
+- [ ] 论坛结构化模板
+  - [ ] 发帖引导：案情经过/争议焦点/证据/诉求/进展
+  - [ ] 管理端：高质量内容加精/沉淀为“案例”
+- [ ] SEO/可索引化
+  - [ ] 评估 SSR/预渲染（React Router 7 的服务端渲染能力）或静态化导出
+  - [ ] 站点地图 sitemap、canonical、OG tags
+
+---
+
+## 第十八阶段：反馈飞轮与持续优化（P2/P3）
+
+- [ ] AI 回答反馈（有用/无用 + 原因标签）
+  - [ ] 记录到 DB（脱敏后存储）
+  - [ ] 管理端：反馈聚合、Top 问题、prompt/知识库改进建议
+- [ ] A/B 与 Prompt 版本化
+  - [ ] 为关键 prompt 增加版本号与灰度开关（SystemConfig 仅存非敏感配置）
+  - [ ] 可按版本对比：满意度、成本、响应时延

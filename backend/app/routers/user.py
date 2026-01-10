@@ -20,7 +20,7 @@ from ..schemas.user import (
     SmsVerifyRequest,
     SmsSendResponse,
 )
-from ..schemas.quota import UserQuotaDailyResponse
+from ..schemas.quota import UserQuotaDailyResponse, UserQuotaUsageListResponse
 from ..services.user_service import user_service
 from ..services.forum_service import forum_service
 from ..services.email_service import email_service
@@ -187,6 +187,28 @@ async def get_my_quotas(
 ):
     data = await quota_service.get_today_quota(db, current_user)
     return UserQuotaDailyResponse.model_validate(data)
+
+
+@router.get(
+    "/me/quota-usage",
+    response_model=UserQuotaUsageListResponse,
+    summary="获取配额消耗记录（按天）",
+)
+async def get_my_quota_usage(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    days: Annotated[int, Query(ge=1, le=365)] = 30,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+):
+    data = await quota_service.list_quota_usage(
+        db,
+        current_user,
+        days=int(days),
+        page=int(page),
+        page_size=int(page_size),
+    )
+    return UserQuotaUsageListResponse.model_validate(data)
 
 
 @router.put("/me", response_model=UserResponse, summary="更新当前用户信息")

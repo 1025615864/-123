@@ -20,3 +20,20 @@ class UserQuotaDailyResponse(BaseModel):
     document_generate_pack_remaining: int = Field(0, ge=0)
 
     is_vip_active: bool
+
+
+class UserQuotaUsageItem(BaseModel):
+    day: date
+
+    ai_chat_limit: int = Field(..., ge=0)
+    ai_chat_used: int = Field(..., ge=0)
+
+    document_generate_limit: int = Field(..., ge=0)
+    document_generate_used: int = Field(..., ge=0)
+
+
+class UserQuotaUsageListResponse(BaseModel):
+    items: list[UserQuotaUsageItem]
+    total: int
+    page: int
+    page_size: int

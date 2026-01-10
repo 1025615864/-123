@@ -11,6 +11,7 @@ from ..models.feedback import FeedbackTicket
 from ..models.user import User
 from ..schemas.feedback import (
     AdminFeedbackTicketUpdate,
+    AdminFeedbackTicketStatsResponse,
     FeedbackTicketCreate,
     FeedbackTicketItem,
     FeedbackTicketListResponse,
@@ -68,6 +69,38 @@ async def list_my_tickets(
         total=total,
         page=page,
         page_size=page_size,
+    )
+
+
+@router.get(
+    "/admin/tickets/stats",
+    response_model=AdminFeedbackTicketStatsResponse,
+    summary="管理员-反馈工单统计",
+)
+async def admin_ticket_stats(
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    _ = current_user
+
+    res = await db.execute(select(FeedbackTicket.status, func.count(FeedbackTicket.id)).group_by(FeedbackTicket.status))
+    rows = res.all()
+    by_status: dict[str, int] = {}
+    for s, c in rows:
+        by_status[str(s or "").strip()] = int(c or 0)
+
+    total = sum(by_status.values())
+    unassigned_res = await db.execute(
+        select(func.count(FeedbackTicket.id)).where(FeedbackTicket.admin_id.is_(None))
+    )
+    unassigned = int(unassigned_res.scalar() or 0)
+
+    return AdminFeedbackTicketStatsResponse(
+        total=int(total),
+        open=int(by_status.get("open", 0)),
+        processing=int(by_status.get("processing", 0)),
+        closed=int(by_status.get("closed", 0)),
+        unassigned=int(unassigned),
     )
 
 
@@ -136,7 +169,9 @@ async def admin_update_ticket(
     if ticket is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="工单不存在")
 
-    if data.status is not None:
+    fields_set = getattr(data, "model_fields_set", set())
+
+    if ("status" in fields_set) and (data.status is not None):
         next_status = str(data.status).strip()
         if next_status not in ALLOWED_TICKET_STATUS:
             raise HTTPException(
@@ -145,9 +180,22 @@ async def admin_update_ticket(
             )
         ticket.status = next_status
 
-    if data.admin_reply is not None:
-        ticket.admin_reply = str(data.admin_reply).strip() or None
-        ticket.admin_id = int(current_user.id)
+    if "admin_reply" in fields_set:
+        next_reply = str(data.admin_reply or "").strip() if data.admin_reply is not None else ""
+        ticket.admin_reply = next_reply or None
+        if next_reply:
+            ticket.admin_id = int(current_user.id)
+
+    if "admin_id" in fields_set:
+        if data.admin_id is None:
+            ticket.admin_id = None
+        else:
+            if int(data.admin_id) != int(current_user.id):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="目前仅支持指派给自己",
+                )
+            ticket.admin_id = int(current_user.id)
 
     db.add(ticket)
     await db.commit()

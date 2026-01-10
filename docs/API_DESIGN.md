@@ -118,6 +118,7 @@ Authorization: Bearer <token>
 - `PUT /api/user/me`：更新资料（不允许直接改手机号）
 - `PUT /api/user/me/password`：修改密码（要求邮箱验证）
 - `GET /api/user/me/quotas`：配额
+- `GET /api/user/me/quota-usage`：配额消耗记录（按天）
 - `POST /api/user/email-verification/request`：请求验证邮件
 - `GET /api/user/email-verification/verify`：验证邮箱
 - `POST /api/user/sms/send`：发送短信验证码（开发环境回传 code）
@@ -128,6 +129,12 @@ Authorization: Bearer <token>
 - `GET /api/user/admin/list`
 - `PUT /api/user/admin/{user_id}/toggle-active`
 - `PUT /api/user/admin/{user_id}/role`
+
+客服反馈（管理员）：
+
+- `GET /api/feedback/admin/tickets`：工单列表
+- `PUT /api/feedback/admin/tickets/{ticket_id}`：回复/状态/指派（目前仅支持指派给自己）
+- `GET /api/feedback/admin/tickets/stats`：工单统计（按状态/未分配）
 
 ### 4.3 AI 法律助手（/api/ai）
 

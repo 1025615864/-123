@@ -23,6 +23,7 @@ from ..models.consultation import Consultation, ChatMessage
 from ..models.user import User
 from ..config import get_settings
 from ..services.ai_metrics import ai_metrics
+from ..services.critical_event_reporter import critical_event_reporter
 from ..services.quota_service import quota_service
 from ..services.report_generator import (
     build_consultation_report_from_export_data,
@@ -272,8 +273,8 @@ async def chat_with_ai(
     - 如果已登录，咨询记录将绑定到用户账号
     """
     started_at = float(time.time())
-    request_id = uuid.uuid4().hex
-    response.headers["X-Request-Id"] = request_id
+    request_id = str(getattr(request.state, "request_id", "") or "").strip() or uuid.uuid4().hex
+    _ = response.headers.setdefault("X-Request-Id", request_id)
     ai_metrics.record_request("chat")
     client_ip = get_client_ip(request)
     user_id_str = str(current_user.id) if current_user else "guest"
@@ -288,6 +289,19 @@ async def chat_with_ai(
                 error_code=error_code,
                 status_code=503,
                 message=message,
+            )
+            critical_event_reporter.fire_and_forget(
+                event="ai_not_configured",
+                severity="warning",
+                request_id=request_id,
+                title="AI服务未配置",
+                message=message,
+                data={
+                    "endpoint": "chat",
+                    "user_id": user_id_str,
+                    "ip": client_ip,
+                },
+                dedup_key="ai_not_configured",
             )
             _audit_event(
                 "chat_error",
@@ -347,6 +361,19 @@ async def chat_with_ai(
                 error_code=error_code,
                 status_code=503,
                 message=message,
+            )
+            critical_event_reporter.fire_and_forget(
+                event="ai_unavailable",
+                severity="warning",
+                request_id=request_id,
+                title="AI服务不可用",
+                message=message,
+                data={
+                    "endpoint": "chat",
+                    "user_id": user_id_str,
+                    "ip": client_ip,
+                },
+                dedup_key="ai_unavailable",
             )
             return _make_error_response(
                 status_code=503,
@@ -499,6 +526,22 @@ async def chat_with_ai(
             status_code=sc,
             message=message,
         )
+        if sc >= 500:
+            critical_event_reporter.fire_and_forget(
+                event="ai_http_exception",
+                severity="error",
+                request_id=request_id,
+                title="AI接口异常",
+                message=message,
+                data={
+                    "endpoint": "chat",
+                    "status_code": sc,
+                    "error_code": error_code,
+                    "user_id": user_id_str,
+                    "ip": client_ip,
+                },
+                dedup_key=f"ai_http_exception|chat|{sc}|{error_code}",
+            )
         _audit_event(
             "chat_error",
             {
@@ -530,6 +573,19 @@ async def chat_with_ai(
             error_code=error_code,
             status_code=500,
             message=str(e),
+        )
+        critical_event_reporter.fire_and_forget(
+            event="ai_unhandled_exception",
+            severity="error",
+            request_id=request_id,
+            title="AI未处理异常",
+            message=str(e),
+            data={
+                "endpoint": "chat",
+                "user_id": user_id_str,
+                "ip": client_ip,
+            },
+            dedup_key="ai_unhandled_exception|chat",
         )
         _audit_event(
             "chat_error",
@@ -570,7 +626,7 @@ async def chat_with_ai_stream(
     - done: 完成信号
     """
     started_at = float(time.time())
-    request_id = uuid.uuid4().hex
+    request_id = str(getattr(request.state, "request_id", "") or "").strip() or uuid.uuid4().hex
     ai_metrics.record_request("chat_stream")
     client_ip = get_client_ip(request)
 
@@ -689,6 +745,19 @@ async def chat_with_ai_stream(
                 status_code=503,
                 message=message,
             )
+            critical_event_reporter.fire_and_forget(
+                event="ai_not_configured",
+                severity="warning",
+                request_id=request_id,
+                title="AI服务未配置",
+                message=message,
+                data={
+                    "endpoint": "chat_stream",
+                    "user_id": user_id_str,
+                    "ip": client_ip,
+                },
+                dedup_key="ai_not_configured",
+            )
             _audit_event(
                 "chat_stream_error",
                 {
@@ -746,6 +815,19 @@ async def chat_with_ai_stream(
                 error_code=error_code,
                 status_code=503,
                 message=message,
+            )
+            critical_event_reporter.fire_and_forget(
+                event="ai_unavailable",
+                severity="warning",
+                request_id=request_id,
+                title="AI服务不可用",
+                message=message,
+                data={
+                    "endpoint": "chat_stream",
+                    "user_id": user_id_str,
+                    "ip": client_ip,
+                },
+                dedup_key="ai_unavailable",
             )
             return _make_error_response(
                 status_code=503,
@@ -926,7 +1008,7 @@ async def chat_with_ai_stream(
             },
         )
     except HTTPException as e:
-        sc = int(e.status_code)
+        sc = int(getattr(e, "status_code", 500) or 500)
         error_code = _error_code_for_http(sc)
         message = _extract_message(getattr(e, "detail", ""))
         ai_metrics.record_error(
@@ -936,6 +1018,22 @@ async def chat_with_ai_stream(
             status_code=sc,
             message=message,
         )
+        if sc >= 500:
+            critical_event_reporter.fire_and_forget(
+                event="ai_http_exception",
+                severity="error",
+                request_id=request_id,
+                title="AI接口异常",
+                message=message,
+                data={
+                    "endpoint": "chat_stream",
+                    "status_code": sc,
+                    "error_code": error_code,
+                    "user_id": user_id_str,
+                    "ip": client_ip,
+                },
+                dedup_key=f"ai_http_exception|chat_stream|{sc}|{error_code}",
+            )
         _audit_event(
             "chat_stream_error",
             {
@@ -967,6 +1065,19 @@ async def chat_with_ai_stream(
             error_code=error_code,
             status_code=500,
             message=str(e),
+        )
+        critical_event_reporter.fire_and_forget(
+            event="ai_unhandled_exception",
+            severity="error",
+            request_id=request_id,
+            title="AI未处理异常",
+            message=str(e),
+            data={
+                "endpoint": "chat_stream",
+                "user_id": user_id_str,
+                "ip": client_ip,
+            },
+            dedup_key="ai_unhandled_exception|chat_stream",
         )
         _audit_event(
             "chat_stream_error",
@@ -1334,7 +1445,7 @@ async def transcribe(
     current_user: Annotated[User | None, Depends(get_current_user_optional)] = None,
 ):
     started_at = float(time.time())
-    request_id = uuid.uuid4().hex
+    request_id = str(getattr(request.state, "request_id", "") or "").strip() or uuid.uuid4().hex
     ai_metrics.record_request("transcribe")
     client_ip = get_client_ip(request)
 
@@ -1355,7 +1466,7 @@ async def transcribe(
             _ = await file.read()
         except Exception:
             pass
-        response.headers["X-Request-Id"] = request_id
+        _ = response.headers.setdefault("X-Request-Id", request_id)
         return TranscribeResponse(text="这是一个E2E mock 的语音转写结果")
 
     try:
@@ -1368,6 +1479,19 @@ async def transcribe(
                 error_code=error_code,
                 status_code=503,
                 message=message,
+            )
+            critical_event_reporter.fire_and_forget(
+                event="ai_not_configured",
+                severity="warning",
+                request_id=request_id,
+                title="AI服务未配置",
+                message=message,
+                data={
+                    "endpoint": "transcribe",
+                    "user_id": user_id_str,
+                    "ip": client_ip,
+                },
+                dedup_key="ai_not_configured",
             )
             _audit_event(
                 "transcribe_error",
@@ -1455,6 +1579,17 @@ async def transcribe(
             status_code=500,
             message="transcribe_failed",
         )
+        critical_event_reporter.fire_and_forget(
+            event="ai_transcribe_failed",
+            severity="error",
+            request_id=request_id,
+            title="语音转写失败",
+            message="transcribe_failed",
+            data={
+                "endpoint": "transcribe",
+            },
+            dedup_key="ai_transcribe_failed",
+        )
         return _make_error_response(
             status_code=500,
             error_code=ERROR_AI_INTERNAL_ERROR,
@@ -1472,7 +1607,7 @@ async def analyze_file(
     current_user: Annotated[User | None, Depends(get_current_user_optional)] = None,
 ):
     started_at = float(time.time())
-    request_id = uuid.uuid4().hex
+    request_id = str(getattr(request.state, "request_id", "") or "").strip() or uuid.uuid4().hex
     ai_metrics.record_request("file_analyze")
     client_ip = get_client_ip(request)
 
@@ -1493,7 +1628,7 @@ async def analyze_file(
             _ = await file.read()
         except Exception:
             pass
-        response.headers["X-Request-Id"] = request_id
+        _ = response.headers.setdefault("X-Request-Id", request_id)
         return FileAnalyzeResponse(
             filename=str(file.filename or "attachment"),
             content_type=str(file.content_type or "") or None,
@@ -1511,6 +1646,19 @@ async def analyze_file(
             error_code=error_code,
             status_code=503,
             message=message,
+        )
+        critical_event_reporter.fire_and_forget(
+            event="ai_not_configured",
+            severity="warning",
+            request_id=request_id,
+            title="AI服务未配置",
+            message=message,
+            data={
+                "endpoint": "file_analyze",
+                "user_id": user_id_str,
+                "ip": client_ip,
+            },
+            dedup_key="ai_not_configured",
         )
         _audit_event(
             "file_analyze_error",
@@ -1667,6 +1815,17 @@ async def analyze_file(
             error_code=ERROR_AI_INTERNAL_ERROR,
             status_code=500,
             message="summarize_failed",
+        )
+        critical_event_reporter.fire_and_forget(
+            event="ai_file_analyze_failed",
+            severity="error",
+            request_id=request_id,
+            title="文件分析失败",
+            message="summarize_failed",
+            data={
+                "endpoint": "file_analyze",
+            },
+            dedup_key="ai_file_analyze_failed",
         )
         return _make_error_response(
             status_code=500,

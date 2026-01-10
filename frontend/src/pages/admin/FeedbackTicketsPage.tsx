@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { MessageSquare, RefreshCw, Send } from "lucide-react";
+import { MessageSquare, RefreshCw, Send, UserCheck, UserX } from "lucide-react";
 import {
   Badge,
   Button,
@@ -17,6 +17,7 @@ import api from "../../api/client";
 import { useAppMutation, useToast } from "../../hooks";
 import { getApiErrorMessage } from "../../utils";
 import { queryKeys } from "../../queryKeys";
+import { useAuth } from "../../contexts/AuthContext";
 
 type FeedbackTicketItem = {
   id: number;
@@ -35,6 +36,14 @@ type FeedbackTicketListResponse = {
   total: number;
   page: number;
   page_size: number;
+};
+
+type AdminFeedbackTicketStatsResponse = {
+  total: number;
+  open: number;
+  processing: number;
+  closed: number;
+  unassigned: number;
 };
 
 function statusToBadgeVariant(
@@ -67,6 +76,7 @@ function normalizeStatus(
 
 export default function FeedbackTicketsPage() {
   const toast = useToast();
+  const { user } = useAuth();
 
   const [page, setPage] = useState(1);
   const pageSize = 20;
@@ -82,6 +92,17 @@ export default function FeedbackTicketsPage() {
   const [nextStatus, setNextStatus] = useState<
     "" | "open" | "processing" | "closed"
   >("");
+
+  const statsQuery = useQuery({
+    queryKey: queryKeys.adminFeedbackTicketStats(),
+    queryFn: async () => {
+      const res = await api.get("/feedback/admin/tickets/stats");
+      return res.data as AdminFeedbackTicketStatsResponse;
+    },
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  });
 
   const listQuery = useQuery({
     queryKey: queryKeys.adminFeedbackTickets(
@@ -119,9 +140,14 @@ export default function FeedbackTicketsPage() {
     toast.error(getApiErrorMessage(listQuery.error, "加载失败，请稍后重试"));
   }, [listQuery.error, toast]);
 
+  useEffect(() => {
+    if (!statsQuery.error) return;
+    toast.error(getApiErrorMessage(statsQuery.error, "统计加载失败"));
+  }, [statsQuery.error, toast]);
+
   const updateMutation = useAppMutation<
     FeedbackTicketItem,
-    { id: number; status: string | null; admin_reply: string | null }
+    { id: number; status: string | null; admin_reply: string | null; admin_id?: number | null }
   >({
     mutationFn: async ({ id, status, admin_reply }) => {
       const res = await api.put(`/feedback/admin/tickets/${id}`, {
@@ -139,6 +165,24 @@ export default function FeedbackTicketsPage() {
       setReply("");
       setNextStatus("");
     },
+  });
+
+  const assignMutation = useAppMutation<
+    FeedbackTicketItem,
+    { id: number; admin_id: number | null }
+  >({
+    mutationFn: async ({ id, admin_id }) => {
+      const res = await api.put(`/feedback/admin/tickets/${id}`, {
+        admin_id,
+      });
+      return res.data as FeedbackTicketItem;
+    },
+    successMessage: "已更新指派",
+    errorMessageFallback: "指派失败，请稍后重试",
+    invalidateQueryKeys: [
+      queryKeys.adminFeedbackTicketsRoot(),
+      queryKeys.adminFeedbackTicketStats(),
+    ],
   });
 
   const items = listQuery.data?.items ?? [];
@@ -203,7 +247,10 @@ export default function FeedbackTicketsPage() {
         <Button
           variant="outline"
           icon={RefreshCw}
-          onClick={() => listQuery.refetch()}
+          onClick={() => {
+            listQuery.refetch();
+            statsQuery.refetch();
+          }}
           isLoading={listQuery.isFetching}
           loadingText="刷新中..."
           disabled={listQuery.isFetching}
@@ -211,6 +258,26 @@ export default function FeedbackTicketsPage() {
           刷新
         </Button>
       </div>
+
+      <Card variant="surface" padding="lg">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="default" size="sm">
+            总计 {Number(statsQuery.data?.total || 0)}
+          </Badge>
+          <Badge variant="warning" size="sm">
+            待处理 {Number(statsQuery.data?.open || 0)}
+          </Badge>
+          <Badge variant="info" size="sm">
+            处理中 {Number(statsQuery.data?.processing || 0)}
+          </Badge>
+          <Badge variant="success" size="sm">
+            已关闭 {Number(statsQuery.data?.closed || 0)}
+          </Badge>
+          <Badge variant="default" size="sm">
+            未分配 {Number(statsQuery.data?.unassigned || 0)}
+          </Badge>
+        </div>
+      </Card>
 
       <Card variant="surface" padding="lg">
         <div className="flex flex-wrap items-center gap-2 mb-4">
@@ -300,6 +367,16 @@ export default function FeedbackTicketsPage() {
                     <div className="mt-2 space-y-2 text-sm text-slate-600 dark:text-white/60">
                       <div>用户：#{t.user_id}</div>
                       <div>
+                        指派：
+                        {t.admin_id ? (
+                          <span className="text-slate-800 dark:text-white/80">
+                            管理员 #{t.admin_id}
+                          </span>
+                        ) : (
+                          <span className="text-slate-500 dark:text-white/45">未分配</span>
+                        )}
+                      </div>
+                      <div>
                         提交时间：{new Date(t.created_at).toLocaleString()}
                       </div>
                       <div className="text-slate-700 dark:text-white/70 whitespace-pre-wrap">
@@ -319,6 +396,25 @@ export default function FeedbackTicketsPage() {
                   </div>
 
                   <div className="flex items-center gap-2 sm:flex-col sm:items-end">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      icon={t.admin_id ? UserX : UserCheck}
+                      onClick={() => {
+                        const meId = Number(user?.id || 0);
+                        if (!meId) {
+                          toast.error("未获取到当前管理员信息");
+                          return;
+                        }
+                        assignMutation.mutate({
+                          id: t.id,
+                          admin_id: t.admin_id ? null : meId,
+                        });
+                      }}
+                      disabled={assignMutation.isPending}
+                    >
+                      {t.admin_id ? "取消指派" : "指派给我"}
+                    </Button>
                     <Button
                       variant="outline"
                       size="sm"

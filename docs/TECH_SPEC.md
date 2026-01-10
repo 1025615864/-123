@@ -205,3 +205,71 @@ Authorization: Bearer <token>
 
 - **Secrets 不入库**：`OPENAI_API_KEY`、`JWT_SECRET_KEY/SECRET_KEY`、`PAYMENT_WEBHOOK_SECRET` 等必须通过环境变量/Secret Manager 注入；系统配置（SystemConfig）禁止写入敏感信息（后端会返回 400）。
 - **生产周期任务**：生产多副本部署时建议配置 Redis，用于分布式锁，避免任务重复跑。
+
+---
+
+## 八、可观测性与排障（Stage 9）
+
+### 8.1 request_id（端到端追踪）
+
+- 前端会为当前会话生成稳定的 `X-Request-Id`，并在所有 API 请求中携带。
+- 后端会优先使用请求头中的 `X-Request-Id`，并保证响应也带 `X-Request-Id`。
+- 后端请求日志/错误日志会打印 `request_id`，用于从前端报错快速定位到具体请求。
+
+常用排查路径：
+
+- 浏览器 DevTools -> Network -> 任意失败请求：
+  - 看 Response Headers 中的 `X-Request-Id`
+  - 若为 AI 接口错误，响应体也可能包含 `request_id`
+- 后端日志中按 `request_id=<id>` 搜索：
+  - K8s：`kubectl -n <ns> logs deploy/<release>-baixing-assistant-backend | findstr request_id=<id>`
+  - Docker：`docker logs <container> | grep request_id=<id>`
+
+### 8.2 Prometheus 指标（/metrics）
+
+后端暴露 Prometheus 指标：
+
+- `GET /metrics`
+
+关键指标（用于告警与 Grafana Dashboard）：
+
+- HTTP：
+  - `baixing_http_requests_total{method,route,status}`
+  - `baixing_http_request_duration_seconds_bucket{method,route,status,le}`（用于 P95 等分位数）
+- 周期任务：
+  - `baixing_job_runs_total{job}` / `baixing_job_failure_total{job}`
+  - `baixing_job_last_run_timestamp_seconds{job}` / `baixing_job_last_success{job}`
+
+常用 PromQL：
+
+- 5xx 比例：
+  - `sum(rate(baixing_http_requests_total{status=~"5.."}[5m])) / clamp_min(sum(rate(baixing_http_requests_total[5m])), 1)`
+- P95 延迟（全局）：
+  - `histogram_quantile(0.95, sum by (le) (rate(baixing_http_request_duration_seconds_bucket[5m])))`
+- P95 延迟（按 route 拆分）：
+  - `histogram_quantile(0.95, sum by (route, le) (rate(baixing_http_request_duration_seconds_bucket[5m])))`
+
+### 8.3 关键异常上报（可选 webhook）
+
+后端支持将关键异常以 webhook 方式异步上报（默认关闭；上报失败不影响主流程）。
+
+环境变量：
+
+```env
+CRITICAL_EVENTS_ENABLED=false
+CRITICAL_EVENTS_WEBHOOK_URL=
+CRITICAL_EVENTS_WEBHOOK_BEARER=
+CRITICAL_EVENTS_WEBHOOK_HEADER_NAME=
+CRITICAL_EVENTS_WEBHOOK_HEADER_VALUE=
+CRITICAL_EVENTS_MIN_INTERVAL_SECONDS=30
+CRITICAL_EVENTS_TIMEOUT_SECONDS=3
+```
+
+说明：
+
+- `CRITICAL_EVENTS_ENABLED=true` 且设置 `CRITICAL_EVENTS_WEBHOOK_URL` 后启用。
+- 支持两种鉴权方式（二选一即可）：
+  - `CRITICAL_EVENTS_WEBHOOK_BEARER`：发送 `Authorization: Bearer ...`
+  - `CRITICAL_EVENTS_WEBHOOK_HEADER_NAME/CRITICAL_EVENTS_WEBHOOK_HEADER_VALUE`：自定义 header
+- 内置简单去重/限频（`CRITICAL_EVENTS_MIN_INTERVAL_SECONDS`），避免异常风暴刷屏。
+- 上报 payload 会包含：`event`、`severity`、`request_id`（如有）、`env`、`data` 等字段。

@@ -4,6 +4,8 @@ export const queryKeys = {
   notificationsPreview: (pageSize: number = 10) =>
     ["notifications-preview", { pageSize }] as const,
   userMeQuotas: () => ["user-me-quotas"] as const,
+  userMeQuotaUsage: (page: number, pageSize: number, days: number) =>
+    ["user-me-quota-usage", { page, pageSize, days }] as const,
   adminSystemNotifications: () => ["admin-system-notifications"] as const,
   calendarReminders: (page: number, pageSize: number, done: boolean | null) =>
     ["calendar-reminders", { page, pageSize, done }] as const,
@@ -81,6 +83,7 @@ export const queryKeys = {
     status: string | null,
     keyword: string | null
   ) => ["admin-feedback-tickets", { page, pageSize, status, keyword }] as const,
+  adminFeedbackTicketStats: () => ["admin-feedback-ticket-stats"] as const,
 
   newsCategories: () => ["news-categories"] as const,
   newsList: (

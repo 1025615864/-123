@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
+from ..services.critical_event_reporter import critical_event_reporter
 from ..models.news import News
 from ..models.news_ai import NewsAIAnnotation
 from ..utils.content_filter import content_filter
@@ -332,6 +333,24 @@ class NewsAIPipelineService:
             int(batch_size),
             int(pending_total),
         )
+        if int(errors) > 0:
+            critical_event_reporter.fire_and_forget(
+                event="news_ai_pipeline_errors",
+                severity="warning",
+                request_id=None,
+                title="News AI pipeline errors",
+                message=f"errors={int(errors)} processed={int(processed)} batch_size={int(batch_size)}",
+                data={
+                    "processed": int(processed),
+                    "created": int(created),
+                    "updated": int(updated),
+                    "errors": int(errors),
+                    "duration_ms": int(duration_ms),
+                    "batch_size": int(batch_size),
+                    "pending_total": int(pending_total),
+                },
+                dedup_key="news_ai_pipeline_errors",
+            )
         return {"processed": processed, "created": created, "updated": updated, "errors": errors}
 
     async def rerun_news(self, db: AsyncSession, news_id: int) -> None:

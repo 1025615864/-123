@@ -39,6 +39,9 @@ backend:
       PAYMENT_WEBHOOK_SECRET: ""
       REDIS_URL: ""
       OPENAI_API_KEY: ""
+      CRITICAL_EVENTS_WEBHOOK_URL: ""
+      CRITICAL_EVENTS_WEBHOOK_BEARER: ""
+      CRITICAL_EVENTS_WEBHOOK_HEADER_VALUE: ""
 
   config:
     DEBUG: "false"
@@ -49,6 +52,10 @@ backend:
     NEWS_AI_INTERVAL_SECONDS: "120"
     OPENAI_BASE_URL: "https://api.openai.com/v1"
     AI_MODEL: "deepseek-chat"
+    CRITICAL_EVENTS_ENABLED: "false"
+    CRITICAL_EVENTS_MIN_INTERVAL_SECONDS: "30"
+    CRITICAL_EVENTS_TIMEOUT_SECONDS: "3"
+    CRITICAL_EVENTS_WEBHOOK_HEADER_NAME: ""
 
   secret:
     DATABASE_URL: ""
@@ -56,6 +63,9 @@ backend:
     PAYMENT_WEBHOOK_SECRET: ""
     REDIS_URL: ""
     OPENAI_API_KEY: ""
+    CRITICAL_EVENTS_WEBHOOK_URL: ""
+    CRITICAL_EVENTS_WEBHOOK_BEARER: ""
+    CRITICAL_EVENTS_WEBHOOK_HEADER_VALUE: ""
 
 ingress:
   enabled: true
@@ -70,6 +80,19 @@ redis:
 
 postgresql:
   enabled: false
+
+monitoring:
+  enabled: false
+  prometheusRule:
+    enabled: true
+    nameOverride: ""
+    labels: {}
+    annotations: {}
+  grafana:
+    dashboards:
+      enabled: true
+      configMapLabels:
+        grafana_dashboard: "1"
 
 nodeSelector: {}
 tolerations: []

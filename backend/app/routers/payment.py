@@ -27,6 +27,7 @@ from cryptography.hazmat.primitives.serialization import load_pem_private_key, l
 
 from ..config import get_settings
 from ..database import get_db
+from ..services.critical_event_reporter import critical_event_reporter
 from ..models.payment import PaymentOrder, UserBalance, BalanceTransaction, PaymentStatus, PaymentCallbackEvent
 from ..models.system import SystemConfig, AdminLog, LogAction, LogModule
 from ..models.user import User
@@ -1330,6 +1331,8 @@ async def alipay_notify(request: Request, db: Annotated[AsyncSession, Depends(ge
     form = await request.form()
     params = {str(k): str(v) for k, v in form.items()}
 
+    request_id = str(getattr(request.state, "request_id", "") or "").strip() or uuid.uuid4().hex
+
     payload_raw = json.dumps(params, ensure_ascii=False, separators=(",", ":"))
     order_no_raw = str(params.get("out_trade_no") or "").strip() or None
     trade_no_raw = str(params.get("trade_no") or "").strip() or None
@@ -1351,6 +1354,20 @@ async def alipay_notify(request: Request, db: Annotated[AsyncSession, Depends(ge
             verified=False,
             error_message="ALIPAY_PUBLIC_KEY 未设置",
             raw_payload=payload_raw,
+        )
+        critical_event_reporter.fire_and_forget(
+            event="payment_config_missing",
+            severity="error",
+            request_id=request_id,
+            title="支付回调配置缺失",
+            message="ALIPAY_PUBLIC_KEY 未设置",
+            data={
+                "provider": "alipay",
+                "order_no": order_no_raw,
+                "trade_no": trade_no_raw,
+                "path": str(request.url.path),
+            },
+            dedup_key="payment_config_missing|alipay_public_key",
         )
         return Response(content="failure", status_code=500, media_type="text/plain")
 
@@ -1504,7 +1521,7 @@ async def alipay_notify(request: Request, db: Annotated[AsyncSession, Depends(ge
             amount=amount,
         )
         await db.commit()
-    except Exception:
+    except Exception as e:
         await db.rollback()
         await _record_callback_event(
             db,
@@ -1515,6 +1532,19 @@ async def alipay_notify(request: Request, db: Annotated[AsyncSession, Depends(ge
             verified=True,
             error_message="订单落库失败",
             raw_payload=payload_raw,
+        )
+        critical_event_reporter.fire_and_forget(
+            event="payment_callback_persist_failed",
+            severity="error",
+            request_id=request_id,
+            title="支付回调落库失败",
+            message=str(e),
+            data={
+                "provider": "alipay",
+                "order_no": order_no,
+                "trade_no": trade_no,
+            },
+            dedup_key="payment_callback_persist_failed|alipay",
         )
         return Response(content="failure", status_code=500, media_type="text/plain")
 
@@ -1541,6 +1571,8 @@ async def ikunpay_notify(request: Request, db: Annotated[AsyncSession, Depends(g
         form = await request.form()
         params = {str(k): str(v) for k, v in form.items()}
 
+    request_id = str(getattr(request.state, "request_id", "") or "").strip() or uuid.uuid4().hex
+
     payload_raw = json.dumps(params, ensure_ascii=False, separators=(",", ":"))
     order_no_raw = str(params.get("out_trade_no") or "").strip() or None
     trade_no_raw = str(params.get("trade_no") or "").strip() or None
@@ -1563,6 +1595,20 @@ async def ikunpay_notify(request: Request, db: Annotated[AsyncSession, Depends(g
             verified=False,
             error_message="IKUNPAY_KEY 未设置",
             raw_payload=payload_raw,
+        )
+        critical_event_reporter.fire_and_forget(
+            event="payment_config_missing",
+            severity="error",
+            request_id=request_id,
+            title="支付回调配置缺失",
+            message="IKUNPAY_KEY 未设置",
+            data={
+                "provider": "ikunpay",
+                "order_no": order_no_raw,
+                "trade_no": trade_no_raw,
+                "path": str(request.url.path),
+            },
+            dedup_key="payment_config_missing|ikunpay_key",
         )
         return Response(content="fail", status_code=500, media_type="text/plain")
 
@@ -1700,7 +1746,7 @@ async def ikunpay_notify(request: Request, db: Annotated[AsyncSession, Depends(g
             amount=amount,
         )
         await db.commit()
-    except Exception:
+    except Exception as e:
         await db.rollback()
         await _record_callback_event(
             db,
@@ -1711,6 +1757,19 @@ async def ikunpay_notify(request: Request, db: Annotated[AsyncSession, Depends(g
             verified=True,
             error_message="订单落库失败",
             raw_payload=payload_raw,
+        )
+        critical_event_reporter.fire_and_forget(
+            event="payment_callback_persist_failed",
+            severity="error",
+            request_id=request_id,
+            title="支付回调落库失败",
+            message=str(e),
+            data={
+                "provider": "ikunpay",
+                "order_no": order_no,
+                "trade_no": trade_no,
+            },
+            dedup_key="payment_callback_persist_failed|ikunpay",
         )
         return Response(content="fail", status_code=500, media_type="text/plain")
 
@@ -1731,8 +1790,10 @@ async def ikunpay_notify(request: Request, db: Annotated[AsyncSession, Depends(g
 @router.post("/webhook", summary="支付回调（验签）")
 async def payment_webhook(
     data: PaymentWebhookRequest,
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    request_id = str(getattr(request.state, "request_id", "") or "").strip() or uuid.uuid4().hex
     if data.payment_method not in {"alipay", "wechat"}:
         await _record_callback_event(
             db,
@@ -1829,11 +1890,41 @@ async def payment_webhook(
             amount=amount,
         )
         await db.commit()
-    except HTTPException:
+    except HTTPException as e:
         await db.rollback()
+        sc = int(getattr(e, "status_code", 500) or 500)
+        if sc >= 500:
+            critical_event_reporter.fire_and_forget(
+                event="payment_webhook_failed",
+                severity="error",
+                request_id=request_id,
+                title="支付回调处理失败",
+                message=str(getattr(e, "detail", "") or ""),
+                data={
+                    "provider": str(data.payment_method),
+                    "order_no": str(data.order_no),
+                    "trade_no": str(data.trade_no),
+                    "status_code": sc,
+                },
+                dedup_key=f"payment_webhook_failed|{str(data.payment_method)}|{sc}",
+            )
         raise
-    except Exception:
+    except Exception as e:
         await db.rollback()
+        critical_event_reporter.fire_and_forget(
+            event="payment_webhook_failed",
+            severity="error",
+            request_id=request_id,
+            title="支付回调处理失败",
+            message=str(e),
+            data={
+                "provider": str(data.payment_method),
+                "order_no": str(data.order_no),
+                "trade_no": str(data.trade_no),
+                "status_code": 500,
+            },
+            dedup_key=f"payment_webhook_failed|{str(data.payment_method)}|500",
+        )
         raise
 
     await _record_callback_event(
@@ -1855,6 +1946,7 @@ async def wechat_notify(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
+    request_id = str(getattr(request.state, "request_id", "") or "").strip() or uuid.uuid4().hex
     body = await request.body()
     payload_raw = body.decode("utf-8", errors="replace")
 
@@ -1948,6 +2040,18 @@ async def wechat_notify(
             verified=False,
             error_message="WECHATPAY_API_V3_KEY 未设置",
             raw_payload=payload_raw,
+        )
+        critical_event_reporter.fire_and_forget(
+            event="payment_config_missing",
+            severity="error",
+            request_id=request_id,
+            title="支付回调配置缺失",
+            message="WECHATPAY_API_V3_KEY 未设置",
+            data={
+                "provider": "wechat",
+                "path": str(request.url.path),
+            },
+            dedup_key="payment_config_missing|wechatpay_api_v3_key",
         )
         raise HTTPException(status_code=500, detail="WECHATPAY_API_V3_KEY 未设置")
 
@@ -2111,11 +2215,41 @@ async def wechat_notify(
             amount=amount_yuan,
         )
         await db.commit()
-    except HTTPException:
+    except HTTPException as e:
         await db.rollback()
+        sc = int(getattr(e, "status_code", 500) or 500)
+        if sc >= 500:
+            critical_event_reporter.fire_and_forget(
+                event="payment_callback_persist_failed",
+                severity="error",
+                request_id=request_id,
+                title="支付回调处理失败",
+                message=str(getattr(e, "detail", "") or ""),
+                data={
+                    "provider": "wechat",
+                    "order_no": order_no,
+                    "trade_no": trade_no,
+                    "status_code": sc,
+                },
+                dedup_key=f"payment_callback_persist_failed|wechat|{sc}",
+            )
         raise
-    except Exception:
+    except Exception as e:
         await db.rollback()
+        critical_event_reporter.fire_and_forget(
+            event="payment_callback_persist_failed",
+            severity="error",
+            request_id=request_id,
+            title="支付回调处理失败",
+            message=str(e),
+            data={
+                "provider": "wechat",
+                "order_no": order_no,
+                "trade_no": trade_no,
+                "status_code": 500,
+            },
+            dedup_key="payment_callback_persist_failed|wechat|500",
+        )
         raise
 
     await _record_callback_event(

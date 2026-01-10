@@ -34,3 +34,12 @@ class FeedbackTicketListResponse(BaseModel):
 class AdminFeedbackTicketUpdate(BaseModel):
     status: str | None = None
     admin_reply: str | None = Field(default=None, max_length=20000)
+    admin_id: int | None = None
+
+
+class AdminFeedbackTicketStatsResponse(BaseModel):
+    total: int
+    open: int
+    processing: int
+    closed: int
+    unassigned: int

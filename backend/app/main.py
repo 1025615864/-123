@@ -18,6 +18,7 @@ from .services.prometheus_metrics import prometheus_metrics
 from .database import AsyncSessionLocal
 from .routers import api_router, websocket
 from .middleware.logging_middleware import RequestLoggingMiddleware, ErrorLoggingMiddleware
+from .middleware.request_id_middleware import RequestIdMiddleware
 from .middleware.rate_limit import RateLimitMiddleware
 from .middleware.metrics_middleware import MetricsMiddleware
 from .middleware.envelope_middleware import EnvelopeMiddleware
@@ -392,6 +393,8 @@ app.add_middleware(
 
 app.add_middleware(MetricsMiddleware)
 app.add_middleware(EnvelopeMiddleware)
+
+app.add_middleware(RequestIdMiddleware)
 
 app.include_router(api_router, prefix="/api")
 app.include_router(websocket.router)

@@ -1,0 +1,70 @@
+{{- if and (.Values.monitoring) (.Values.monitoring.enabled) (.Values.monitoring.prometheusRule) (.Values.monitoring.prometheusRule.enabled) -}}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{- if .Values.monitoring.prometheusRule.nameOverride -}}{{ .Values.monitoring.prometheusRule.nameOverride | quote }}{{- else -}}{{ printf "%s-rules" (include "baixing-assistant.fullname" .) | trunc 63 | trimSuffix "-" | quote }}{{- end }}
+  labels:
+{{ include "baixing-assistant.labels" . | indent 4 }}
+{{- with .Values.monitoring.prometheusRule.labels }}
+{{ toYaml . | indent 4 }}
+{{- end }}
+{{- with .Values.monitoring.prometheusRule.annotations }}
+  annotations:
+{{ toYaml . | indent 4 }}
+{{- end }}
+spec:
+  groups:
+    - name: baixing-assistant.http
+      rules:
+        - alert: BaixingHigh5xxErrorRate
+          expr: |
+            sum(rate(baixing_http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(baixing_http_requests_total[5m])), 1)
+            > 0.05
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High 5xx error rate"
+            description: "5xx rate > 5% for 5m. (request_id: check logs)"
+
+        - alert: BaixingHighP95Latency
+          expr: |
+            histogram_quantile(
+              0.95,
+              sum by (le) (rate(baixing_http_request_duration_seconds_bucket[5m]))
+            ) > 2
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High HTTP P95 latency"
+            description: "P95 latency > 2s for 10m. Use route breakdown in Grafana."
+
+    - name: baixing-assistant.jobs
+      rules:
+        - alert: BaixingJobFailureRateHigh
+          expr: |
+            sum by (job) (rate(baixing_job_failure_total[15m]))
+            /
+            clamp_min(sum by (job) (rate(baixing_job_runs_total[15m])), 1)
+            > 0.20
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Scheduled job failure rate high"
+            description: "Job failure ratio > 20% (15m). job={{ $labels.job }}"
+
+        - alert: BaixingJobStuckNotRunning
+          expr: |
+            (time() - max by (job) (baixing_job_last_run_timestamp_seconds))
+            > 3600
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Scheduled job not running"
+            description: "No job run observed for > 1h. job={{ $labels.job }}"
+{{- end -}}

@@ -20,6 +20,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         method = request.method
         path = request.url.path
         client_ip = request.client.host if request.client else "unknown"
+        request_id = str(getattr(getattr(request, "state", None), "request_id", "") or "").strip()
         
         # 跳过健康检查和静态文件的日志
         skip_paths = ["/health", "/docs", "/redoc", "/openapi.json", "/favicon.ico"]
@@ -34,7 +35,12 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             if should_log:
                 # 根据状态码选择日志级别
                 status_code = response.status_code
-                log_msg = f"{method} {path} - {status_code} - {duration_ms:.2f}ms - {client_ip}"
+                if request_id:
+                    log_msg = (
+                        f"{method} {path} - {status_code} - {duration_ms:.2f}ms - {client_ip} - rid={request_id}"
+                    )
+                else:
+                    log_msg = f"{method} {path} - {status_code} - {duration_ms:.2f}ms - {client_ip}"
                 
                 if status_code >= 500:
                     logger.error(log_msg)
@@ -50,7 +56,10 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             
         except Exception as e:
             duration_ms = (time.time() - start_time) * 1000
-            logger.error(f"{method} {path} - ERROR - {duration_ms:.2f}ms - {client_ip} - {str(e)}")
+            rid_part = f" - rid={request_id}" if request_id else ""
+            logger.error(
+                f"{method} {path} - ERROR - {duration_ms:.2f}ms - {client_ip}{rid_part} - {str(e)}"
+            )
             raise
 
 

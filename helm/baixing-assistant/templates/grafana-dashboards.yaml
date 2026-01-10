@@ -1,0 +1,144 @@
+{{- if and (.Values.monitoring) (.Values.monitoring.enabled) (.Values.monitoring.grafana) (.Values.monitoring.grafana.dashboards) (.Values.monitoring.grafana.dashboards.enabled) -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-grafana-dashboards" (include "baixing-assistant.fullname" .) | trunc 63 | trimSuffix "-" | quote }}
+  labels:
+{{ include "baixing-assistant.labels" . | indent 4 }}
+{{- with .Values.monitoring.grafana.dashboards.configMapLabels }}
+{{ toYaml . | indent 4 }}
+{{- end }}
+data:
+  baixing-overview.json: |
+    {
+      "uid": "baixing-overview",
+      "title": "Baixing Assistant - Overview",
+      "tags": ["baixing", "overview"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "30s",
+      "time": {"from": "now-6h", "to": "now"},
+      "templating": {
+        "list": [
+          {
+            "type": "datasource",
+            "name": "DS_PROMETHEUS",
+            "query": "prometheus",
+            "current": {"text": "Prometheus", "value": "Prometheus"}
+          }
+        ]
+      },
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "HTTP RPS (all)",
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "targets": [
+            {"expr": "sum(rate(baixing_http_requests_total[5m]))", "refId": "A"}
+          ],
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+        },
+        {
+          "type": "timeseries",
+          "title": "HTTP 5xx ratio (all)",
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "targets": [
+            {"expr": "sum(rate(baixing_http_requests_total{status=~\\\"5..\\\"}[5m])) / clamp_min(sum(rate(baixing_http_requests_total[5m])), 1)", "refId": "A"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "percentunit"}},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+        },
+        {
+          "type": "timeseries",
+          "title": "HTTP P95 latency (all)",
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(baixing_http_request_duration_seconds_bucket[5m])))",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "s"}},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+        },
+        {
+          "type": "timeseries",
+          "title": "Top routes P95 latency",
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "targets": [
+            {
+              "expr": "topk(10, histogram_quantile(0.95, sum by (route, le) (rate(baixing_http_request_duration_seconds_bucket[5m]))))",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "s"}},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+        },
+        {
+          "type": "timeseries",
+          "title": "Jobs - last success (1=ok)",
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "targets": [
+            {"expr": "baixing_job_last_success", "refId": "A"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "none"}},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
+        },
+        {
+          "type": "timeseries",
+          "title": "Jobs - failures rate",
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "targets": [
+            {"expr": "sum by (job) (rate(baixing_job_failure_total[15m]))", "refId": "A"}
+          ],
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+        },
+        {
+          "type": "timeseries",
+          "title": "Payment callbacks RPS",
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "targets": [
+            {"expr": "sum(rate(baixing_http_requests_total{route=~\\\".*payment.*(notify|callback).*\\\"}[5m]))", "refId": "A"}
+          ],
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24}
+        },
+        {
+          "type": "timeseries",
+          "title": "Payment callbacks 5xx ratio",
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "targets": [
+            {
+              "expr": "sum(rate(baixing_http_requests_total{route=~\\\".*payment.*(notify|callback).*\\\",status=~\\\"5..\\\"}[5m])) / clamp_min(sum(rate(baixing_http_requests_total{route=~\\\".*payment.*(notify|callback).*\\\"}[5m])), 1)",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "percentunit"}},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24}
+        },
+        {
+          "type": "timeseries",
+          "title": "Document export PDF P95 latency",
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(baixing_http_request_duration_seconds_bucket{route=\\\"/api/documents/export/pdf\\\"}[5m])))",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {"defaults": {"unit": "s"}},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 32}
+        },
+        {
+          "type": "timeseries",
+          "title": "News AI job - last run age (seconds)",
+          "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+          "targets": [
+            {"expr": "time() - max(baixing_job_last_run_timestamp_seconds{job=\\\"news_ai_pipeline\\\"})", "refId": "A"}
+          ],
+          "fieldConfig": {"defaults": {"unit": "s"}},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 32}
+        }
+      ]
+    }
+{{- end -}}

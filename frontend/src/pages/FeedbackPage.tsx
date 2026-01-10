@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { MessageSquare, Plus, Send, RefreshCw } from "lucide-react";
+import { MessageSquare, Plus, Send, RefreshCw, HelpCircle } from "lucide-react";
 import PageHeader from "../components/PageHeader";
 import {
   Badge,
@@ -226,6 +227,11 @@ export default function FeedbackPage() {
         tone={actualTheme}
         right={
           <div className="flex gap-2">
+            <Link to="/faq">
+              <Button variant="outline" icon={HelpCircle} disabled={listQuery.isFetching || actionBusy}>
+                先看 FAQ
+              </Button>
+            </Link>
             <Button
               variant="outline"
               icon={RefreshCw}

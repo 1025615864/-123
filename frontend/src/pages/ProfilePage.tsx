@@ -20,6 +20,7 @@ import {
   Eye,
   EyeOff,
   Calendar,
+  BarChart3,
   Bell,
   CheckCircle,
   AlertCircle,
@@ -110,6 +111,21 @@ export default function ProfilePage() {
     ai_chat_pack_remaining: number;
     document_generate_pack_remaining: number;
     is_vip_active: boolean;
+  };
+
+  type QuotaUsageItem = {
+    day: string;
+    ai_chat_limit: number;
+    ai_chat_used: number;
+    document_generate_limit: number;
+    document_generate_used: number;
+  };
+
+  type QuotaUsageListResp = {
+    items: QuotaUsageItem[];
+    total: number;
+    page: number;
+    page_size: number;
   };
 
   const pricingQuery = useQuery({
@@ -246,6 +262,33 @@ export default function ProfilePage() {
   const [txPage, setTxPage] = useState(1);
   const txPageSize = 10;
 
+  const [showQuotaUsageModal, setShowQuotaUsageModal] = useState(false);
+  const [quotaUsagePage, setQuotaUsagePage] = useState(1);
+  const quotaUsagePageSize = 10;
+  const quotaUsageDays = 30;
+
+  const quotaUsageQuery = useQuery({
+    queryKey: queryKeys.userMeQuotaUsage(
+      quotaUsagePage,
+      quotaUsagePageSize,
+      quotaUsageDays
+    ),
+    queryFn: async () => {
+      const res = await api.get("/user/me/quota-usage", {
+        params: {
+          page: quotaUsagePage,
+          page_size: quotaUsagePageSize,
+          days: quotaUsageDays,
+        },
+      });
+      return res.data as QuotaUsageListResp;
+    },
+    enabled: Boolean(user) && showQuotaUsageModal,
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  });
+
   const balanceTxQuery = useQuery({
     queryKey: [
       "payment-balance-transactions",
@@ -343,6 +386,11 @@ export default function ProfilePage() {
     const total = Number(balanceTxQuery.data?.total || 0);
     return Math.max(1, Math.ceil(total / txPageSize));
   }, [balanceTxQuery.data?.total, txPageSize]);
+
+  const quotaUsageTotalPages = useMemo(() => {
+    const total = Number(quotaUsageQuery.data?.total || 0);
+    return Math.max(1, Math.ceil(total / quotaUsagePageSize));
+  }, [quotaUsageQuery.data?.total, quotaUsagePageSize]);
 
   type PackRelatedType = "ai_chat" | "document_generate";
 
@@ -1414,17 +1462,31 @@ export default function ProfilePage() {
                 <div className="text-xs font-semibold text-slate-600 dark:text-white/60">
                   今日配额
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  icon={RefreshCw}
-                  isLoading={quotasQuery.isFetching}
-                  loadingText="刷新中..."
-                  onClick={() => quotasQuery.refetch()}
-                  disabled={quotasQuery.isFetching}
-                >
-                  刷新配额
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    icon={BarChart3}
+                    onClick={() => {
+                      setQuotaUsagePage(1);
+                      setShowQuotaUsageModal(true);
+                    }}
+                    disabled={quotasQuery.isFetching}
+                  >
+                    消耗记录
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    icon={RefreshCw}
+                    isLoading={quotasQuery.isFetching}
+                    loadingText="刷新中..."
+                    onClick={() => quotasQuery.refetch()}
+                    disabled={quotasQuery.isFetching}
+                  >
+                    刷新配额
+                  </Button>
+                </div>
               </div>
 
               <div className="mt-2 space-y-2 text-xs text-slate-600 dark:text-white/60">
@@ -2238,6 +2300,95 @@ export default function ProfilePage() {
               currentPage={txPage}
               totalPages={txTotalPages}
               onPageChange={(p) => setTxPage(p)}
+            />
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={showQuotaUsageModal}
+        onClose={() => {
+          if (quotaUsageQuery.isFetching) return;
+          setShowQuotaUsageModal(false);
+        }}
+        title="配额消耗记录"
+        description={`近 ${quotaUsageDays} 天按日统计的 AI 咨询/文书消耗情况`}
+        size="lg"
+      >
+        <div className="space-y-4">
+          {quotaUsageQuery.isLoading && !quotaUsageQuery.data ? (
+            <ListSkeleton count={5} />
+          ) : quotaUsageQuery.isError ? (
+            <div className="flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
+              <div>
+                {getApiErrorMessage(quotaUsageQuery.error, "加载失败，请稍后重试")}
+              </div>
+              <Button variant="outline" onClick={() => quotaUsageQuery.refetch()}>
+                重试
+              </Button>
+            </div>
+          ) : (quotaUsageQuery.data?.items ?? []).length > 0 ? (
+            <div className="space-y-3">
+              {(quotaUsageQuery.data?.items ?? []).map((it) => {
+                const d = new Date(String(it.day || ""));
+                const dayLabel = Number.isNaN(d.getTime())
+                  ? String(it.day || "")
+                  : d.toLocaleDateString("zh-CN");
+
+                const aiUsed = Number(it.ai_chat_used || 0);
+                const aiLimit = Number(it.ai_chat_limit || 0);
+                const docUsed = Number(it.document_generate_used || 0);
+                const docLimit = Number(it.document_generate_limit || 0);
+
+                return (
+                  <div
+                    key={`${String(it.day)}`}
+                    className="rounded-2xl border border-slate-200/70 bg-white px-4 py-4 dark:border-white/10 dark:bg-white/[0.03]"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm font-semibold text-slate-900 dark:text-white">
+                        {dayLabel}
+                      </div>
+                      <div className="text-xs text-slate-500 dark:text-white/45">
+                        AI {aiUsed}/{aiLimit} · 文书 {docUsed}/{docLimit}
+                      </div>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-slate-700 dark:text-white/70">
+                      <div className="flex items-center justify-between gap-2 rounded-xl bg-slate-900/5 px-3 py-2 dark:bg-white/[0.04]">
+                        <span>AI 咨询</span>
+                        <span className="font-medium text-slate-900 dark:text-white">
+                          {aiUsed} / {aiLimit}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 rounded-xl bg-slate-900/5 px-3 py-2 dark:bg-white/[0.04]">
+                        <span>文书生成</span>
+                        <span className="font-medium text-slate-900 dark:text-white">
+                          {docUsed} / {docLimit}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <EmptyState
+              icon={BarChart3}
+              title="暂无记录"
+              description="你还没有产生配额消耗记录"
+              tone={actualTheme}
+            />
+          )}
+
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs text-slate-500 dark:text-white/45">
+              共 {Number(quotaUsageQuery.data?.total || 0)} 条
+            </div>
+            <Pagination
+              currentPage={quotaUsagePage}
+              totalPages={quotaUsageTotalPages}
+              onPageChange={(p) => setQuotaUsagePage(p)}
             />
           </div>
         </div>
