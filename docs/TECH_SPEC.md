@@ -130,6 +130,34 @@ SQL_ECHO=
   - `PAYMENT_WEBHOOK_SECRET` 必须配置
   - Redis 不可用时会禁用部分周期任务（避免多副本重复执行）
 
+### 生产环境变量清单（建议）
+
+> 完整字段以 `backend/app/config.py` 为准；以下为生产部署建议最小集/常用集。
+
+- 必填（生产）
+  - `DATABASE_URL`（推荐 PostgreSQL）
+  - `JWT_SECRET_KEY`（强随机；长度足够）
+  - `PAYMENT_WEBHOOK_SECRET`（支付回调签名/鉴权）
+  - `FRONTEND_BASE_URL`（用于生成支付回跳/链接）
+  - `CORS_ALLOW_ORIGINS`（前端域名白名单）
+- AI（如启用 AI 能力）
+  - `OPENAI_API_KEY`
+  - `OPENAI_BASE_URL`
+  - `AI_MODEL`
+- Redis（生产推荐，多副本时强烈建议）
+  - `REDIS_URL`
+- 支付渠道（按启用的渠道配置）
+  - IKUNPAY：`IKUNPAY_PID` / `IKUNPAY_KEY` / `IKUNPAY_NOTIFY_URL`（可选 `IKUNPAY_RETURN_URL` / `IKUNPAY_GATEWAY_URL`）
+  - ALIPAY：`ALIPAY_APP_ID` / `ALIPAY_PUBLIC_KEY` / `ALIPAY_PRIVATE_KEY` / `ALIPAY_NOTIFY_URL`（可选 `ALIPAY_RETURN_URL` / `ALIPAY_GATEWAY_URL`）
+  - WECHATPAY：按后端配置项要求（如 `WECHATPAY_*` 系列；若仅保留回调链路也需确保 notify 可达）
+
+### CI / E2E secrets 与生产 secrets 分离
+
+- CI（GitHub Actions）中用于跑回归的密钥应使用 **测试专用 dummy 值**（例如 `JWT_SECRET_KEY=test-secret-key`），不得复用生产密钥。
+- 需要访问线上环境的 smoke（例如 `.github/workflows/post-deploy-smoke.yml`）应通过 **GitHub Environments** 的 secrets 管理（如 `production` 环境），并做到：
+  - 最小权限 token（只读或仅限 smoke 所需接口）
+  - 与生产业务密钥（支付/AI/JWT）严格隔离
+
 ---
 
 ## 五、API 与鉴权约定
