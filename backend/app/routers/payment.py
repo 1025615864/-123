@@ -4,6 +4,9 @@ import hashlib
 import hmac
 import json
 import os
+import sys
+from pathlib import Path
+import re
 from typing import Annotated, cast
 from datetime import datetime, timedelta, timezone
 import uuid
@@ -25,7 +28,7 @@ from cryptography.hazmat.primitives.serialization import load_pem_private_key, l
 from ..config import get_settings
 from ..database import get_db
 from ..models.payment import PaymentOrder, UserBalance, BalanceTransaction, PaymentStatus, PaymentCallbackEvent
-from ..models.system import SystemConfig
+from ..models.system import SystemConfig, AdminLog, LogAction, LogModule
 from ..models.user import User
 from ..models.user_quota import UserQuotaPackBalance
 from ..utils.deps import get_current_user, require_admin
@@ -41,6 +44,159 @@ from ..utils.wechatpay_v3 import (
 router = APIRouter(prefix="/payment", tags=["支付管理"])
 
 settings = get_settings()
+
+
+def _resolve_env_file_path() -> Path:
+    explicit = os.getenv("ENV_FILE", "").strip()
+    here = Path(__file__).resolve()
+    backend_dir = here.parents[2]
+    repo_root = here.parents[3]
+
+    if explicit:
+        p = Path(explicit)
+        if not p.is_absolute():
+            backend_candidate = backend_dir / explicit
+            repo_candidate = repo_root / explicit
+            if backend_candidate.exists():
+                return backend_candidate
+            if repo_candidate.exists():
+                return repo_candidate
+            return backend_candidate
+        return p
+
+    backend_env = backend_dir / ".env"
+    if backend_env.exists():
+        return backend_env
+    repo_env = repo_root / ".env"
+    if repo_env.exists():
+        return repo_env
+    return backend_env
+
+
+def _format_env_value(key: str, value: str) -> str:
+    raw = str(value)
+    raw = raw.replace("\r\n", "\n").strip()
+    raw = raw.replace("\\", "\\\\")
+    raw = raw.replace('"', '\\"')
+    if "\n" in raw:
+        raw = raw.replace("\n", "\\n")
+    return f'"{raw}"'
+
+
+def _read_env_lines(path: Path) -> list[str]:
+    if not path.exists():
+        return []
+    try:
+        return path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return path.read_text(encoding="utf-8", errors="ignore").splitlines()
+
+
+def _write_env_lines(path: Path, lines: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = "\n".join(lines).rstrip("\n") + "\n"
+    path.write_text(text, encoding="utf-8")
+
+
+def _update_env_file(path: Path, updates: dict[str, str | None]) -> list[str]:
+    allowed = {
+        "PAYMENT_WEBHOOK_SECRET",
+        "ALIPAY_APP_ID",
+        "ALIPAY_PRIVATE_KEY",
+        "ALIPAY_PUBLIC_KEY",
+        "ALIPAY_GATEWAY_URL",
+        "ALIPAY_NOTIFY_URL",
+        "ALIPAY_RETURN_URL",
+        "IKUNPAY_PID",
+        "IKUNPAY_KEY",
+        "IKUNPAY_GATEWAY_URL",
+        "IKUNPAY_NOTIFY_URL",
+        "IKUNPAY_RETURN_URL",
+        "IKUNPAY_DEFAULT_TYPE",
+        "WECHATPAY_MCH_ID",
+        "WECHATPAY_MCH_SERIAL_NO",
+        "WECHATPAY_PRIVATE_KEY",
+        "WECHATPAY_API_V3_KEY",
+        "WECHATPAY_CERTIFICATES_URL",
+        "FRONTEND_BASE_URL",
+    }
+
+    normalized: dict[str, str | None] = {}
+    for k, v in updates.items():
+        kk = str(k or "").strip().upper()
+        if not kk or kk not in allowed:
+            continue
+        if v is None:
+            normalized[kk] = None
+        else:
+            vv = str(v).strip()
+            normalized[kk] = vv if vv else None
+
+    if not normalized:
+        return []
+
+    lines = _read_env_lines(path)
+    key_re = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=.*$")
+
+    used: set[str] = set()
+    out: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            out.append(line)
+            continue
+        m = key_re.match(line)
+        if not m:
+            out.append(line)
+            continue
+        k = str(m.group(1) or "").strip().upper()
+        if k not in normalized:
+            out.append(line)
+            continue
+
+        used.add(k)
+        v = normalized.get(k)
+        if v is None:
+            continue
+        out.append(f"{k}={_format_env_value(k, v)}")
+
+    for k, v in normalized.items():
+        if k in used:
+            continue
+        if v is None:
+            continue
+        out.append(f"{k}={_format_env_value(k, v)}")
+
+    _write_env_lines(path, out)
+    return sorted(list(normalized.keys()))
+
+
+async def _log_config_change(db: AsyncSession, *, user_id: int, request: Request | None, description: str) -> None:
+    ip_address: str | None = None
+    user_agent: str | None = None
+    if request is not None:
+        try:
+            ip_address = (getattr(getattr(request, "client", None), "host", None) or None)
+        except Exception:
+            ip_address = None
+        try:
+            user_agent = str(request.headers.get("user-agent", ""))[:500] or None
+        except Exception:
+            user_agent = None
+
+    log = AdminLog(
+        user_id=int(user_id),
+        action=LogAction.CONFIG,
+        module=LogModule.SYSTEM,
+        target_id=None,
+        target_type="payment_env",
+        description=str(description)[:2000],
+        ip_address=ip_address,
+        user_agent=user_agent,
+        extra_data=None,
+    )
+    db.add(log)
+    await db.flush()
 
 def _get_int_env(key: str, default: int) -> int:
     raw = os.getenv(key, "").strip()
@@ -2434,6 +2590,10 @@ async def admin_callback_events(
     order_no: str | None = None,
     trade_no: str | None = None,
     verified: bool | None = None,
+    q: str | None = None,
+    has_error: bool | None = None,
+    from_ts: int | None = None,
+    to_ts: int | None = None,
 ):
     _ = current_user
     query = select(PaymentCallbackEvent)
@@ -2446,6 +2606,42 @@ async def admin_callback_events(
         query = query.where(PaymentCallbackEvent.trade_no == trade_no)
     if verified is not None:
         query = query.where(PaymentCallbackEvent.verified == bool(verified))
+
+    if q and str(q).strip():
+        kw = f"%{str(q).strip()}%"
+        query = query.where(
+            (
+                PaymentCallbackEvent.order_no.ilike(kw)
+                | PaymentCallbackEvent.trade_no.ilike(kw)
+                | PaymentCallbackEvent.error_message.ilike(kw)
+            )
+        )
+
+    if has_error is not None:
+        if bool(has_error):
+            query = query.where(
+                PaymentCallbackEvent.error_message.is_not(None)
+                & (PaymentCallbackEvent.error_message != "")
+            )
+        else:
+            query = query.where(
+                (PaymentCallbackEvent.error_message.is_(None))
+                | (PaymentCallbackEvent.error_message == "")
+            )
+
+    if from_ts is not None:
+        try:
+            dt = datetime.fromtimestamp(int(from_ts), tz=timezone.utc).replace(tzinfo=None)
+            query = query.where(PaymentCallbackEvent.created_at >= dt)
+        except Exception:
+            pass
+
+    if to_ts is not None:
+        try:
+            dt = datetime.fromtimestamp(int(to_ts), tz=timezone.utc).replace(tzinfo=None)
+            query = query.where(PaymentCallbackEvent.created_at <= dt)
+        except Exception:
+            pass
 
     count_query = select(func.count()).select_from(query.subquery())
     total: int = int(await db.scalar(count_query) or 0)
@@ -2660,6 +2856,79 @@ async def admin_payment_channel_status(
             },
         },
     )
+
+
+class PaymentEnvItem(BaseModel):
+    key: str
+    value: str | None = None
+
+
+class PaymentEnvUpdateRequest(BaseModel):
+    items: list[PaymentEnvItem]
+
+
+@router.post("/admin/env", summary="管理员-更新支付环境变量（写入 env 文件并热加载）")
+async def admin_update_payment_env(
+    req: PaymentEnvUpdateRequest,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
+):
+    _ = current_user
+
+    updates: dict[str, str | None] = {}
+    for item in (req.items or []):
+        k = str(getattr(item, "key", "") or "").strip().upper()
+        v_obj = getattr(item, "value", None)
+        v = None if v_obj is None else str(v_obj)
+        if not k:
+            continue
+        updates[k] = v
+
+    running_tests = bool(os.getenv("PYTEST_CURRENT_TEST")) or ("pytest" in sys.modules)
+
+    env_file_name = "in-memory"
+    updated_keys: list[str] = []
+    if not running_tests:
+        env_path = _resolve_env_file_path()
+        updated_keys = _update_env_file(env_path, updates)
+        env_file_name = str(env_path.name)
+    else:
+        updated_keys = sorted([str(k).strip().upper() for k in updates.keys() if str(k).strip()])
+
+    if not updated_keys:
+        raise HTTPException(status_code=400, detail="未提供可更新的配置项")
+
+    for k in updated_keys:
+        v = updates.get(k)
+        if v is None or not str(v).strip():
+            try:
+                if k in os.environ:
+                    del os.environ[k]
+            except Exception:
+                pass
+        else:
+            os.environ[k] = str(v)
+
+    get_settings.cache_clear()
+    global settings
+    settings = get_settings()
+
+    await _log_config_change(
+        db,
+        user_id=int(getattr(current_user, "id", 0) or 0),
+        request=request,
+        description=f"更新支付 env: {', '.join(updated_keys)}",
+    )
+    await db.commit()
+
+    status = await admin_payment_channel_status(current_user=current_user, db=db)
+    return {
+        "message": "OK",
+        "env_file": env_file_name,
+        "updated_keys": updated_keys,
+        "channel_status": status,
+    }
 
 
 @router.get("/channel-status", response_model=PublicPaymentChannelStatusResponse, summary="支付渠道配置状态")

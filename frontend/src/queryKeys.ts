@@ -54,11 +54,15 @@ export const queryKeys = {
     provider: string,
     orderNo: string,
     tradeNo: string,
-    verified: "" | "true" | "false"
+    verified: "" | "true" | "false",
+    q: string,
+    hasError: "" | "true" | "false",
+    fromTs: number | null,
+    toTs: number | null
   ) =>
     [
       "admin-payment-callback-events",
-      { page, pageSize, provider, orderNo, tradeNo, verified },
+      { page, pageSize, provider, orderNo, tradeNo, verified, q, hasError, fromTs, toTs },
     ] as const,
   adminPaymentCallbackStats: (minutes: number, provider: string | null) =>
     ["admin-payment-callback-events-stats", { minutes, provider }] as const,

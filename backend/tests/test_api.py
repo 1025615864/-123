@@ -2188,6 +2188,51 @@ class TestPaymentCallbackAdminAPI:
         assert "window_total" in stats
 
     @pytest.mark.asyncio
+    async def test_admin_update_payment_env_in_memory(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        import os
+
+        from app.models.user import User
+        from app.utils.security import hash_password, create_access_token
+
+        admin = User(
+            username="a_pay_env",
+            email="a_pay_env@example.com",
+            nickname="a_pay_env",
+            hashed_password=hash_password("Test123456"),
+            role="admin",
+            is_active=True,
+        )
+        test_session.add(admin)
+        await test_session.commit()
+        await test_session.refresh(admin)
+
+        admin_token = create_access_token({"sub": str(admin.id)})
+
+        key = "ALIPAY_APP_ID"
+        old = os.environ.get(key)
+        try:
+            res = await client.post(
+                "/api/payment/admin/env",
+                json={"items": [{"key": key, "value": "test_app"}]},
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
+            assert res.status_code == 200
+            data = _json_dict(res)
+            assert data.get("message") == "OK"
+            assert "updated_keys" in data
+            assert key in [str(x) for x in _as_list(data.get("updated_keys"))]
+            assert "channel_status" in data
+        finally:
+            if old is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old
+
+    @pytest.mark.asyncio
     async def test_admin_reconcile_order_amount_mismatch(
         self,
         client: AsyncClient,

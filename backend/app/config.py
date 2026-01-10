@@ -25,7 +25,7 @@ def _resolve_env_files() -> list[str] | None:
     repo_root = here.parents[2]
 
     candidates = [backend_dir / ".env", repo_root / ".env"]
-    return [str(p) for p in candidates if p.exists()]
+    return [str(p) for p in candidates]
 
 
 class Settings(BaseSettings):
