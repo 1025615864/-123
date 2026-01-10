@@ -32,7 +32,10 @@ class EnvelopeMiddleware(BaseHTTPMiddleware):
         if "application/json" not in content_type:
             return response
 
+        reconstructed = False
         body_bytes: bytes | None = None
+        background = getattr(response, "background", None)
+
         if isinstance(response, JSONResponse):
             body_bytes = bytes(response.body)
         else:
@@ -46,16 +49,51 @@ class EnvelopeMiddleware(BaseHTTPMiddleware):
             else:
                 body_bytes = None
 
-        if not body_bytes:
+            if body_bytes is None:
+                iterator = getattr(response, "body_iterator", None)
+                if iterator is not None:
+                    reconstructed = True
+                    buf = bytearray()
+                    async for chunk in iterator:
+                        if chunk is None:
+                            continue
+                        if isinstance(chunk, (bytes, bytearray)):
+                            buf.extend(chunk)
+                        elif isinstance(chunk, memoryview):
+                            buf.extend(chunk.tobytes())
+                        else:
+                            try:
+                                buf.extend(bytes(chunk))  # type: ignore[arg-type]
+                            except Exception:
+                                continue
+                    body_bytes = bytes(buf)
+
+        def _return_unmodified() -> Response:
+            if not reconstructed:
+                return response
+            headers = dict(response.headers)
+            _ = headers.pop("content-length", None)
+            return Response(
+                content=body_bytes or b"",
+                status_code=int(response.status_code),
+                headers=headers,
+                media_type=getattr(response, "media_type", None),
+                background=background,
+            )
+
+        if body_bytes is None:
             return response
+
+        if not body_bytes:
+            return _return_unmodified()
 
         try:
             payload: object = cast(object, json.loads(body_bytes))
         except Exception:
-            return response
+            return _return_unmodified()
 
         if isinstance(payload, dict) and ("ok" in payload) and ("data" in payload):
-            return response
+            return _return_unmodified()
 
         wrapped: dict[str, object] = {
             "ok": True,
@@ -70,4 +108,5 @@ class EnvelopeMiddleware(BaseHTTPMiddleware):
             content=wrapped,
             status_code=int(response.status_code),
             headers=headers,
+            background=background,
         )

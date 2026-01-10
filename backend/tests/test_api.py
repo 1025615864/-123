@@ -4541,3 +4541,219 @@ class TestAIShareAPI:
         done_req_id = done_payload.get("request_id")
         assert isinstance(done_req_id, str)
         assert done_req_id.strip() != ""
+
+
+class TestApiEnvelopeMiddleware:
+
+    @pytest.mark.asyncio
+    async def test_envelope_wraps_2xx_json(self, client: AsyncClient):
+        res = await client.get("/", headers={"X-Api-Envelope": "1"})
+        assert res.status_code == 200
+        outer = _json_dict(res)
+        assert outer.get("ok") is True
+        assert isinstance(outer.get("ts"), int)
+        inner = outer.get("data")
+        assert isinstance(inner, dict)
+        assert "name" in inner
+        assert "version" in inner
+
+    @pytest.mark.asyncio
+    async def test_envelope_not_enabled_without_header(self, client: AsyncClient):
+        res = await client.get("/")
+        assert res.status_code == 200
+        data = _json_dict(res)
+        assert "ok" not in data
+        assert "data" not in data
+        assert "name" in data
+        assert "version" in data
+
+    @pytest.mark.asyncio
+    async def test_envelope_does_not_wrap_non_2xx(self, client: AsyncClient):
+        res = await client.post(
+            "/api/user/login",
+            json={"username": "missing", "password": "wrong"},
+            headers={"X-Api-Envelope": "1"},
+        )
+        assert res.status_code == 401
+        data = _json_dict(res)
+        assert "ok" not in data
+        assert "data" not in data
+        assert "detail" in data
+
+    @pytest.mark.asyncio
+    async def test_envelope_does_not_wrap_non_json(self, client: AsyncClient, test_session: AsyncSession):
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        admin = User(
+            username="a_metrics",
+            email="a_metrics@example.com",
+            nickname="a_metrics",
+            hashed_password=hash_password("Test123456"),
+            role="admin",
+            is_active=True,
+        )
+        test_session.add(admin)
+        await test_session.commit()
+        await test_session.refresh(admin)
+        token = create_access_token({"sub": str(admin.id)})
+
+        res = await client.get(
+            "/api/system/metrics",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-Api-Envelope": "1",
+            },
+        )
+        assert res.status_code == 200
+        ct = str(res.headers.get("content-type") or "").lower()
+        assert "application/json" not in ct
+        assert "# help" in res.text.lower()
+
+    @pytest.mark.asyncio
+    async def test_envelope_does_not_wrap_empty_json_body(self, client: AsyncClient):
+        from fastapi import Response
+        from app.main import app
+
+        path = "/api/_test/envelope-empty-json"
+
+        async def _empty_json():
+            return Response(content=b"", media_type="application/json")
+
+        if not any(getattr(r, "path", None) == path for r in app.router.routes):
+            app.add_api_route(path, _empty_json, methods=["GET"])
+
+        res = await client.get(path, headers={"X-Api-Envelope": "1"})
+        assert res.status_code == 200
+        ct = str(res.headers.get("content-type") or "").lower()
+        assert "application/json" in ct
+        assert res.text == ""
+
+    @pytest.mark.asyncio
+    async def test_envelope_does_not_wrap_204(self, client: AsyncClient):
+        from fastapi import Response
+        from app.main import app
+
+        path = "/api/_test/envelope-no-content"
+
+        async def _no_content():
+            return Response(status_code=204)
+
+        if not any(getattr(r, "path", None) == path for r in app.router.routes):
+            app.add_api_route(path, _no_content, methods=["GET"])
+
+        res = await client.get(path, headers={"X-Api-Envelope": "1"})
+        assert res.status_code == 204
+        assert res.text == ""
+
+
+class TestApiContracts:
+
+    @pytest.mark.asyncio
+    async def test_login_response_contract(self, client: AsyncClient, test_session: AsyncSession):
+        from app.models.user import User
+        from app.utils.security import hash_password
+
+        user = User(
+            username="u_login_contract",
+            email="u_login_contract@example.com",
+            nickname="u_login_contract",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        res = await client.post(
+            "/api/user/login",
+            json={"username": "u_login_contract", "password": "Test123456"},
+        )
+        assert res.status_code == 200
+        data = _json_dict(res)
+
+        user_obj = data.get("user")
+        assert isinstance(user_obj, dict)
+        assert int(user_obj.get("id") or 0) > 0
+        assert str(user_obj.get("username") or "") == "u_login_contract"
+        assert str(user_obj.get("email") or "") == "u_login_contract@example.com"
+        assert "created_at" in user_obj
+        assert "role" in user_obj
+        assert "email_verified" in user_obj
+        assert "phone_verified" in user_obj
+
+        token_obj = data.get("token")
+        assert isinstance(token_obj, dict)
+        assert isinstance(token_obj.get("access_token"), str)
+        assert str(token_obj.get("token_type") or "").lower() == "bearer"
+        assert int(token_obj.get("expires_in") or 0) > 0
+
+        assert str(data.get("message") or "")
+
+    @pytest.mark.asyncio
+    async def test_payment_create_order_contract(self, client: AsyncClient, test_session: AsyncSession):
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        user = User(
+            username="u_pay_contract",
+            email="u_pay_contract@example.com",
+            nickname="u_pay_contract",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+        token = create_access_token({"sub": str(user.id)})
+
+        res = await client.post(
+            "/api/payment/orders",
+            json={"order_type": "recharge", "amount": 10.0, "title": "contract"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 200
+        data = _json_dict(res)
+        assert int(data.get("order_id") or 0) > 0
+        assert str(data.get("order_no") or "").strip() != ""
+        assert float(data.get("amount") or 0) > 0
+        assert data.get("expires_at") is not None
+
+    @pytest.mark.asyncio
+    async def test_document_generate_contract(self, client: AsyncClient, test_session: AsyncSession):
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        user = User(
+            username="u_doc_contract",
+            email="u_doc_contract@example.com",
+            nickname="u_doc_contract",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+        token = create_access_token({"sub": str(user.id)})
+
+        res = await client.post(
+            "/api/documents/generate",
+            json={
+                "document_type": "complaint",
+                "case_type": "合同纠纷",
+                "plaintiff_name": "A",
+                "defendant_name": "B",
+                "facts": "f",
+                "claims": "c",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 200
+        data = _json_dict(res)
+        assert str(data.get("document_type") or "") == "complaint"
+        assert str(data.get("title") or "").strip() != ""
+        assert str(data.get("content") or "").strip() != ""
+        assert data.get("created_at") is not None
