@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { Link } from "react-router-dom";
 import {
   Plus,
@@ -11,6 +11,7 @@ import {
   Search,
   GripVertical,
   RotateCcw,
+  Upload,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -258,6 +259,10 @@ export default function NewsTopicsManagePage() {
   const [showEdit, setShowEdit] = useState(false);
   const [editing, setEditing] = useState<NewsTopic | null>(null);
 
+  const [coverUploading, setCoverUploading] = useState(false);
+  const createCoverInputRef = useRef<HTMLInputElement>(null);
+  const editCoverInputRef = useRef<HTMLInputElement>(null);
+
   const [form, setForm] = useState({
     title: "",
     description: "",
@@ -295,6 +300,59 @@ export default function NewsTopicsManagePage() {
       auto_limit: Number(t.auto_limit || 0),
     });
     setShowEdit(true);
+  };
+
+  const uploadCoverFile = async (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const res = await api.post("/upload/image", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+    const url = String((res.data as any)?.url || "").trim();
+    if (!url) throw new Error("未获取到上传结果");
+    return url;
+  };
+
+  const handleCreateCoverUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f) return;
+    if (!String(f.type || "").startsWith("image/")) {
+      toast.error("请选择图片文件");
+      return;
+    }
+    if (coverUploading) return;
+    setCoverUploading(true);
+    try {
+      const url = await uploadCoverFile(f);
+      setForm((p) => ({ ...p, cover_image: url }));
+      toast.success("封面上传成功");
+    } catch (err) {
+      toast.error(getApiErrorMessage(err, "封面上传失败"));
+    } finally {
+      setCoverUploading(false);
+    }
+  };
+
+  const handleEditCoverUpload = async (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f) return;
+    if (!String(f.type || "").startsWith("image/")) {
+      toast.error("请选择图片文件");
+      return;
+    }
+    if (coverUploading) return;
+    setCoverUploading(true);
+    try {
+      const url = await uploadCoverFile(f);
+      setForm((p) => ({ ...p, cover_image: url }));
+      toast.success("封面上传成功");
+    } catch (err) {
+      toast.error(getApiErrorMessage(err, "封面上传失败"));
+    } finally {
+      setCoverUploading(false);
+    }
   };
 
   const createMutation = useAppMutation<NewsTopic, typeof form>({
@@ -867,6 +925,27 @@ export default function NewsTopicsManagePage() {
             disabled={createMutation.isPending}
             placeholder="封面图 URL（可选）"
           />
+
+          <div className="flex items-center gap-2">
+            <input
+              ref={createCoverInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleCreateCoverUpload}
+              disabled={coverUploading || createMutation.isPending}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              icon={Upload}
+              disabled={coverUploading || createMutation.isPending}
+              onClick={() => createCoverInputRef.current?.click()}
+            >
+              上传封面
+            </Button>
+          </div>
           <Input
             label="排序"
             value={String(form.sort_order)}
@@ -993,6 +1072,27 @@ export default function NewsTopicsManagePage() {
             disabled={updateMutation.isPending}
             placeholder="封面图 URL（可选）"
           />
+
+          <div className="flex items-center gap-2">
+            <input
+              ref={editCoverInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleEditCoverUpload}
+              disabled={coverUploading || updateMutation.isPending}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              icon={Upload}
+              disabled={coverUploading || updateMutation.isPending}
+              onClick={() => editCoverInputRef.current?.click()}
+            >
+              上传封面
+            </Button>
+          </div>
           <Input
             label="排序"
             value={String(form.sort_order)}
