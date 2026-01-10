@@ -26,10 +26,12 @@ const mockStructuredB64 = Buffer.from(mockStructured, "utf8").toString(
   "base64"
 );
 
+const frontendBaseUrl = process.env.E2E_FRONTEND_BASE_URL ?? `http://${e2eHost}:${frontendPort}`;
+
 const backendEnvPrefix =
   process.platform === "win32"
-    ? `set PYTHONIOENCODING=utf-8&& set E2E_SEED=1&& set DEBUG=1&& set DATABASE_URL=${backendDbUrl}&& set NEWS_AI_ENABLED=1&& set NEWS_AI_INTERVAL_SECONDS=1&& set NEWS_AI_BATCH_SIZE=200&& set NEWS_AI_SUMMARY_LLM_ENABLED=1&& set NEWS_AI_SUMMARY_LLM_MOCK_RESPONSE_B64=${mockStructuredB64}&& `
-    : `PYTHONIOENCODING=utf-8 E2E_SEED=1 DEBUG=1 DATABASE_URL=${backendDbUrl} NEWS_AI_ENABLED=1 NEWS_AI_INTERVAL_SECONDS=1 NEWS_AI_BATCH_SIZE=200 NEWS_AI_SUMMARY_LLM_ENABLED=1 NEWS_AI_SUMMARY_LLM_MOCK_RESPONSE_B64=${mockStructuredB64} `;
+    ? `set PYTHONIOENCODING=utf-8&& set E2E_SEED=1&& set DEBUG=1&& set DATABASE_URL=${backendDbUrl}&& set FRONTEND_BASE_URL=${frontendBaseUrl}&& set NEWS_AI_ENABLED=1&& set NEWS_AI_INTERVAL_SECONDS=1&& set NEWS_AI_BATCH_SIZE=200&& set NEWS_AI_SUMMARY_LLM_ENABLED=1&& set NEWS_AI_SUMMARY_LLM_MOCK_RESPONSE_B64=${mockStructuredB64}&& `
+    : `PYTHONIOENCODING=utf-8 E2E_SEED=1 DEBUG=1 DATABASE_URL=${backendDbUrl} FRONTEND_BASE_URL=${frontendBaseUrl} NEWS_AI_ENABLED=1 NEWS_AI_INTERVAL_SECONDS=1 NEWS_AI_BATCH_SIZE=200 NEWS_AI_SUMMARY_LLM_ENABLED=1 NEWS_AI_SUMMARY_LLM_MOCK_RESPONSE_B64=${mockStructuredB64} `;
 
 const viteEnvPrefix =
   process.platform === "win32"

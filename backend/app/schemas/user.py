@@ -116,3 +116,12 @@ class PasswordResetConfirm(BaseModel):
     """密码重置确认"""
     token: str = Field(..., description="重置令牌")
     new_password: str = Field(..., min_length=6, max_length=100, description="新密码")
+
+
+class PasswordResetDebugRequest(BaseModel):
+    email: EmailStr = Field(..., description="注册邮箱")
+
+
+class PasswordResetDebugResponse(MessageResponse):
+    token: str
+    reset_url: str
