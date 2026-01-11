@@ -8,7 +8,8 @@ import re
 import sys
 import time
 from datetime import datetime
-from typing import Literal, TypedDict, cast
+from typing import Literal, cast
+from typing_extensions import TypedDict
 
 import httpx
 from sqlalchemy import and_, func, or_, select

@@ -128,7 +128,6 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           JWT_SECRET_KEY: test-secret-key-change-me-32chars-minimum
           PAYMENT_WEBHOOK_SECRET: test-payment-webhook-secret
-          REDIS_URL: redis://localhost:6379/0
         run: |
           python scripts/alembic_cmd.py upgrade head
 
@@ -138,7 +137,6 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           JWT_SECRET_KEY: test-secret-key
           PAYMENT_WEBHOOK_SECRET: test-payment-webhook-secret
-          REDIS_URL: redis://localhost:6379/0
         run: pytest tests/ -v --tb=short
 
   # 前端构建

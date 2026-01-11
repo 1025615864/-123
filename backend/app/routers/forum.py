@@ -2,7 +2,8 @@
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Annotated, TypedDict, cast
+from typing import Annotated, cast
+from typing_extensions import TypedDict
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update, case, and_, or_, desc
