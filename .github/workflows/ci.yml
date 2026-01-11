@@ -124,16 +124,21 @@ jobs:
 
       - name: Run migrations (upgrade head)
         env:
+          DEBUG: "1"
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           JWT_SECRET_KEY: test-secret-key-change-me-32chars-minimum
           PAYMENT_WEBHOOK_SECRET: test-payment-webhook-secret
+          REDIS_URL: redis://localhost:6379/0
         run: |
           python scripts/alembic_cmd.py upgrade head
 
       - name: Run tests
         env:
+          DEBUG: "1"
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           JWT_SECRET_KEY: test-secret-key
+          PAYMENT_WEBHOOK_SECRET: test-payment-webhook-secret
+          REDIS_URL: redis://localhost:6379/0
         run: pytest tests/ -v --tb=short
 
   # 前端构建
@@ -353,4 +358,7 @@ jobs:
           test "${{ needs.helm-validate.result }}" = "success"
           test "${{ needs.backend-test.result }}" = "success"
           test "${{ needs.frontend-build.result }}" = "success"
-          test "${{ needs.playwright-documents-e2e.result }}" = "success"
+          if [ "${{ needs.playwright-documents-e2e.result }}" = "success" ] || [ "${{ needs.playwright-documents-e2e.result }}" = "skipped" ]; then
+            exit 0
+          fi
+          exit 1

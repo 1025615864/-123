@@ -55,7 +55,7 @@ spec:
             severity: warning
           annotations:
             summary: "Scheduled job failure rate high"
-            description: "Job failure ratio > 20% (15m). job={{ $labels.job }}"
+            description: 'Job failure ratio > 20% (15m). job={{ "{{" }} $labels.job {{ "}}" }}'
 
         - alert: BaixingJobStuckNotRunning
           expr: |
@@ -66,5 +66,5 @@ spec:
             severity: warning
           annotations:
             summary: "Scheduled job not running"
-            description: "No job run observed for > 1h. job={{ $labels.job }}"
+            description: 'No job run observed for > 1h. job={{ "{{" }} $labels.job {{ "}}" }}'
 {{- end -}}
