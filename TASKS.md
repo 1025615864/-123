@@ -165,7 +165,7 @@
 - [x] 指标与告警
   - [x] Prometheus 告警规则（5xx、P95 延迟、周期任务失败率）
   - [x] Grafana Dashboard（HTTP、News AI、支付回调、文书导出）
-- [ ] 日志与追踪
+- [x] 日志与追踪
   - [x] 统一 request_id 贯穿（前端->后端->日志），并在文档中写明排障方法
   - [x] 关键异常上报与降级策略（AI/支付/News AI）
     - [x] 可选 webhook（默认关闭；异步上报；限频/去重）
@@ -260,10 +260,10 @@
     - [x] `alembic upgrade head`
     - [x] 跑 `py -m pytest -q`
 
-- [ ] 验收标准
-  - [ ] 空 PG 库可通过 `alembic upgrade head` 一次性建出全部表
-  - [ ] 从旧版本升级到新版本时：无运行时 DDL、无“Unknown column/table”类错误
-  - [ ] `init_db()` 不再修改 schema（可通过 grep/测试断言）
+- [x] 验收标准
+  - [x] 空 PG 库可通过 `alembic upgrade head` 一次性建出全部表
+  - [x] 从旧版本升级到新版本时：无运行时 DDL、无“Unknown column/table”类错误
+  - [x] `init_db()` 不再修改 schema（可通过 grep/测试断言）
 
 ### P0.2 Redis 生产强依赖（替换内存限流/锁/关键缓存）
 
@@ -274,7 +274,7 @@
 - [x] 限流：将 `backend/app/utils/rate_limiter.py` 从内存滑窗迁移为 Redis
 
   - [x] 实现策略：`INCR` + `EXPIRE`（或 Lua 滑窗）
-  - [ ] 覆盖关键接口（至少）：
+  - [x] 覆盖关键接口（至少）：
     - [x] `/api/ai/*`（chat/stream）
     - [x] `/api/documents/generate`
     - [x] `/api/user/sms/*`（发送/验证）
@@ -304,7 +304,8 @@
 - [x] 兼容与迁移策略
 
   - [x] 保持现有返回 URL 格式兼容（前端无需改或最小改）
-  - [ ] 迁移脚本（可选）：把历史本地文件搬迁到对象存储并更新引用（若 DB 存了 URL）
+  - [x] 迁移脚本（可选）：把历史本地文件搬迁到对象存储并更新引用（若 DB 存了 URL）
+    - 已做：提供 `backend/scripts/migrate_uploads_to_object_storage.py`（按 `uploads/<category>/<filename>` 迁移；当前 URL 保持 `/api/upload/...` 兼容，通常无需更新 DB 引用）
 
 - [x] 验收标准
   - [x] 容器重启/Pod 漂移后，历史上传文件仍可访问
@@ -408,9 +409,9 @@
 
 - [x] 论坛结构化模板
   - [x] 发帖引导：案情经过/争议焦点/证据/诉求/进展
-  - [ ] 管理端：高质量内容加精/沉淀为“案例”
+  - [x] 管理端：高质量内容加精/沉淀为“案例”
 - [x] SEO/可索引化
-  - [ ] 评估 SSR/预渲染（React Router 7 的服务端渲染能力）或静态化导出
+  - [x] 评估 SSR/预渲染（React Router 7 的服务端渲染能力）或静态化导出（当前选择：暂不引入 SSR；依赖 sitemap/robots/canonical/OG + nginx 精确路由）
   - [x] 站点地图 sitemap、canonical、OG tags
 
 ---
