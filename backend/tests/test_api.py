@@ -3305,6 +3305,7 @@ class TestPaymentCallbackAdminAPI:
     ):
         import hashlib
         import hmac
+        import os
         from sqlalchemy import select, func
 
         from app.models.user import User
@@ -3338,7 +3339,8 @@ class TestPaymentCallbackAdminAPI:
         amount_str = "10.00"
 
         payload = f"{order_no}|{trade_no}|{payment_method}|{amount_str}".encode("utf-8")
-        signature = hmac.new(b"", payload, hashlib.sha256).hexdigest()
+        secret = str(os.getenv("PAYMENT_WEBHOOK_SECRET", "") or "")
+        signature = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
 
         webhook_payload = {
             "order_no": order_no,
@@ -3366,6 +3368,7 @@ class TestPaymentCallbackAdminAPI:
     async def test_payment_webhook_marks_order_paid(self, client: AsyncClient, test_session: AsyncSession):
         import hashlib
         import hmac
+        import os
 
         from app.models.user import User
         from app.utils.security import hash_password, create_access_token
@@ -3396,7 +3399,8 @@ class TestPaymentCallbackAdminAPI:
         payment_method = "alipay"
         amount_str = "10.00"
         payload = f"{order_no}|{trade_no}|{payment_method}|{amount_str}".encode("utf-8")
-        signature = hmac.new(b"", payload, hashlib.sha256).hexdigest()
+        secret = str(os.getenv("PAYMENT_WEBHOOK_SECRET", "") or "")
+        signature = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
 
         webhook_res = await client.post(
             "/api/payment/webhook",

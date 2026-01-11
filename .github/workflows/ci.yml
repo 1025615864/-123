@@ -353,10 +353,17 @@ jobs:
           echo "backend-test=${{ needs.backend-test.result }}"
           echo "frontend-build=${{ needs.frontend-build.result }}"
           echo "playwright-documents-e2e=${{ needs.playwright-documents-e2e.result }}"
-          test "${{ needs.helm-validate.result }}" = "success"
-          test "${{ needs.backend-test.result }}" = "success"
-          test "${{ needs.frontend-build.result }}" = "success"
-          if [ "${{ needs.playwright-documents-e2e.result }}" = "success" ] || [ "${{ needs.playwright-documents-e2e.result }}" = "skipped" ]; then
+          helm="${{ needs.helm-validate.result }}"
+          backend="${{ needs.backend-test.result }}"
+          frontend="${{ needs.frontend-build.result }}"
+          e2e="${{ needs.playwright-documents-e2e.result }}"
+
+          if [ "$helm" != "success" ] || [ "$backend" != "success" ] || [ "$frontend" != "success" ]; then
+            exit 1
+          fi
+
+          if [ "$e2e" = "success" ] || [ "$e2e" = "skipped" ]; then
             exit 0
           fi
+
           exit 1
