@@ -47,6 +47,7 @@ const FeeCalculatorPage = lazy(() => import("./pages/FeeCalculatorPage"));
 const LimitationsCalculatorPage = lazy(() => import("./pages/LimitationsCalculatorPage"));
 const CalendarPage = lazy(() => import("./pages/CalendarPage"));
 const DocumentGeneratorPage = lazy(() => import("./pages/DocumentGeneratorPage"));
+const ContractReviewPage = lazy(() => import("./pages/ContractReviewPage"));
 const FaqPage = lazy(() => import("./pages/FaqPage"));
 const SharePage = lazy(() => import("./pages/SharePage"));
 const VerifyEmailPage = lazy(() => import("./pages/VerifyEmailPage"));
@@ -170,6 +171,7 @@ function App() {
                 <Route path="limitations" element={<LimitationsCalculatorPage />} />
                 <Route path="calendar" element={<CalendarPage />} />
                 <Route path="documents" element={<DocumentGeneratorPage />} />
+                <Route path="contracts" element={<ContractReviewPage />} />
                 <Route path="faq" element={<FaqPage />} />
                 <Route path="share/:token" element={<SharePage />} />
                 <Route path="verify-email" element={<VerifyEmailPage />} />

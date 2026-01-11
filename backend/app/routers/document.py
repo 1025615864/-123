@@ -39,18 +39,18 @@ GUEST_DOCUMENT_GENERATE_WINDOW_SECONDS = _get_int_env(
 )
 
 
-def _enforce_guest_document_quota(request: Request) -> None:
+async def _enforce_guest_document_quota(request: Request) -> None:
     if int(GUEST_DOCUMENT_GENERATE_LIMIT) <= 0:
         return
 
     key = f"doc:guest:{get_client_ip(request)}"
-    allowed, remaining = rate_limiter.is_allowed(
-        key, int(GUEST_DOCUMENT_GENERATE_LIMIT), int(GUEST_DOCUMENT_GENERATE_WINDOW_SECONDS)
+    allowed, remaining, wait_time = await rate_limiter.check(
+        key,
+        int(GUEST_DOCUMENT_GENERATE_LIMIT),
+        int(GUEST_DOCUMENT_GENERATE_WINDOW_SECONDS),
     )
     if allowed:
         return
-
-    wait_time = rate_limiter.get_wait_time(key, int(GUEST_DOCUMENT_GENERATE_WINDOW_SECONDS))
     raise HTTPException(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         detail="游客模式文书生成次数已用尽，请登录后继续",
@@ -337,7 +337,7 @@ async def generate_document(
 ):
     """生成法律文书"""
     if current_user is None:
-        _enforce_guest_document_quota(request)
+        await _enforce_guest_document_quota(request)
     else:
         await quota_service.enforce_document_generate_quota(db, current_user)
 

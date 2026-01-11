@@ -25,6 +25,7 @@ class HttpKey:
 class HttpAgg:
     count: int = 0
     sum_seconds: float = 0.0
+    bucket_le_counts: dict[float, int] | None = None
 
 
 @dataclass
@@ -44,19 +45,40 @@ class PrometheusMetrics:
         self._jobs: dict[str, JobAgg] = {}
         self._lock: threading.Lock = threading.Lock()
 
+        self.http_duration_buckets: list[float] = [
+            0.01,
+            0.025,
+            0.05,
+            0.1,
+            0.25,
+            0.5,
+            1.0,
+            2.5,
+            5.0,
+            10.0,
+        ]
+
     def record_http(self, *, method: str, route: str, status_code: int, duration_seconds: float) -> None:
         m = str(method or "").upper() or "GET"
         r = str(route or "").strip() or "unknown"
         sc = int(status_code)
         st = str(sc)
         key = HttpKey(method=m, route=r, status=st)
+        d = max(0.0, float(duration_seconds))
         with self._lock:
             agg = self._http.get(key)
             if agg is None:
                 agg = HttpAgg()
                 self._http[key] = agg
             agg.count = int(agg.count) + 1
-            agg.sum_seconds = float(agg.sum_seconds) + float(duration_seconds)
+            agg.sum_seconds = float(agg.sum_seconds) + float(d)
+
+            if agg.bucket_le_counts is None:
+                agg.bucket_le_counts = {}
+            for le in self.http_duration_buckets:
+                if d <= float(le):
+                    agg.bucket_le_counts[float(le)] = int(agg.bucket_le_counts.get(float(le), 0)) + 1
+            agg.bucket_le_counts[float("inf")] = int(agg.bucket_le_counts.get(float("inf"), 0)) + 1
 
     def record_job(self, *, name: str, ok: bool, duration_seconds: float) -> None:
         n = str(name or "").strip() or "job"
@@ -76,7 +98,13 @@ class PrometheusMetrics:
 
     def snapshot_http(self) -> dict[HttpKey, HttpAgg]:
         with self._lock:
-            return {k: HttpAgg(count=int(v.count), sum_seconds=float(v.sum_seconds)) for k, v in self._http.items()}
+            out: dict[HttpKey, HttpAgg] = {}
+            for k, v in self._http.items():
+                buckets: dict[float, int] | None = None
+                if isinstance(v.bucket_le_counts, dict):
+                    buckets = {float(bk): int(bv) for bk, bv in v.bucket_le_counts.items()}
+                out[k] = HttpAgg(count=int(v.count), sum_seconds=float(v.sum_seconds), bucket_le_counts=buckets)
+            return out
 
     def snapshot_jobs(self) -> dict[str, JobAgg]:
         with self._lock:
@@ -128,6 +156,38 @@ class PrometheusMetrics:
                 + f"route=\"{_prom_escape_label_value(key.route)}\","
                 + f"status=\"{_prom_escape_label_value(key.status)}\"}} {float(agg.sum_seconds)}"
             )
+
+        lines.append("# HELP baixing_http_request_duration_seconds_count Total requests observed for duration histogram")
+        lines.append("# TYPE baixing_http_request_duration_seconds_count counter")
+        for key in sorted(http_snap.keys(), key=lambda x: (x.route, x.method, x.status)):
+            agg = http_snap[key]
+            if int(agg.count) <= 0:
+                continue
+            lines.append(
+                "baixing_http_request_duration_seconds_count"
+                + f"{{method=\"{_prom_escape_label_value(key.method)}\","
+                + f"route=\"{_prom_escape_label_value(key.route)}\","
+                + f"status=\"{_prom_escape_label_value(key.status)}\"}} {int(agg.count)}"
+            )
+
+        lines.append("# HELP baixing_http_request_duration_seconds_bucket Request duration histogram buckets")
+        lines.append("# TYPE baixing_http_request_duration_seconds_bucket counter")
+        for key in sorted(http_snap.keys(), key=lambda x: (x.route, x.method, x.status)):
+            agg = http_snap[key]
+            buckets = agg.bucket_le_counts if isinstance(agg.bucket_le_counts, dict) else None
+            if not buckets:
+                continue
+
+            for le in list(self.http_duration_buckets) + [float("inf")]:
+                c = int(buckets.get(float(le), 0))
+                le_label = "+Inf" if le == float("inf") else str(le)
+                lines.append(
+                    "baixing_http_request_duration_seconds_bucket"
+                    + f"{{method=\"{_prom_escape_label_value(key.method)}\","
+                    + f"route=\"{_prom_escape_label_value(key.route)}\","
+                    + f"status=\"{_prom_escape_label_value(key.status)}\","
+                    + f"le=\"{_prom_escape_label_value(le_label)}\"}} {c}"
+                )
 
         lines.append("# HELP baixing_job_runs_total Total scheduled job runs")
         lines.append("# TYPE baixing_job_runs_total counter")

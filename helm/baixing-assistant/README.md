@@ -144,6 +144,79 @@ helm uninstall baixing-assistant -n baixing
 
 ---
 
+## 5. 可观测性（Prometheus/Grafana，可选）
+
+本 Chart 默认不包含 Prometheus/Grafana 依赖，但提供可选模板，便于在已安装 kube-prometheus-stack / Grafana sidecar 的集群中直接启用。
+
+启用方式（示例）：
+
+```yaml
+monitoring:
+  enabled: true
+  prometheusRule:
+    enabled: true
+  grafana:
+    dashboards:
+      enabled: true
+      configMapLabels:
+        grafana_dashboard: "1"
+```
+
+说明：
+
+- `monitoring.enabled=true` 后会渲染：
+  - `PrometheusRule`：包含 5xx 比例、P95 延迟、周期任务失败率/长时间未运行等告警
+  - `Grafana Dashboard` ConfigMap：包含 HTTP、job、支付回调、文书导出、News AI 等基础面板
+- Dashboard 的加载依赖 Grafana sidecar（常见 label：`grafana_dashboard: "1"`），不同发行版可能 label 规则不同，可通过 `monitoring.grafana.dashboards.configMapLabels` 自定义。
+
+---
+
+## 5.1 关键异常上报（Webhook，可选）
+
+后端支持将关键异常以 webhook 方式异步上报（默认关闭；上报失败不影响主流程）。
+
+最小 values 示例（示例仅展示结构，敏感信息请通过 Secret/ExternalSecrets 注入）：
+
+```yaml
+backend:
+  config:
+    CRITICAL_EVENTS_ENABLED: "true"
+    CRITICAL_EVENTS_MIN_INTERVAL_SECONDS: "30"
+    CRITICAL_EVENTS_TIMEOUT_SECONDS: "3"
+    # 可选：如果你的 webhook 用自定义 header 鉴权，配置 header 名称
+    CRITICAL_EVENTS_WEBHOOK_HEADER_NAME: "X-Critical-Token"
+  secret:
+    # 必填：webhook 地址（敏感信息）
+    CRITICAL_EVENTS_WEBHOOK_URL: "https://example.com/webhook"
+    # 可选：Bearer token 鉴权
+    CRITICAL_EVENTS_WEBHOOK_BEARER: ""
+    # 可选：自定义 header value
+    CRITICAL_EVENTS_WEBHOOK_HEADER_VALUE: ""
+```
+
+ExternalSecrets 示例（可选）：
+
+```yaml
+backend:
+  externalSecret:
+    enabled: true
+    secretStoreRef:
+      name: "your-secret-store"
+      kind: SecretStore
+    remoteRefs:
+      DATABASE_URL: "prod/database_url"
+      JWT_SECRET_KEY: "prod/jwt_secret_key"
+      PAYMENT_WEBHOOK_SECRET: "prod/payment_webhook_secret"
+      REDIS_URL: "prod/redis_url"
+      OPENAI_API_KEY: "prod/openai_api_key"
+      # 以下为关键异常 webhook（可选映射）
+      CRITICAL_EVENTS_WEBHOOK_URL: "prod/critical_events_webhook_url"
+      CRITICAL_EVENTS_WEBHOOK_BEARER: "prod/critical_events_webhook_bearer"
+      CRITICAL_EVENTS_WEBHOOK_HEADER_VALUE: "prod/critical_events_webhook_header_value"
+```
+
+---
+
 ## 6. 可选子 chart（示例）
 
 Chart 已声明可选依赖（默认关闭）：

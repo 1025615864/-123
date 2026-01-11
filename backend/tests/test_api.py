@@ -1557,6 +1557,173 @@ class TestPaymentAPI:
         assert "微信支付" in str(_json_dict(pay_res).get("detail") or "")
 
     @pytest.mark.asyncio
+    async def test_light_consult_review_flow_balance_payment_creates_task_and_allows_lawyer_submit(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        from sqlalchemy import select, func
+
+        from app.models.consultation import Consultation
+        from app.models.consultation_review import ConsultationReviewTask, ConsultationReviewVersion
+        from app.models.lawfirm import Lawyer
+        from app.models.payment import UserBalance
+        from app.models.settlement import LawyerIncomeRecord
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        user = User(
+            username="u_light_review_user",
+            email="u_light_review_user@example.com",
+            nickname="u_light_review_user",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        consultation = Consultation(
+            user_id=int(user.id),
+            session_id="s_light_review_1",
+            title="t",
+        )
+        test_session.add(consultation)
+        await test_session.commit()
+        await test_session.refresh(consultation)
+
+        balance = UserBalance(
+            user_id=int(user.id),
+            balance=1000.0,
+            frozen=0.0,
+            total_recharged=1000.0,
+            total_consumed=0.0,
+        )
+        test_session.add(balance)
+        await test_session.commit()
+
+        token = create_access_token({"sub": str(user.id)})
+
+        create_res = await client.post(
+            "/api/payment/orders",
+            json={
+                "order_type": "light_consult_review",
+                "amount": 0.01,
+                "title": "t",
+                "description": "d",
+                "related_id": int(consultation.id),
+                "related_type": "ai_consultation",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert create_res.status_code == 200
+        order_no = str(create_res.json()["order_no"])
+        assert order_no
+
+        pay_res = await client.post(
+            f"/api/payment/orders/{order_no}/pay",
+            json={"payment_method": "balance"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert pay_res.status_code == 200
+
+        task_res = await test_session.execute(
+            select(ConsultationReviewTask).where(ConsultationReviewTask.order_no == str(order_no))
+        )
+        task = task_res.scalar_one_or_none()
+        assert task is not None
+        assert int(task.consultation_id) == int(consultation.id)
+        assert int(task.user_id) == int(user.id)
+        assert str(task.status) == "pending"
+        assert getattr(task, "lawyer_id", None) is None
+
+        lawyer_user = User(
+            username="u_light_review_lawyer",
+            email="u_light_review_lawyer@example.com",
+            nickname="u_light_review_lawyer",
+            hashed_password=hash_password("Test123456"),
+            role="lawyer",
+            is_active=True,
+            phone_verified=True,
+            email_verified=True,
+        )
+        test_session.add(lawyer_user)
+        await test_session.commit()
+        await test_session.refresh(lawyer_user)
+
+        lawyer_profile = Lawyer(
+            user_id=int(lawyer_user.id),
+            name="复核律师",
+            is_verified=True,
+            is_active=True,
+        )
+        test_session.add(lawyer_profile)
+        await test_session.commit()
+        await test_session.refresh(lawyer_profile)
+
+        lawyer_token = create_access_token({"sub": str(lawyer_user.id)})
+
+        list_res = await client.get(
+            "/api/reviews/lawyer/tasks?page=1&page_size=50",
+            headers={"Authorization": f"Bearer {lawyer_token}"},
+        )
+        assert list_res.status_code == 200
+        list_data = _json_dict(list_res)
+        items = _as_list(list_data.get("items"))
+        ids = {_as_int(it.get("id"), 0) for it in items if isinstance(it, dict)}
+        assert int(task.id) in ids
+
+        claim_res = await client.post(
+            f"/api/reviews/lawyer/tasks/{int(task.id)}/claim",
+            headers={"Authorization": f"Bearer {lawyer_token}"},
+        )
+        assert claim_res.status_code == 200
+        claim_data = _json_dict(claim_res)
+        assert str(claim_data.get("status") or "") == "claimed"
+        assert _as_int(claim_data.get("lawyer_id"), 0) == int(lawyer_profile.id)
+
+        content = "# 复核意见\n\n已复核。"
+        submit_res = await client.post(
+            f"/api/reviews/lawyer/tasks/{int(task.id)}/submit",
+            json={"content_markdown": content},
+            headers={"Authorization": f"Bearer {lawyer_token}"},
+        )
+        assert submit_res.status_code == 200
+        submit_data = _json_dict(submit_res)
+        assert str(submit_data.get("status") or "") == "submitted"
+        assert str(submit_data.get("result_markdown") or "") == content
+        latest = submit_data.get("latest_version")
+        assert isinstance(latest, dict)
+        assert str(latest.get("content_markdown") or "") == content
+
+        v_count_res = await test_session.execute(
+            select(func.count(ConsultationReviewVersion.id)).where(
+                ConsultationReviewVersion.task_id == int(task.id)
+            )
+        )
+        assert int(v_count_res.scalar() or 0) == 1
+
+        income_res = await test_session.execute(
+            select(LawyerIncomeRecord).where(
+                LawyerIncomeRecord.lawyer_id == int(lawyer_profile.id),
+                LawyerIncomeRecord.order_no == str(order_no),
+            )
+        )
+        assert income_res.scalar_one_or_none() is not None
+
+        get_res = await client.get(
+            f"/api/reviews/consultations/{int(consultation.id)}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert get_res.status_code == 200
+        get_data = _json_dict(get_res)
+        task_obj = get_data.get("task")
+        assert isinstance(task_obj, dict)
+        assert str(task_obj.get("status") or "") == "submitted"
+        assert str(task_obj.get("result_markdown") or "") == content
+
+    @pytest.mark.asyncio
     async def test_wechat_notify_ai_pack_document_generate_grants_credits_idempotent(
         self,
         client: AsyncClient,
@@ -2186,6 +2353,51 @@ class TestPaymentCallbackAdminAPI:
         stats = _json_dict(stats_res)
         assert "all_total" in stats
         assert "window_total" in stats
+
+    @pytest.mark.asyncio
+    async def test_admin_update_payment_env_in_memory(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+    ):
+        import os
+
+        from app.models.user import User
+        from app.utils.security import hash_password, create_access_token
+
+        admin = User(
+            username="a_pay_env",
+            email="a_pay_env@example.com",
+            nickname="a_pay_env",
+            hashed_password=hash_password("Test123456"),
+            role="admin",
+            is_active=True,
+        )
+        test_session.add(admin)
+        await test_session.commit()
+        await test_session.refresh(admin)
+
+        admin_token = create_access_token({"sub": str(admin.id)})
+
+        key = "ALIPAY_APP_ID"
+        old = os.environ.get(key)
+        try:
+            res = await client.post(
+                "/api/payment/admin/env",
+                json={"items": [{"key": key, "value": "test_app"}]},
+                headers={"Authorization": f"Bearer {admin_token}"},
+            )
+            assert res.status_code == 200
+            data = _json_dict(res)
+            assert data.get("message") == "OK"
+            assert "updated_keys" in data
+            assert key in [str(x) for x in _as_list(data.get("updated_keys"))]
+            assert "channel_status" in data
+        finally:
+            if old is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old
 
     @pytest.mark.asyncio
     async def test_admin_reconcile_order_amount_mismatch(
@@ -3093,6 +3305,7 @@ class TestPaymentCallbackAdminAPI:
     ):
         import hashlib
         import hmac
+        import os
         from sqlalchemy import select, func
 
         from app.models.user import User
@@ -3126,7 +3339,8 @@ class TestPaymentCallbackAdminAPI:
         amount_str = "10.00"
 
         payload = f"{order_no}|{trade_no}|{payment_method}|{amount_str}".encode("utf-8")
-        signature = hmac.new(b"", payload, hashlib.sha256).hexdigest()
+        secret = str(os.getenv("PAYMENT_WEBHOOK_SECRET", "") or "")
+        signature = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
 
         webhook_payload = {
             "order_no": order_no,
@@ -3154,6 +3368,7 @@ class TestPaymentCallbackAdminAPI:
     async def test_payment_webhook_marks_order_paid(self, client: AsyncClient, test_session: AsyncSession):
         import hashlib
         import hmac
+        import os
 
         from app.models.user import User
         from app.utils.security import hash_password, create_access_token
@@ -3184,7 +3399,8 @@ class TestPaymentCallbackAdminAPI:
         payment_method = "alipay"
         amount_str = "10.00"
         payload = f"{order_no}|{trade_no}|{payment_method}|{amount_str}".encode("utf-8")
-        signature = hmac.new(b"", payload, hashlib.sha256).hexdigest()
+        secret = str(os.getenv("PAYMENT_WEBHOOK_SECRET", "") or "")
+        signature = hmac.new(secret.encode("utf-8"), payload, hashlib.sha256).hexdigest()
 
         webhook_res = await client.post(
             "/api/payment/webhook",
@@ -4254,6 +4470,66 @@ class TestAIShareAPI:
         assert isinstance(res.headers.get("X-Request-Id"), str)
 
     @pytest.mark.asyncio
+    async def test_contracts_review_supports_e2e_mock(self, client: AsyncClient):
+        res = await client.post(
+            "/api/contracts/review",
+            files={"file": ("contract.txt", b"hello", "text/plain")},
+            headers={"X-E2E-Mock-AI": "1"},
+        )
+        assert res.status_code == 200
+        payload = _json_dict(res)
+        assert payload.get("filename") == "contract.txt"
+        assert isinstance(payload.get("report_json"), dict)
+        report = cast(dict[str, object], payload.get("report_json"))
+        assert report.get("summary") == "这是一个E2E mock 的合同审查结果"
+        assert isinstance(payload.get("report_markdown"), str)
+        assert isinstance(res.headers.get("X-Request-Id"), str)
+
+    @pytest.mark.asyncio
+    async def test_contracts_review_samples_and_pdf_export_e2e_mock(self, client: AsyncClient):
+        import os
+
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        sample_dir = os.path.join(repo_root, "docs", "samples", "contracts")
+
+        samples = [
+            ("劳动合同样例_v1.txt", "text/plain"),
+            ("房屋租赁合同样例_v1.txt", "text/plain"),
+            ("服务合同样例_v1.txt", "text/plain"),
+        ]
+
+        for fname, mime in samples:
+            path = os.path.join(sample_dir, fname)
+            assert os.path.exists(path), f"sample contract missing: {path}"
+            with open(path, "rb") as f:
+                content = f.read()
+            assert content, f"sample contract empty: {path}"
+
+            res = await client.post(
+                "/api/contracts/review",
+                files={"file": (fname, content, mime)},
+                headers={"X-E2E-Mock-AI": "1"},
+            )
+            assert res.status_code == 200
+            payload = _json_dict(res)
+            md = str(payload.get("report_markdown") or "")
+            assert md.strip() != ""
+
+            pdf_res = await client.post(
+                "/api/documents/export/pdf",
+                json={"title": f"合同审查报告-{fname}", "content": md},
+                headers={"X-E2E-Mock-AI": "1"},
+            )
+
+            if pdf_res.status_code == 501:
+                # PDF依赖未安装时允许跳过
+                continue
+            assert pdf_res.status_code == 200
+            ct = str(pdf_res.headers.get("content-type") or "").lower()
+            assert "application/pdf" in ct
+            assert pdf_res.content.startswith(b"%PDF")
+
+    @pytest.mark.asyncio
     async def test_ai_consultation_report_sets_rfc5987_filename(
         self,
         client: AsyncClient,
@@ -4496,3 +4772,230 @@ class TestAIShareAPI:
         done_req_id = done_payload.get("request_id")
         assert isinstance(done_req_id, str)
         assert done_req_id.strip() != ""
+
+
+class TestApiEnvelopeMiddleware:
+
+    @pytest.mark.asyncio
+    async def test_envelope_wraps_2xx_json(self, client: AsyncClient):
+        res = await client.get("/", headers={"X-Api-Envelope": "1"})
+        assert res.status_code == 200
+        outer = _json_dict(res)
+        assert outer.get("ok") is True
+        assert isinstance(outer.get("ts"), int)
+        inner = outer.get("data")
+        assert isinstance(inner, dict)
+        assert "name" in inner
+        assert "version" in inner
+
+    @pytest.mark.asyncio
+    async def test_envelope_not_enabled_without_header(self, client: AsyncClient):
+        res = await client.get("/")
+        assert res.status_code == 200
+        data = _json_dict(res)
+        assert "ok" not in data
+        assert "data" not in data
+        assert "name" in data
+        assert "version" in data
+
+    @pytest.mark.asyncio
+    async def test_envelope_does_not_wrap_non_2xx(self, client: AsyncClient):
+        res = await client.post(
+            "/api/user/login",
+            json={"username": "missing", "password": "wrong"},
+            headers={"X-Api-Envelope": "1"},
+        )
+        assert res.status_code == 401
+        data = _json_dict(res)
+        assert "ok" not in data
+        assert "data" not in data
+        assert "detail" in data
+
+    @pytest.mark.asyncio
+    async def test_envelope_does_not_wrap_non_json(self, client: AsyncClient, test_session: AsyncSession):
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        admin = User(
+            username="a_metrics",
+            email="a_metrics@example.com",
+            nickname="a_metrics",
+            hashed_password=hash_password("Test123456"),
+            role="admin",
+            is_active=True,
+        )
+        test_session.add(admin)
+        await test_session.commit()
+        await test_session.refresh(admin)
+        token = create_access_token({"sub": str(admin.id)})
+
+        res = await client.get(
+            "/api/system/metrics",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-Api-Envelope": "1",
+            },
+        )
+        assert res.status_code == 200
+        ct = str(res.headers.get("content-type") or "").lower()
+        assert "application/json" not in ct
+        assert "# help" in res.text.lower()
+
+    @pytest.mark.asyncio
+    async def test_envelope_does_not_wrap_empty_json_body(self, client: AsyncClient):
+        from fastapi import Response
+        from app.main import app
+
+        path = "/api/_test/envelope-empty-json"
+
+        async def _empty_json():
+            return Response(content=b"", media_type="application/json")
+
+        if not any(getattr(r, "path", None) == path for r in app.router.routes):
+            app.add_api_route(path, _empty_json, methods=["GET"])
+
+        res = await client.get(path, headers={"X-Api-Envelope": "1"})
+        assert res.status_code == 200
+        ct = str(res.headers.get("content-type") or "").lower()
+        assert "application/json" in ct
+        assert res.text == ""
+
+    @pytest.mark.asyncio
+    async def test_envelope_does_not_wrap_204(self, client: AsyncClient):
+        from fastapi import Response
+        from app.main import app
+
+        path = "/api/_test/envelope-no-content"
+
+        async def _no_content():
+            return Response(status_code=204)
+
+        if not any(getattr(r, "path", None) == path for r in app.router.routes):
+            app.add_api_route(path, _no_content, methods=["GET"])
+
+        res = await client.get(path, headers={"X-Api-Envelope": "1"})
+        assert res.status_code == 204
+        assert res.text == ""
+
+
+class TestApiContracts:
+
+    @pytest.mark.asyncio
+    async def test_login_response_contract(self, client: AsyncClient, test_session: AsyncSession):
+        from app.models.user import User
+        from app.utils.security import hash_password
+
+        user = User(
+            username="u_login_contract",
+            email="u_login_contract@example.com",
+            nickname="u_login_contract",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        res = await client.post(
+            "/api/user/login",
+            json={"username": "u_login_contract", "password": "Test123456"},
+        )
+        assert res.status_code == 200
+        data = _json_dict(res)
+
+        user_obj = data.get("user")
+        assert isinstance(user_obj, dict)
+        assert int(user_obj.get("id") or 0) > 0
+        assert str(user_obj.get("username") or "") == "u_login_contract"
+        assert str(user_obj.get("email") or "") == "u_login_contract@example.com"
+        assert "created_at" in user_obj
+        assert "role" in user_obj
+        assert "email_verified" in user_obj
+        assert "phone_verified" in user_obj
+
+        token_obj = data.get("token")
+        assert isinstance(token_obj, dict)
+        assert isinstance(token_obj.get("access_token"), str)
+        assert str(token_obj.get("token_type") or "").lower() == "bearer"
+        assert int(token_obj.get("expires_in") or 0) > 0
+
+        assert str(data.get("message") or "")
+
+    @pytest.mark.asyncio
+    async def test_payment_create_order_contract(self, client: AsyncClient, test_session: AsyncSession):
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        user = User(
+            username="u_pay_contract",
+            email="u_pay_contract@example.com",
+            nickname="u_pay_contract",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+        token = create_access_token({"sub": str(user.id)})
+
+        res = await client.post(
+            "/api/payment/orders",
+            json={"order_type": "recharge", "amount": 10.0, "title": "contract"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 200
+        data = _json_dict(res)
+        assert _as_int(data.get("order_id"), 0) > 0
+        assert str(data.get("order_no") or "").strip() != ""
+        assert _as_float(data.get("amount"), 0.0) > 0
+        assert data.get("expires_at") is not None
+
+    @pytest.mark.asyncio
+    async def test_document_generate_contract(self, client: AsyncClient, test_session: AsyncSession):
+        from app.models.user import User
+        from app.utils.security import create_access_token, hash_password
+
+        user = User(
+            username="u_doc_contract",
+            email="u_doc_contract@example.com",
+            nickname="u_doc_contract",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+        token = create_access_token({"sub": str(user.id)})
+
+        res = await client.post(
+            "/api/documents/generate",
+            json={
+                "document_type": "complaint",
+                "case_type": "合同纠纷",
+                "plaintiff_name": "A",
+                "defendant_name": "B",
+                "facts": "f",
+                "claims": "c",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert res.status_code == 200
+        data = _json_dict(res)
+        assert str(data.get("document_type") or "") == "complaint"
+        assert str(data.get("title") or "").strip() != ""
+        assert str(data.get("content") or "").strip() != ""
+        assert data.get("created_at") is not None
+
+
+@pytest.mark.asyncio
+async def test_seo_robots_and_sitemap(client: AsyncClient):
+    robots = await client.get("/robots.txt")
+    assert robots.status_code == 200
+    assert "Sitemap:" in robots.text
+
+    sitemap = await client.get("/sitemap.xml")
+    assert sitemap.status_code == 200
+    assert "<urlset" in sitemap.text

@@ -6,9 +6,10 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 
 from ..models.user import User
+from ..services.storage_service import LocalStorageProvider, get_storage_provider
 from ..utils.deps import get_current_user
 
 router = APIRouter(prefix="/upload", tags=["文件上传"])
@@ -20,9 +21,13 @@ IMAGE_DIR = os.path.join(UPLOAD_DIR, "images")
 FILE_DIR = os.path.join(UPLOAD_DIR, "files")
 
 # 确保目录存在
-os.makedirs(AVATAR_DIR, exist_ok=True)
-os.makedirs(IMAGE_DIR, exist_ok=True)
-os.makedirs(FILE_DIR, exist_ok=True)
+try:
+    if isinstance(get_storage_provider(), LocalStorageProvider):
+        os.makedirs(AVATAR_DIR, exist_ok=True)
+        os.makedirs(IMAGE_DIR, exist_ok=True)
+        os.makedirs(FILE_DIR, exist_ok=True)
+except Exception:
+    pass
 
 # 允许的图片类型
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}
@@ -151,22 +156,26 @@ async def upload_avatar(
     
     # 生成唯一文件名
     filename = f"{current_user.id}_{uuid.uuid4().hex[:8]}_{int(datetime.now().timestamp())}.{detected_ext}"
-    filepath = os.path.join(AVATAR_DIR, filename)
+    storage = get_storage_provider()
     
     # 删除旧头像文件（如果存在且是本地文件）
     current_avatar = getattr(current_user, "avatar", None)
-    if current_avatar and isinstance(current_avatar, str) and current_avatar.startswith("/api/upload/avatars/"):
-        old_filename = current_avatar.split("/")[-1]
-        old_filepath = os.path.join(AVATAR_DIR, old_filename)
-        if os.path.exists(old_filepath):
-            try:
-                os.remove(old_filepath)
-            except Exception:
-                pass
+    if isinstance(storage, LocalStorageProvider):
+        if current_avatar and isinstance(current_avatar, str) and current_avatar.startswith("/api/upload/avatars/"):
+            old_filename = current_avatar.split("/")[-1]
+            old_filepath = storage.get_local_path(category="avatars", filename=old_filename)
+            if os.path.exists(old_filepath):
+                try:
+                    os.remove(old_filepath)
+                except Exception:
+                    pass
     
-    # 保存文件
-    with open(filepath, "wb") as f:
-        _ = f.write(content)
+    await storage.put_bytes(
+        category="avatars",
+        filename=filename,
+        content=content,
+        content_type=file.content_type,
+    )
     
     # 返回访问URL
     avatar_url = f"/api/upload/avatars/{filename}"
@@ -183,12 +192,15 @@ async def get_avatar(filename: str):
     """获取头像文件"""
     if not _is_safe_filename(filename):
         raise HTTPException(status_code=400, detail="非法文件名")
-    filepath = os.path.join(AVATAR_DIR, filename)
-     
-    if not os.path.exists(filepath):
-        raise HTTPException(status_code=404, detail="文件不存在")
-     
-    return FileResponse(filepath)
+    storage = get_storage_provider()
+    if isinstance(storage, LocalStorageProvider):
+        filepath = storage.get_local_path(category="avatars", filename=filename)
+        if not os.path.exists(filepath):
+            raise HTTPException(status_code=404, detail="文件不存在")
+        return FileResponse(filepath)
+
+    url = await storage.get_download_url(category="avatars", filename=filename)
+    return RedirectResponse(url=url, status_code=307)
 
 
 @router.post("/file", summary="上传附件")
@@ -213,10 +225,13 @@ async def upload_file(
         raise HTTPException(status_code=400, detail="无法识别文件扩展名")
 
     filename = f"{uuid.uuid4().hex}.{ext}"
-    filepath = os.path.join(FILE_DIR, filename)
-
-    with open(filepath, "wb") as f:
-        _ = f.write(content)
+    storage = get_storage_provider()
+    await storage.put_bytes(
+        category="files",
+        filename=filename,
+        content=content,
+        content_type=file.content_type,
+    )
 
     file_url = f"/api/upload/files/{filename}"
     return {
@@ -231,10 +246,15 @@ async def upload_file(
 async def get_file(filename: str):
     if not _is_safe_file_filename(filename):
         raise HTTPException(status_code=400, detail="非法文件名")
-    filepath = os.path.join(FILE_DIR, filename)
-    if not os.path.exists(filepath):
-        raise HTTPException(status_code=404, detail="文件不存在")
-    return FileResponse(filepath)
+    storage = get_storage_provider()
+    if isinstance(storage, LocalStorageProvider):
+        filepath = storage.get_local_path(category="files", filename=filename)
+        if not os.path.exists(filepath):
+            raise HTTPException(status_code=404, detail="文件不存在")
+        return FileResponse(filepath)
+
+    url = await storage.get_download_url(category="files", filename=filename)
+    return RedirectResponse(url=url, status_code=307)
 
 
 @router.post("/image", summary="上传图片")
@@ -267,10 +287,13 @@ async def upload_image(
         )
 
     filename = f"{uuid.uuid4().hex}.{detected_ext}"
-    filepath = os.path.join(IMAGE_DIR, filename)
-
-    with open(filepath, "wb") as f:
-        _ = f.write(content)
+    storage = get_storage_provider()
+    await storage.put_bytes(
+        category="images",
+        filename=filename,
+        content=content,
+        content_type=file.content_type,
+    )
 
     image_url = f"/api/upload/images/{filename}"
 
@@ -286,9 +309,12 @@ async def get_image(filename: str):
     """获取图片文件"""
     if not _is_safe_image_filename(filename):
         raise HTTPException(status_code=400, detail="非法文件名")
-    filepath = os.path.join(IMAGE_DIR, filename)
+    storage = get_storage_provider()
+    if isinstance(storage, LocalStorageProvider):
+        filepath = storage.get_local_path(category="images", filename=filename)
+        if not os.path.exists(filepath):
+            raise HTTPException(status_code=404, detail="文件不存在")
+        return FileResponse(filepath)
 
-    if not os.path.exists(filepath):
-        raise HTTPException(status_code=404, detail="文件不存在")
-
-    return FileResponse(filepath)
+    url = await storage.get_download_url(category="images", filename=filename)
+    return RedirectResponse(url=url, status_code=307)

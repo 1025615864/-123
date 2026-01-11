@@ -12,6 +12,14 @@ const api = axios.create({
   },
 });
 
+function createRequestId(): string {
+  try {
+    return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+  } catch {
+    return `${Date.now()}-${Math.random()}`;
+  }
+}
+
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("token");
   if (token) {
@@ -22,6 +30,7 @@ api.interceptors.request.use((config) => {
   }
   config.headers = config.headers ?? {};
   (config.headers as Record<string, string>)["X-Api-Envelope"] = "1";
+  (config.headers as Record<string, string>)["X-Request-Id"] = createRequestId();
   return config;
 });
 

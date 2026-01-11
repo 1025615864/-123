@@ -4,6 +4,8 @@ export const queryKeys = {
   notificationsPreview: (pageSize: number = 10) =>
     ["notifications-preview", { pageSize }] as const,
   userMeQuotas: () => ["user-me-quotas"] as const,
+  userMeQuotaUsage: (page: number, pageSize: number, days: number) =>
+    ["user-me-quota-usage", { page, pageSize, days }] as const,
   adminSystemNotifications: () => ["admin-system-notifications"] as const,
   calendarReminders: (page: number, pageSize: number, done: boolean | null) =>
     ["calendar-reminders", { page, pageSize, done }] as const,
@@ -37,6 +39,11 @@ export const queryKeys = {
   lawFirmConsultations: (page: number, pageSize: number) =>
     ["lawfirm-consultations", { page, pageSize }] as const,
 
+  consultationReviewTask: (consultationId: number | null) =>
+    ["consultation-review-task", { consultationId }] as const,
+  lawyerReviewTasks: (page: number, pageSize: number, status: string | null) =>
+    ["lawyer-review-tasks", { page, pageSize, status }] as const,
+
   paymentOrdersBase: () => ["payment-orders"] as const,
   paymentOrders: (
     page: number,
@@ -54,11 +61,15 @@ export const queryKeys = {
     provider: string,
     orderNo: string,
     tradeNo: string,
-    verified: "" | "true" | "false"
+    verified: "" | "true" | "false",
+    q: string,
+    hasError: "" | "true" | "false",
+    fromTs: number | null,
+    toTs: number | null
   ) =>
     [
       "admin-payment-callback-events",
-      { page, pageSize, provider, orderNo, tradeNo, verified },
+      { page, pageSize, provider, orderNo, tradeNo, verified, q, hasError, fromTs, toTs },
     ] as const,
   adminPaymentCallbackStats: (minutes: number, provider: string | null) =>
     ["admin-payment-callback-events-stats", { minutes, provider }] as const,
@@ -77,6 +88,7 @@ export const queryKeys = {
     status: string | null,
     keyword: string | null
   ) => ["admin-feedback-tickets", { page, pageSize, status, keyword }] as const,
+  adminFeedbackTicketStats: () => ["admin-feedback-ticket-stats"] as const,
 
   newsCategories: () => ["news-categories"] as const,
   newsList: (

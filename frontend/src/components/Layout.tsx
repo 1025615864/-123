@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Outlet, Link, useLocation } from "react-router-dom";
+import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import {
   Scale,
   Building2,
@@ -9,10 +9,14 @@ import {
   X,
   Phone,
   Mail,
+  MessageCircle,
+  FileText,
+  Newspaper,
+  ClipboardList,
 } from "lucide-react";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
-import { Button, LinkButton } from "../components/ui";
+import { Button, LinkButton, Modal } from "../components/ui";
 import NotificationBell from "./NotificationBell";
 import { MobileNav } from "./MobileNav";
 import { ThemeSwitcher } from "./ThemeSwitcher";
@@ -25,12 +29,66 @@ import {
   toolNavItems,
 } from "../navigation";
 
+function upsertMetaTag(
+  attr: "name" | "property",
+  key: string,
+  content: string
+): () => void {
+  const selector = `meta[${attr}="${key}"]`;
+  const existing = document.head.querySelector(selector) as HTMLMetaElement | null;
+  const created = !existing;
+  const el = existing ?? document.createElement("meta");
+  if (created) {
+    el.setAttribute(attr, key);
+    document.head.appendChild(el);
+  }
+  const prev = el.getAttribute("content");
+  el.setAttribute("content", content);
+  return () => {
+    if (created) {
+      el.remove();
+      return;
+    }
+    if (prev == null) {
+      el.removeAttribute("content");
+    } else {
+      el.setAttribute("content", prev);
+    }
+  };
+}
+
+function upsertLinkRel(rel: string, href: string): () => void {
+  const selector = `link[rel="${rel}"]`;
+  const existing = document.head.querySelector(selector) as HTMLLinkElement | null;
+  const created = !existing;
+  const el = existing ?? document.createElement("link");
+  if (created) {
+    el.rel = rel;
+    document.head.appendChild(el);
+  }
+  const prevHref = el.getAttribute("href");
+  el.setAttribute("href", href);
+  return () => {
+    if (created) {
+      el.remove();
+      return;
+    }
+    if (prevHref == null) {
+      el.removeAttribute("href");
+    } else {
+      el.setAttribute("href", prevHref);
+    }
+  };
+}
+
 export default function Layout() {
   const location = useLocation();
+  const navigate = useNavigate();
   const { isAuthenticated, user, logout } = useAuth();
   const { actualTheme } = useTheme();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [toolsMenuOpen, setToolsMenuOpen] = useState(false);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
   const isMobile = useIsMobile();
 
   const mobileMenuId = "layout-mobile-menu";
@@ -44,6 +102,42 @@ export default function Layout() {
     isChatRoute;
 
   const showMobileBottomNav = isMobile && !hideFooter;
+
+  const onboardingStorageKey = useMemo(() => {
+    const uid = user?.id ? String(user.id) : "guest";
+    return `bx_onboarding_v1_seen_${uid}`;
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (location.pathname !== "/") return;
+    if (hideFooter) return;
+    try {
+      const seen = String(localStorage.getItem(onboardingStorageKey) || "").trim() === "1";
+      if (seen) return;
+      setOnboardingOpen(true);
+    } catch {
+      setOnboardingOpen(true);
+    }
+  }, [hideFooter, location.pathname, onboardingStorageKey]);
+
+  useEffect(() => {
+    const url = window.location.href;
+    const cleanups: Array<() => void> = [];
+    cleanups.push(upsertLinkRel("canonical", url));
+    cleanups.push(upsertMetaTag("property", "og:url", url));
+    cleanups.push(upsertMetaTag("property", "og:site_name", "百姓法律助手"));
+
+    const p = location.pathname || "/";
+    const type =
+      p.startsWith("/news/") || p.startsWith("/forum/post/")
+        ? "article"
+        : "website";
+    cleanups.push(upsertMetaTag("property", "og:type", type));
+
+    return () => {
+      for (const fn of cleanups) fn();
+    };
+  }, [location.pathname, location.search]);
 
   const toolsActive = useMemo(() => {
     return toolNavItems.some((it) => isRouteActive(location.pathname, it.path));
@@ -65,12 +159,122 @@ export default function Layout() {
     setMobileMenuOpen(false);
   }, [location.pathname]);
 
+  const closeOnboarding = (nextPath?: string) => {
+    try {
+      localStorage.setItem(onboardingStorageKey, "1");
+    } catch {
+      // ignore
+    }
+    setOnboardingOpen(false);
+    if (nextPath) {
+      navigate(nextPath);
+    }
+  };
+
   return (
     <div
       className={`flex flex-col font-sans ${
         isChatRoute ? "h-[100dvh] overflow-hidden" : "min-h-[100dvh]"
       }`}
     >
+      <Modal
+        isOpen={onboardingOpen}
+        onClose={() => closeOnboarding()}
+        title="快速上手"
+        description="一分钟了解百姓法律助手的核心功能"
+        size="lg"
+      >
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => closeOnboarding("/chat")}
+              className="flex items-start gap-3 rounded-2xl border border-slate-200/70 bg-white px-4 py-4 text-left shadow-sm transition-all hover:bg-slate-50 active:scale-[0.99] dark:border-white/10 dark:bg-white/[0.03] dark:hover:bg-white/[0.06]"
+            >
+              <div className="mt-0.5 rounded-xl bg-blue-500/10 p-2 text-blue-600 dark:text-blue-300">
+                <MessageCircle className="h-5 w-5" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-slate-900 dark:text-white">
+                  1) AI 咨询
+                </div>
+                <div className="mt-1 text-xs text-slate-600 dark:text-white/55">
+                  输入你的问题，获得清晰可执行的建议
+                </div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => closeOnboarding("/documents")}
+              className="flex items-start gap-3 rounded-2xl border border-slate-200/70 bg-white px-4 py-4 text-left shadow-sm transition-all hover:bg-slate-50 active:scale-[0.99] dark:border-white/10 dark:bg-white/[0.03] dark:hover:bg-white/[0.06]"
+            >
+              <div className="mt-0.5 rounded-xl bg-amber-500/10 p-2 text-amber-700 dark:text-amber-300">
+                <FileText className="h-5 w-5" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-slate-900 dark:text-white">
+                  2) 文书生成
+                </div>
+                <div className="mt-1 text-xs text-slate-600 dark:text-white/55">
+                  模板化生成起诉状/答辩状/协议等
+                </div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => closeOnboarding("/news")}
+              className="flex items-start gap-3 rounded-2xl border border-slate-200/70 bg-white px-4 py-4 text-left shadow-sm transition-all hover:bg-slate-50 active:scale-[0.99] dark:border-white/10 dark:bg-white/[0.03] dark:hover:bg-white/[0.06]"
+            >
+              <div className="mt-0.5 rounded-xl bg-emerald-500/10 p-2 text-emerald-700 dark:text-emerald-300">
+                <Newspaper className="h-5 w-5" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-slate-900 dark:text-white">
+                  3) 法律资讯
+                </div>
+                <div className="mt-1 text-xs text-slate-600 dark:text-white/55">
+                  关注最新政策解读与案例分析
+                </div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => closeOnboarding("/orders")}
+              className="flex items-start gap-3 rounded-2xl border border-slate-200/70 bg-white px-4 py-4 text-left shadow-sm transition-all hover:bg-slate-50 active:scale-[0.99] dark:border-white/10 dark:bg-white/[0.03] dark:hover:bg-white/[0.06]"
+            >
+              <div className="mt-0.5 rounded-xl bg-slate-500/10 p-2 text-slate-700 dark:text-slate-200">
+                <ClipboardList className="h-5 w-5" />
+              </div>
+              <div>
+                <div className="text-sm font-semibold text-slate-900 dark:text-white">
+                  4) 订单与服务
+                </div>
+                <div className="mt-1 text-xs text-slate-600 dark:text-white/55">
+                  查看订单、咨询记录与服务进度
+                </div>
+              </div>
+            </button>
+          </div>
+
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div className="text-xs text-slate-500 dark:text-white/45">
+              {isAuthenticated ? "建议：在个人中心查看权益、配额与消耗记录" : "建议：登录后可保存咨询与查看权益配额"}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={() => closeOnboarding()}>
+                我知道了
+              </Button>
+              <Button onClick={() => closeOnboarding("/chat")}>
+                开始咨询
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Modal>
+
       <header className="sticky top-0 z-50 backdrop-blur-xl border-b flex justify-center bg-white/80 border-slate-200/60 dark:bg-slate-900/80 dark:border-white/5">
         <div className="w-full max-w-7xl px-6 sm:px-8 lg:px-12">
           <div className="flex justify-between items-center h-[72px]">

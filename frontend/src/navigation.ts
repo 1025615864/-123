@@ -31,6 +31,7 @@ export const toolNavItems: NavItem[] = [
   { path: "/calculator", label: "费用计算", icon: Calculator },
   { path: "/limitations", label: "时效计算", icon: Clock },
   { path: "/documents", label: "文书生成", icon: FileText },
+  { path: "/contracts", label: "合同审查", icon: FileText },
   { path: "/calendar", label: "法律日历", icon: Calendar },
 ];
 

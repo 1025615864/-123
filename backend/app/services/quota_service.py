@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import os
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
 
@@ -56,6 +56,19 @@ def _is_vip_active(user: User | None) -> bool:
     if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
     return expires_at > datetime.now(timezone.utc)
+
+
+def _is_vip_active_on_day(user: User | None, day: date) -> bool:
+    if user is None:
+        return False
+    raw = getattr(user, "vip_expires_at", None)
+    if not isinstance(raw, datetime):
+        return False
+    expires_at = raw
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    day_start = datetime.combine(day, datetime.min.time()).replace(tzinfo=timezone.utc)
+    return expires_at > day_start
 
 
 class QuotaService:
@@ -128,6 +141,24 @@ class QuotaService:
         free_limit = await _get_int_config(db, "FREE_AI_CHAT_DAILY_LIMIT", FREE_AI_CHAT_DAILY_LIMIT)
         vip_limit = await _get_int_config(db, "VIP_AI_CHAT_DAILY_LIMIT", VIP_AI_CHAT_DAILY_LIMIT)
         return int(vip_limit) if _is_vip_active(user) else int(free_limit)
+
+    async def _ai_chat_limit_for_user_on_day(self, db: AsyncSession, user: User, day: date) -> int:
+        if str(getattr(user, "role", "")).lower() in {"admin", "super_admin"}:
+            return 10**9
+        free_limit = await _get_int_config(db, "FREE_AI_CHAT_DAILY_LIMIT", FREE_AI_CHAT_DAILY_LIMIT)
+        vip_limit = await _get_int_config(db, "VIP_AI_CHAT_DAILY_LIMIT", VIP_AI_CHAT_DAILY_LIMIT)
+        return int(vip_limit) if _is_vip_active_on_day(user, day) else int(free_limit)
+
+    async def _doc_limit_for_user_on_day(self, db: AsyncSession, user: User, day: date) -> int:
+        if str(getattr(user, "role", "")).lower() in {"admin", "super_admin"}:
+            return 10**9
+        free_limit = await _get_int_config(
+            db, "FREE_DOCUMENT_GENERATE_DAILY_LIMIT", FREE_DOCUMENT_GENERATE_DAILY_LIMIT
+        )
+        vip_limit = await _get_int_config(
+            db, "VIP_DOCUMENT_GENERATE_DAILY_LIMIT", VIP_DOCUMENT_GENERATE_DAILY_LIMIT
+        )
+        return int(vip_limit) if _is_vip_active_on_day(user, day) else int(free_limit)
 
     async def _doc_limit_for_user(self, db: AsyncSession, user: User) -> int:
         if str(getattr(user, "role", "")).lower() in {"admin", "super_admin"}:
@@ -232,6 +263,63 @@ class QuotaService:
                 0, int(getattr(pack, "document_generate_credits", 0))
             ),
             "is_vip_active": bool(_is_vip_active(user)),
+        }
+
+    async def list_quota_usage(
+        self,
+        db: AsyncSession,
+        user: User,
+        *,
+        days: int = 30,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict[str, object]:
+        _ = await self._get_or_create_today(db, int(user.id))
+        safe_days = max(1, min(int(days), 365))
+        safe_page = max(1, int(page))
+        safe_page_size = max(1, min(int(page_size), 100))
+
+        day_from = date.today() - timedelta(days=safe_days - 1)
+
+        base = select(UserQuotaDaily).where(
+            UserQuotaDaily.user_id == int(user.id),
+            UserQuotaDaily.day >= day_from,
+        )
+        count_q = select(func.count(UserQuotaDaily.id)).where(
+            UserQuotaDaily.user_id == int(user.id),
+            UserQuotaDaily.day >= day_from,
+        )
+
+        res_total = await db.execute(count_q)
+        total = int(res_total.scalar() or 0)
+
+        res = await db.execute(
+            base.order_by(UserQuotaDaily.day.desc())
+            .offset((safe_page - 1) * safe_page_size)
+            .limit(safe_page_size)
+        )
+        rows = res.scalars().all()
+
+        items: list[dict[str, object]] = []
+        for r in rows:
+            d = r.day
+            ai_limit = await self._ai_chat_limit_for_user_on_day(db, user, d)
+            doc_limit = await self._doc_limit_for_user_on_day(db, user, d)
+            items.append(
+                {
+                    "day": d,
+                    "ai_chat_limit": int(ai_limit),
+                    "ai_chat_used": int(getattr(r, "ai_chat_count", 0) or 0),
+                    "document_generate_limit": int(doc_limit),
+                    "document_generate_used": int(getattr(r, "document_generate_count", 0) or 0),
+                }
+            )
+
+        return {
+            "items": items,
+            "total": total,
+            "page": safe_page,
+            "page_size": safe_page_size,
         }
 
 

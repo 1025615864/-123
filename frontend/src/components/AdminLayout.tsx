@@ -30,7 +30,7 @@ const sidebarItems: SidebarItem[] = [
   { icon: Users, label: '用户管理', path: '/admin/users' },
   {
     icon: Newspaper,
-    label: '新闻管理',
+    label: '内容运营',
     path: '/admin/news',
     children: [
       { icon: Newspaper, label: '新闻列表', path: '/admin/news' },
@@ -38,21 +38,49 @@ const sidebarItems: SidebarItem[] = [
       { icon: Activity, label: '采集运行记录', path: '/admin/news/ingest-runs' },
       { icon: Layers, label: '新闻专题', path: '/admin/news/topics' },
       { icon: MessageSquare, label: '新闻评论', path: '/admin/news/comments' },
+      { icon: Flame, label: '论坛管理', path: '/admin/forum' },
     ],
   },
-  { icon: Flame, label: '论坛管理', path: '/admin/forum' },
-  { icon: Building2, label: '律所管理', path: '/admin/lawfirms' },
-  { icon: Shield, label: '律师认证', path: '/admin/lawyer-verifications' },
-  { icon: Database, label: '知识库管理', path: '/admin/knowledge' },
-  { icon: FileQuestion, label: '咨询模板', path: '/admin/templates' },
-  { icon: FileText, label: '文书模板', path: '/admin/document-templates' },
-  { icon: FileText, label: '操作日志', path: '/admin/logs' },
-  { icon: Bell, label: '通知管理', path: '/admin/notifications' },
-  { icon: MessageSquare, label: '客服反馈', path: '/admin/feedback' },
-  { icon: CreditCard, label: '提现审核', path: '/admin/withdrawals' },
-  { icon: BarChart3, label: '结算统计', path: '/admin/settlement-stats' },
-  { icon: CreditCard, label: '支付回调', path: '/admin/payment-callbacks' },
-  { icon: Settings, label: '系统设置', path: '/admin/settings' },
+  {
+    icon: Building2,
+    label: '律所与律师',
+    path: '/admin/lawfirms',
+    children: [
+      { icon: Building2, label: '律所管理', path: '/admin/lawfirms' },
+      { icon: Shield, label: '律师认证', path: '/admin/lawyer-verifications' },
+    ],
+  },
+  {
+    icon: Database,
+    label: '知识与模板',
+    path: '/admin/knowledge',
+    children: [
+      { icon: Database, label: '知识库管理', path: '/admin/knowledge' },
+      { icon: FileQuestion, label: '咨询模板', path: '/admin/templates' },
+      { icon: FileText, label: '文书模板', path: '/admin/document-templates' },
+    ],
+  },
+  {
+    icon: CreditCard,
+    label: '财务与支付',
+    path: '/admin/withdrawals',
+    children: [
+      { icon: CreditCard, label: '提现审核', path: '/admin/withdrawals' },
+      { icon: BarChart3, label: '结算统计', path: '/admin/settlement-stats' },
+      { icon: CreditCard, label: '支付回调', path: '/admin/payment-callbacks' },
+    ],
+  },
+  {
+    icon: Settings,
+    label: '系统与审计',
+    path: '/admin/settings',
+    children: [
+      { icon: Settings, label: '系统设置', path: '/admin/settings' },
+      { icon: FileText, label: '操作日志', path: '/admin/logs' },
+      { icon: Bell, label: '通知管理', path: '/admin/notifications' },
+      { icon: MessageSquare, label: '客服反馈', path: '/admin/feedback' },
+    ],
+  },
 ]
 
 export default function AdminLayout() {
@@ -81,12 +109,22 @@ export default function AdminLayout() {
       .sort((a, b) => b.path.length - a.path.length)[0]?.path ?? '/admin'
   )
 
-  const isNewsSection = activePath === '/admin/news' || activePath.startsWith('/admin/news/')
-  const [newsOpen, setNewsOpen] = useState<boolean>(isNewsSection)
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
-    if (isNewsSection) setNewsOpen(true)
-  }, [isNewsSection])
+    const groupPathsToOpen: string[] = []
+    for (const item of sidebarItems) {
+      if (!isGroup(item)) continue
+      const groupActive = item.children.some((c) => c.path === activePath)
+      if (groupActive) groupPathsToOpen.push(item.path)
+    }
+    if (!groupPathsToOpen.length) return
+    setOpenGroups((prev) => {
+      const next = { ...prev }
+      for (const p of groupPathsToOpen) next[p] = true
+      return next
+    })
+  }, [activePath])
 
   // 权限检查：必须登录且为管理员
   if (!isAuthenticated) {
@@ -132,7 +170,8 @@ export default function AdminLayout() {
           {sidebarItems.map((item) => {
             if (isGroup(item)) {
               const Icon = item.icon
-              const groupActive = isNewsSection
+              const groupActive = item.children.some((c) => c.path === activePath)
+              const isOpen = openGroups[item.path] ?? groupActive
               return (
                 <div key={item.path} className="space-y-1">
                   <div
@@ -148,18 +187,23 @@ export default function AdminLayout() {
                     </Link>
                     <button
                       type="button"
-                      onClick={() => setNewsOpen((v) => !v)}
+                      onClick={() =>
+                        setOpenGroups((prev) => ({
+                          ...prev,
+                          [item.path]: !(prev[item.path] ?? false),
+                        }))
+                      }
                       className="p-1 rounded-lg hover:bg-black/5 dark:hover:bg-white/10"
-                      aria-label={newsOpen ? '折叠新闻管理' : '展开新闻管理'}
-                      aria-expanded={newsOpen}
+                      aria-label={isOpen ? `折叠${item.label}` : `展开${item.label}`}
+                      aria-expanded={isOpen}
                     >
                       <ChevronRight
-                        className={`h-4 w-4 transition-transform ${newsOpen ? 'rotate-90' : ''}`}
+                        className={`h-4 w-4 transition-transform ${isOpen ? 'rotate-90' : ''}`}
                       />
                     </button>
                   </div>
 
-                  {newsOpen ? (
+                  {isOpen ? (
                     <div className="pl-4">
                       {item.children.map(({ icon: ChildIcon, label, path }) => {
                         const isActive = activePath === path

@@ -2,6 +2,7 @@
 import logging
 
 from typing_extensions import TypedDict
+
 import secrets
 from datetime import datetime, timedelta
 

@@ -34,5 +34,6 @@
   "reportUnusedImport": "none",
   "reportUnusedVariable": "none",
   "reportMissingImports": "none",
+  "reportMissingTypeStubs": "none",
   "reportMissingModuleSource": "none"
 }

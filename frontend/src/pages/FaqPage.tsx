@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { HelpCircle, ChevronDown, ChevronUp, ArrowRight } from 'lucide-react'
+import { HelpCircle, ChevronDown, ChevronUp, ArrowRight, MessageSquare } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -80,11 +80,18 @@ export default function FaqPage() {
         description="来自真实咨询反馈的高频问答，帮助你更快了解常见法律问题"
         tone={actualTheme}
         right={
-          <Link to="/chat">
-            <Button icon={ArrowRight} className="bg-emerald-600 hover:bg-emerald-700 text-white focus-visible:ring-emerald-500/25">
-              去咨询 AI
-            </Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link to="/feedback">
+              <Button variant="outline" icon={MessageSquare}>
+                提交工单
+              </Button>
+            </Link>
+            <Link to="/chat">
+              <Button icon={ArrowRight} className="bg-emerald-600 hover:bg-emerald-700 text-white focus-visible:ring-emerald-500/25">
+                去咨询 AI
+              </Button>
+            </Link>
+          </div>
         }
       />
 

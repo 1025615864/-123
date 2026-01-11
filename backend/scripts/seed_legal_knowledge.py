@@ -1,10 +1,14 @@
 """填充法律知识库数据"""
+import argparse
 import asyncio
 import sys
 import os
+import re
 
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import AsyncSessionLocal, init_db
 from app.models.knowledge import LegalKnowledge
@@ -334,56 +338,105 @@ LEGAL_KNOWLEDGE_DATA = [
 ]
 
 
-async def seed_legal_knowledge():
-    """填充法律知识数据"""
-    await init_db()
-    
-    async with AsyncSessionLocal() as session:
-        # 检查是否已有数据
-        from sqlalchemy import select, func
-        count_result = await session.execute(
-            select(func.count()).select_from(LegalKnowledge)
-        )
-        existing_count = count_result.scalar() or 0
-        
-        if existing_count > 0:
-            print(f"法律知识库已有 {existing_count} 条数据")
-            user_input = input("是否清空并重新填充? (y/n): ")
-            if user_input.lower() != 'y':
-                print("取消操作")
-                return
-            
-            # 清空现有数据
-            await session.execute(LegalKnowledge.__table__.delete())
-            await session.commit()
-            print("已清空现有数据")
-        
-        # 插入新数据
-        for item in LEGAL_KNOWLEDGE_DATA:
-            knowledge = LegalKnowledge(
-                title=item["title"],
-                category=item["category"],
-                subcategory=item.get("subcategory"),
-                content=item["content"],
-                keywords=item.get("keywords"),
-                source=item.get("source"),
-                is_active=True
-            )
-            session.add(knowledge)
-        
+async def seed_law_knowledge(session: AsyncSession, *, reset: bool = False) -> dict[str, int]:
+    from sqlalchemy import delete, func, select
+
+    if reset:
+        await session.execute(delete(LegalKnowledge).where(LegalKnowledge.knowledge_type == "law"))
         await session.commit()
-        print(f"成功填充 {len(LEGAL_KNOWLEDGE_DATA)} 条法律知识数据")
-        
-        # 统计各分类数量
-        print("\n各分类数量统计:")
-        categories = {}
-        for item in LEGAL_KNOWLEDGE_DATA:
-            cat = item["category"]
-            categories[cat] = categories.get(cat, 0) + 1
-        
-        for cat, count in sorted(categories.items()):
-            print(f"  {cat}: {count} 条")
+
+    def _parse_article_number(title: str) -> str | None:
+        s = str(title or "").strip()
+        if not s:
+            return None
+        m = re.search(r"(第[一二三四五六七八九十百千万零0-9]+条)", s)
+        return str(m.group(1)) if m else None
+
+    created = 0
+    updated = 0
+    for item in LEGAL_KNOWLEDGE_DATA:
+        title = str(item.get("title") or "").strip()
+        if not title:
+            continue
+        category = str(item.get("category") or "").strip() or "general"
+        content = str(item.get("content") or "").strip()
+        if not content:
+            continue
+
+        existing = (
+            await session.execute(
+                select(LegalKnowledge).where(
+                    LegalKnowledge.knowledge_type == "law",
+                    LegalKnowledge.title == title,
+                )
+            )
+        ).scalar_one_or_none()
+
+        summary = str(item.get("subcategory") or "").strip() or None
+        keywords = str(item.get("keywords") or "").strip() or None
+        source = str(item.get("source") or "").strip() or None
+        article_number = _parse_article_number(title)
+
+        if existing is None:
+            session.add(
+                LegalKnowledge(
+                    knowledge_type="law",
+                    title=title,
+                    article_number=article_number,
+                    content=content,
+                    summary=summary,
+                    category=category,
+                    keywords=keywords,
+                    source=source,
+                    is_vectorized=False,
+                    vector_id=None,
+                    is_active=True,
+                    weight=1.0,
+                )
+            )
+            created += 1
+        else:
+            existing.category = category
+            existing.content = content
+            existing.summary = summary
+            existing.keywords = keywords
+            existing.source = source
+            existing.article_number = article_number
+            existing.is_active = True
+            session.add(existing)
+            updated += 1
+
+    await session.commit()
+
+    count_result = await session.execute(
+        select(func.count()).select_from(LegalKnowledge).where(LegalKnowledge.knowledge_type == "law")
+    )
+    total = int(count_result.scalar() or 0)
+
+    return {"created": int(created), "updated": int(updated), "total": int(total)}
+
+
+async def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--reset", action="store_true")
+    args = parser.parse_args()
+
+    await init_db()
+
+    async with AsyncSessionLocal() as session:
+        res = await seed_law_knowledge(session, reset=bool(args.reset))
+        print(
+            f"成功填充/更新法律知识数据：新增 {res['created']}，更新 {res['updated']}，当前总数 {res['total']}"
+        )
+
+    print("\n各分类数量统计:")
+    categories = {}
+    for item in LEGAL_KNOWLEDGE_DATA:
+        cat = item["category"]
+        categories[cat] = categories.get(cat, 0) + 1
+    for cat, count in sorted(categories.items()):
+        print(f"  {cat}: {count} 条")
 
 
 if __name__ == "__main__":
-    asyncio.run(seed_legal_knowledge())
+    asyncio.run(main())

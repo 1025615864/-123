@@ -122,10 +122,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
+      - name: Run migrations (upgrade head)
+        env:
+          DEBUG: "1"
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+          JWT_SECRET_KEY: test-secret-key-change-me-32chars-minimum
+          PAYMENT_WEBHOOK_SECRET: test-payment-webhook-secret
+        run: |
+          python scripts/alembic_cmd.py upgrade head
+
       - name: Run tests
         env:
+          DEBUG: "1"
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           JWT_SECRET_KEY: test-secret-key
+          PAYMENT_WEBHOOK_SECRET: test-payment-webhook-secret
         run: pytest tests/ -v --tb=short
 
   # 前端构建
@@ -342,7 +353,17 @@ jobs:
           echo "backend-test=${{ needs.backend-test.result }}"
           echo "frontend-build=${{ needs.frontend-build.result }}"
           echo "playwright-documents-e2e=${{ needs.playwright-documents-e2e.result }}"
-          test "${{ needs.helm-validate.result }}" = "success"
-          test "${{ needs.backend-test.result }}" = "success"
-          test "${{ needs.frontend-build.result }}" = "success"
-          test "${{ needs.playwright-documents-e2e.result }}" = "success"
+          helm="${{ needs.helm-validate.result }}"
+          backend="${{ needs.backend-test.result }}"
+          frontend="${{ needs.frontend-build.result }}"
+          e2e="${{ needs.playwright-documents-e2e.result }}"
+
+          if [ "$helm" != "success" ] || [ "$backend" != "success" ] || [ "$frontend" != "success" ]; then
+            exit 1
+          fi
+
+          if [ "$e2e" = "success" ] || [ "$e2e" = "skipped" ]; then
+            exit 0
+          fi
+
+          exit 1

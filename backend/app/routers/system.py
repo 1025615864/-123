@@ -651,7 +651,12 @@ async def get_metrics(
             if not k:
                 continue
             try:
-                error_code_counts[k] = int(v_obj)  # type: ignore[arg-type]
+                if isinstance(v_obj, (int, float)) and not isinstance(v_obj, bool):
+                    error_code_counts[k] = int(v_obj)
+                elif isinstance(v_obj, str):
+                    error_code_counts[k] = int(float(v_obj.strip() or "0"))
+                else:
+                    continue
             except Exception:
                 continue
 
@@ -662,7 +667,12 @@ async def get_metrics(
             if not k:
                 continue
             try:
-                endpoint_error_counts[k] = int(v_obj)  # type: ignore[arg-type]
+                if isinstance(v_obj, (int, float)) and not isinstance(v_obj, bool):
+                    endpoint_error_counts[k] = int(v_obj)
+                elif isinstance(v_obj, str):
+                    endpoint_error_counts[k] = int(float(v_obj.strip() or "0"))
+                else:
+                    continue
             except Exception:
                 continue
 
@@ -1075,9 +1085,53 @@ async def get_ai_feedback_stats(
     db: Annotated[AsyncSession, Depends(get_db)],
     days: Annotated[int, Query(ge=1, le=365, description="统计天数")] = 30,
     limit: Annotated[int, Query(ge=1, le=50, description="最近反馈条数")] = 20,
-):
+) -> dict[str, object]:
     """获取AI反馈统计"""
     since_dt = datetime.now(timezone.utc) - timedelta(days=int(days))
+
+    def _as_int(value: object | None, default: int = 0) -> int:
+        if value is None:
+            return int(default)
+        if isinstance(value, bool):
+            return int(default)
+        if isinstance(value, int):
+            return int(value)
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            s = value.strip()
+            if not s:
+                return int(default)
+            try:
+                return int(float(s))
+            except Exception:
+                return int(default)
+        return int(default)
+
+    def _prompt_version_from_references(refs_text: object | None) -> str:
+        raw = "" if refs_text is None else str(refs_text)
+        s = raw.strip()
+        if not s:
+            return "v1"
+        try:
+            obj = cast(object, json.loads(s))
+            if isinstance(obj, dict):
+                obj_dict = cast(dict[str, object], obj)
+                meta_obj = obj_dict.get("meta")
+                if isinstance(meta_obj, dict):
+                    meta = cast(dict[str, object], meta_obj)
+                    pv_obj = meta.get("prompt_version")
+                    if isinstance(pv_obj, str) and pv_obj.strip():
+                        return pv_obj.strip()
+                pv2_obj = obj_dict.get("prompt_version")
+                if isinstance(pv2_obj, str) and pv2_obj.strip():
+                    return pv2_obj.strip()
+                return "v1"
+            if isinstance(obj, list):
+                return "v1"
+        except Exception:
+            return "v1"
+        return "v1"
 
     consultations_total = await db.scalar(
         select(func.count()).select_from(Consultation).where(Consultation.created_at >= since_dt)
@@ -1118,6 +1172,178 @@ async def get_ai_feedback_stats(
         select(func.count()).select_from(ChatMessage).where(and_(rated_filter, ChatMessage.rating == 1))
     )
 
+    pv_rows = await db.execute(
+        select(ChatMessage.rating, ChatMessage.references).where(rated_filter)
+    )
+    pv_stats: dict[str, dict[str, int]] = {}
+    for row in pv_rows.all():
+        rating_any, references_any = row
+        pv = _prompt_version_from_references(references_any)
+        st = pv_stats.get(pv)
+        if st is None:
+            st = {"total_rated": 0, "good": 0, "neutral": 0, "bad": 0}
+            pv_stats[pv] = st
+        st["total_rated"] += 1
+        r = _as_int(rating_any, 0)
+        if r == 3:
+            st["good"] += 1
+        elif r == 2:
+            st["neutral"] += 1
+        elif r == 1:
+            st["bad"] += 1
+
+    by_prompt_version: list[dict[str, object]] = []
+    for pv, st in pv_stats.items():
+        total = int(st.get("total_rated", 0))
+        good = int(st.get("good", 0))
+        sr = round(good / max(total, 1) * 100, 1)
+        by_prompt_version.append(
+            {
+                "prompt_version": str(pv),
+                "total_rated": total,
+                "good": good,
+                "neutral": int(st.get("neutral", 0)),
+                "bad": int(st.get("bad", 0)),
+                "satisfaction_rate": float(sr),
+            }
+        )
+    by_prompt_version = sorted(
+        by_prompt_version,
+        key=lambda x: (-_as_int(x.get("total_rated"), 0), str(x.get("prompt_version") or "")),
+    )
+
+    tag_scan_limit = max(200, min(2000, int(limit) * 50))
+    tag_rows = await db.execute(
+        select(ChatMessage.rating, ChatMessage.feedback)
+        .where(and_(rated_filter, ChatMessage.feedback.isnot(None)))
+        .order_by(desc(ChatMessage.created_at))
+        .limit(tag_scan_limit)
+    )
+
+    def _extract_reason_tags(feedback: str) -> list[str]:
+        s = str(feedback or "").strip()
+        if not s:
+            return []
+
+        m = re.search(r"原因\s*[:：]\s*([^；\n\r]+)", s)
+        if not m:
+            return []
+
+        raw = str(m.group(1) or "").strip()
+        if not raw:
+            return []
+
+        parts = re.split(r"\s*(?:/|\||｜|、|,|，|;|；)\s*", raw)
+        out: list[str] = []
+        seen: set[str] = set()
+        for p in parts:
+            tag = str(p or "").strip()
+            if not tag:
+                continue
+            if len(tag) > 30:
+                tag = tag[:30]
+            key = tag.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(tag)
+            if len(out) >= 8:
+                break
+        return out
+
+    tag_stats: dict[str, dict[str, int]] = {}
+    scanned = 0
+    for row in tag_rows.all():
+        rating, feedback = row
+        fb = str(feedback or "").strip()
+        if not fb:
+            continue
+        scanned += 1
+        tags = _extract_reason_tags(fb)
+        if not tags:
+            continue
+
+        r = _as_int(rating, 0)
+        for tag in tags:
+            item = tag_stats.get(tag)
+            if item is None:
+                item = {"count": 0, "good": 0, "neutral": 0, "bad": 0}
+                tag_stats[tag] = item
+            item["count"] += 1
+            if r == 3:
+                item["good"] += 1
+            elif r == 2:
+                item["neutral"] += 1
+            elif r == 1:
+                item["bad"] += 1
+
+    top_tags = sorted(
+        (
+            {
+                "tag": tag,
+                "count": counts.get("count", 0),
+                "good": counts.get("good", 0),
+                "neutral": counts.get("neutral", 0),
+                "bad": counts.get("bad", 0),
+            }
+            for tag, counts in tag_stats.items()
+        ),
+        key=lambda x: (-int(x.get("count") or 0), str(x.get("tag") or "")),
+    )
+    top_tags = list(top_tags)[:20]
+
+    suggestion_map: dict[str, dict[str, str]] = {
+        "不准确": {
+            "title": "提升准确性",
+            "action": "检查检索/引用链路与回答模板：强化结论前的依据校验，必要时提示不确定并引导补充信息。",
+        },
+        "缺少依据": {
+            "title": "补齐依据与引用",
+            "action": "在回答模板中增加“依据/法条/裁判要旨”段落，优先给出可核验来源，并提示用户如何自查原文。",
+        },
+        "答非所问": {
+            "title": "减少答非所问",
+            "action": "在输出前做问题复述与意图确认；当信息不足时先输出澄清问题而不是直接下结论。",
+        },
+        "不够具体": {
+            "title": "提升可执行性",
+            "action": "增加“下一步行动清单/所需材料/时效期限”结构化输出，按场景给到可执行步骤。",
+        },
+        "太泛泛": {
+            "title": "降低泛泛而谈",
+            "action": "对常见问题引入更细分的场景模板（地区/金额/主体关系），并在输出中给出分支条件。",
+        },
+        "看不懂": {
+            "title": "提升可读性",
+            "action": "使用更短句+分点；对术语做括号解释；优先给出结论摘要，再展开细节与风险提示。",
+        },
+    }
+
+    improvement_suggestions: list[dict[str, object]] = []
+    scored_tags = sorted(
+        tag_stats.items(),
+        key=lambda kv: (-(kv[1].get("bad", 0) * 2 + kv[1].get("neutral", 0)), kv[0]),
+    )
+    for tag, counts in scored_tags:
+        tpl = suggestion_map.get(tag)
+        if tpl is None:
+            continue
+        if (counts.get("bad", 0) + counts.get("neutral", 0)) <= 0:
+            continue
+        improvement_suggestions.append(
+            {
+                "tag": tag,
+                "count": int(counts.get("count", 0)),
+                "good": int(counts.get("good", 0)),
+                "neutral": int(counts.get("neutral", 0)),
+                "bad": int(counts.get("bad", 0)),
+                "title": str(tpl.get("title") or ""),
+                "action": str(tpl.get("action") or ""),
+            }
+        )
+        if len(improvement_suggestions) >= 6:
+            break
+
     recent_rows = await db.execute(
         select(
             ChatMessage.id,
@@ -1125,6 +1351,7 @@ async def get_ai_feedback_stats(
             ChatMessage.rating,
             ChatMessage.feedback,
             ChatMessage.created_at,
+            ChatMessage.references,
             Consultation.user_id,
         )
         .join(Consultation, ChatMessage.consultation_id == Consultation.id)
@@ -1135,13 +1362,14 @@ async def get_ai_feedback_stats(
 
     recent_ratings: list[dict[str, object]] = []
     for row in recent_rows.all():
-        message_id, consultation_id, rating, feedback, created_at, user_id = row
+        message_id, consultation_id, rating, feedback, created_at, references, user_id = row
         created_at_iso = None
         if created_at is not None:
             try:
                 created_at_iso = created_at.isoformat()
             except Exception:
                 created_at_iso = str(created_at)
+        pv = _prompt_version_from_references(references)
         recent_ratings.append(
             {
                 "message_id": int(message_id),
@@ -1150,6 +1378,7 @@ async def get_ai_feedback_stats(
                 "rating": int(rating) if rating is not None else None,
                 "feedback": str(feedback) if feedback is not None else None,
                 "created_at": created_at_iso,
+                "prompt_version": str(pv),
             }
         )
 
@@ -1171,7 +1400,11 @@ async def get_ai_feedback_stats(
         "bad": int(bad_count or 0),
         "satisfaction_rate": float(satisfaction_rate),
         "rating_rate": float(rating_rate),
+        "by_prompt_version": by_prompt_version,
         "recent_ratings": recent_ratings,
+        "top_tags": top_tags,
+        "tag_messages_scanned": int(scanned),
+        "improvement_suggestions": improvement_suggestions,
     }
 
 
@@ -1207,11 +1440,13 @@ async def get_public_faq(
     items: list[FaqItem] = []
     updated_at: str | None = None
     if config is not None:
-        if config.updated_at is not None:
+        try:
+            updated_at = config.updated_at.isoformat()
+        except Exception:
             try:
-                updated_at = config.updated_at.isoformat()
-            except Exception:
                 updated_at = str(config.updated_at)
+            except Exception:
+                updated_at = None
 
         raw = str(config.value or "").strip()
         if raw:
@@ -1246,7 +1481,6 @@ async def generate_faq(
 
     top_rows = await db.execute(
         select(
-            ChatMessage.id,
             ChatMessage.consultation_id,
             ChatMessage.content,
             ChatMessage.created_at,
@@ -1265,13 +1499,14 @@ async def generate_faq(
     items: list[FaqItem] = []
     seen_questions: set[str] = set()
     for row in top_rows.all():
-        message_id, consultation_id, answer, created_at = row
+        consultation_id, answer, created_at = row
 
         ans = str(answer or "").strip()
         if not ans:
             continue
 
-        if created_at is None:
+        created_at_dt = cast(datetime | None, created_at)
+        if created_at_dt is None:
             continue
 
         q_res = await db.execute(
@@ -1280,7 +1515,7 @@ async def generate_faq(
                 and_(
                     ChatMessage.consultation_id == int(consultation_id),
                     ChatMessage.role == "user",
-                    ChatMessage.created_at <= created_at,
+                    ChatMessage.created_at <= created_at_dt,
                 )
             )
             .order_by(desc(ChatMessage.created_at), desc(ChatMessage.id))
@@ -1689,7 +1924,27 @@ async def get_hot_content(
         for r_id, r_title, r_views in news_items
     ]
 
-    items = sorted(posts + news, key=lambda x: cast(int, x.get("views", 0)), reverse=True)
+    def _views_of(item: dict[str, object]) -> int:
+        v: object | None = item.get("views")
+        if v is None:
+            return 0
+        if isinstance(v, bool):
+            return 0
+        if isinstance(v, int):
+            return v
+        if isinstance(v, float):
+            return int(v)
+        if isinstance(v, str):
+            s = v.strip()
+            if not s:
+                return 0
+            try:
+                return int(float(s))
+            except Exception:
+                return 0
+        return 0
+
+    items = sorted(posts + news, key=_views_of, reverse=True)
     return {"items": items[:limit]}
 
 

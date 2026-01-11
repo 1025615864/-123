@@ -23,13 +23,14 @@ tiktoken>=0.7.0
 
 # Utilities
 python-dotenv>=1.0.0
-packaging>=23.2,<25
 pydantic[email]>=2.7.0
 pydantic-settings>=2.2.0
 typing-extensions>=4.8.0
 httpx>=0.27.0
 redis>=5.0.0
 cryptography>=42.0.0
+boto3>=1.34.0
+sentry-sdk[fastapi]>=2.0.0
 
 # Document Processing
 pypdf==3.17.1

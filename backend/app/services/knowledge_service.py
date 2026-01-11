@@ -1,6 +1,8 @@
 """知识库服务"""
+import hashlib
 import json
 import logging
+import uuid
 from typing import cast
 
 from sqlalchemy import select, func, delete, CursorResult
@@ -22,6 +24,28 @@ logger = logging.getLogger(__name__)
 
 class KnowledgeService:
     """知识库服务"""
+
+    def _compute_source_hash(
+        self,
+        *,
+        knowledge_type: str,
+        title: str,
+        article_number: str | None,
+        content: str,
+        source_url: str | None,
+        source_version: str | None,
+    ) -> str:
+        raw = "|".join(
+            [
+                str(knowledge_type or "").strip(),
+                str(title or "").strip(),
+                str(article_number or "").strip(),
+                str(content or "").strip(),
+                str(source_url or "").strip(),
+                str(source_version or "").strip(),
+            ]
+        )
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
     
     # === 法律知识 CRUD ===
     
@@ -31,6 +55,17 @@ class KnowledgeService:
         data: LegalKnowledgeCreate
     ) -> LegalKnowledge:
         """创建法律知识"""
+        source_hash = (
+            str(getattr(data, "source_hash", "") or "").strip()
+            or self._compute_source_hash(
+                knowledge_type=data.knowledge_type.value,
+                title=str(data.title),
+                article_number=data.article_number,
+                content=str(data.content),
+                source_url=getattr(data, "source_url", None),
+                source_version=getattr(data, "source_version", None),
+            )
+        )
         knowledge = LegalKnowledge(
             knowledge_type=data.knowledge_type.value,
             title=data.title,
@@ -40,6 +75,10 @@ class KnowledgeService:
             category=data.category,
             keywords=data.keywords,
             source=data.source,
+            source_url=getattr(data, "source_url", None),
+            source_version=getattr(data, "source_version", None),
+            source_hash=source_hash,
+            ingest_batch_id=getattr(data, "ingest_batch_id", None),
             effective_date=data.effective_date,
             weight=data.weight,
             is_active=data.is_active,
@@ -170,6 +209,7 @@ class KnowledgeService:
         db: AsyncSession,
         items: list[LegalKnowledgeCreate],
     ) -> tuple[int, int]:
+        batch_id = str(uuid.uuid4())
         success = 0
         failed = 0
 
@@ -189,6 +229,17 @@ class KnowledgeService:
                 existing = existing_res.scalar_one_or_none()
 
                 if existing is None:
+                    item_source_hash = (
+                        str(getattr(item, "source_hash", "") or "").strip()
+                        or self._compute_source_hash(
+                            knowledge_type=kt,
+                            title=title,
+                            article_number=article_number,
+                            content=str(item.content),
+                            source_url=getattr(item, "source_url", None),
+                            source_version=getattr(item, "source_version", None),
+                        )
+                    )
                     knowledge = LegalKnowledge(
                         knowledge_type=kt,
                         title=title,
@@ -198,6 +249,10 @@ class KnowledgeService:
                         category=item.category,
                         keywords=item.keywords,
                         source=item.source,
+                        source_url=getattr(item, "source_url", None),
+                        source_version=getattr(item, "source_version", None),
+                        source_hash=item_source_hash,
+                        ingest_batch_id=(getattr(item, "ingest_batch_id", None) or batch_id),
                         effective_date=item.effective_date,
                         weight=item.weight,
                         is_active=item.is_active,
@@ -209,6 +264,20 @@ class KnowledgeService:
                     existing.category = item.category
                     existing.keywords = item.keywords
                     existing.source = item.source
+                    existing.source_url = getattr(item, "source_url", None)
+                    existing.source_version = getattr(item, "source_version", None)
+                    existing.source_hash = (
+                        str(getattr(item, "source_hash", "") or "").strip()
+                        or self._compute_source_hash(
+                            knowledge_type=kt,
+                            title=title,
+                            article_number=article_number,
+                            content=str(item.content),
+                            source_url=getattr(item, "source_url", None),
+                            source_version=getattr(item, "source_version", None),
+                        )
+                    )
+                    existing.ingest_batch_id = getattr(item, "ingest_batch_id", None) or batch_id
                     existing.effective_date = item.effective_date
                     existing.weight = item.weight
                     existing.is_active = item.is_active
@@ -263,6 +332,11 @@ class KnowledgeService:
                 "article": knowledge.article_number or "",
                 "content": knowledge.content,
                 "source": knowledge.source or knowledge.category,
+                "knowledge_id": int(knowledge.id),
+                "source_url": getattr(knowledge, "source_url", None),
+                "source_version": getattr(knowledge, "source_version", None),
+                "source_hash": getattr(knowledge, "source_hash", None),
+                "ingest_batch_id": getattr(knowledge, "ingest_batch_id", None),
             }
             
             kb.add_law_documents([doc])

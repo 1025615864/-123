@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, Navigate, useLocation } from 'react-router-dom'
+import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   MessageSquare,
   Clock,
@@ -15,8 +16,20 @@ import {
 } from 'lucide-react'
 import api from '../api/client'
 import { useAppMutation, useToast } from '../hooks'
-import { Card, Button, EmptyState, Input, ListSkeleton, Modal, ModalActions } from '../components/ui'
+import {
+  Card,
+  Button,
+  EmptyState,
+  Input,
+  ListSkeleton,
+  Modal,
+  ModalActions,
+  SideBySideModal,
+  Badge,
+} from '../components/ui'
 import PageHeader from '../components/PageHeader'
+import PaymentMethodPicker, { type PaymentMethod } from '../components/PaymentMethodPicker'
+import MarkdownContent from '../components/MarkdownContent'
 import { useAuth } from '../contexts/AuthContext'
 import { useTheme } from '../contexts/ThemeContext'
 import { getApiErrorMessage } from '../utils'
@@ -28,6 +41,7 @@ interface ExportMessage {
   content: string
   created_at: string | null
   references?: Array<{ law_name: string; article: string; content: string }>
+  references_meta?: Record<string, any>
 }
 
 function useDebouncedValue<T>(value: T, delayMs: number): T {
@@ -52,6 +66,47 @@ interface ShareLinkResponse {
   token: string
   share_path: string
   expires_at: string
+}
+
+type PaymentChannelStatus = {
+  alipay_configured: boolean
+  wechatpay_configured: boolean
+  ikunpay_configured: boolean
+  available_methods: string[]
+}
+
+type PricingResp = {
+  services?: {
+    light_consult_review?: {
+      price?: number
+    }
+  }
+}
+
+type ConsultationReviewTaskItem = {
+  id: number
+  consultation_id: number
+  user_id: number
+  order_no: string
+  status: string
+  lawyer_id: number | null
+  result_markdown: string | null
+  claimed_at: string | null
+  submitted_at: string | null
+  created_at: string
+  updated_at: string
+  latest_version?: {
+    id: number
+    task_id: number
+    editor_user_id: number
+    editor_role: string
+    content_markdown: string
+    created_at: string
+  } | null
+}
+
+type ConsultationReviewTaskDetailResponse = {
+  task: ConsultationReviewTaskItem | null
 }
 
  function sanitizeDownloadFilename(filename: string): string {
@@ -90,6 +145,8 @@ export default function ChatHistoryPage() {
   const { actualTheme } = useTheme()
   const { isAuthenticated } = useAuth()
   const location = useLocation()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
 
   const [q, setQ] = useState('')
   const [rangeDays, setRangeDays] = useState<0 | 7 | 30>(0)
@@ -104,8 +161,54 @@ export default function ChatHistoryPage() {
   const [activeDeleteId, setActiveDeleteId] = useState<string | null>(null)
   const [exportingId, setExportingId] = useState<string | null>(null)
 
+  const [reviewPurchaseOpen, setReviewPurchaseOpen] = useState(false)
+  const [reviewPurchaseTarget, setReviewPurchaseTarget] = useState<ConsultationItem | null>(null)
+  const [showReviewPaymentPanel, setShowReviewPaymentPanel] = useState(false)
+  const [paymentGuideOpen, setPaymentGuideOpen] = useState(false)
+  const [paymentGuideOrderNo, setPaymentGuideOrderNo] = useState<string | null>(null)
+  const [paymentGuideConsultationId, setPaymentGuideConsultationId] = useState<number | null>(null)
+
   const debouncedQ = useDebouncedValue(q, 300)
   const { query: consultationsQuery } = useAiConsultationsQuery(isAuthenticated, debouncedQ)
+
+  const pricingQuery = useQuery({
+    queryKey: ['payment-pricing'] as const,
+    queryFn: async () => {
+      const res = await api.get('/payment/pricing')
+      return (res.data || {}) as PricingResp
+    },
+    enabled: isAuthenticated,
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  })
+
+  const channelStatusQuery = useQuery({
+    queryKey: queryKeys.paymentChannelStatus(),
+    queryFn: async () => {
+      const res = await api.get('/payment/channel-status')
+      return (res.data || {}) as PaymentChannelStatus
+    },
+    enabled: isAuthenticated,
+    retry: 1,
+    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  })
+
+  const reviewTaskQuery = useQuery({
+    queryKey: queryKeys.consultationReviewTask(previewTarget?.id ?? null),
+    queryFn: async () => {
+      const consultationId = previewTarget?.id
+      if (!consultationId) return { task: null } satisfies ConsultationReviewTaskDetailResponse
+      const res = await api.get(`/reviews/consultations/${consultationId}`)
+      return (res.data || { task: null }) as ConsultationReviewTaskDetailResponse
+    },
+    enabled: isAuthenticated && previewOpen && !!previewTarget?.id,
+    retry: 1,
+    refetchOnWindowFocus: false,
+    placeholderData: (prev) => prev,
+  })
 
   useEffect(() => {
     if (!consultationsQuery.error) return
@@ -187,6 +290,49 @@ export default function ChatHistoryPage() {
     setPreviewData(null)
     setPreviewLoading(false)
   }
+
+  const openReviewPurchase = (consultation: ConsultationItem) => {
+    setReviewPurchaseTarget(consultation)
+    setReviewPurchaseOpen(true)
+    setShowReviewPaymentPanel(false)
+  }
+
+  const closeReviewPurchase = () => {
+    setReviewPurchaseOpen(false)
+    setShowReviewPaymentPanel(false)
+    setReviewPurchaseTarget(null)
+  }
+
+  const openPaymentGuide = (orderNo: string | null, consultationId: number | null) => {
+    setPaymentGuideOrderNo(orderNo)
+    setPaymentGuideConsultationId(consultationId)
+    setPaymentGuideOpen(true)
+  }
+
+  const buyReviewMutation = useAppMutation<
+    { order_no: string; pay_url?: string },
+    { consultation_id: number; payment_method: PaymentMethod }
+  >({
+    mutationFn: async ({ consultation_id, payment_method }) => {
+      const createRes = await api.post('/payment/orders', {
+        order_type: 'light_consult_review',
+        amount: 0.01,
+        title: 'AI咨询律师复核',
+        description: 'AI咨询律师复核',
+        related_id: consultation_id,
+        related_type: 'ai_consultation',
+      })
+      const orderNo = String(createRes.data?.order_no || '').trim()
+      if (!orderNo) throw new Error('未获取到订单号')
+
+      const payRes = await api.post(`/payment/orders/${encodeURIComponent(orderNo)}/pay`, {
+        payment_method,
+      })
+      return { order_no: orderNo, ...(payRes.data || {}) } as { order_no: string; pay_url?: string }
+    },
+    errorMessageFallback: '购买失败，请稍后重试',
+    disableErrorToast: true,
+  })
 
   const openPreview = async (consultation: ConsultationItem) => {
     setPreviewTarget(consultation)
@@ -412,12 +558,16 @@ export default function ChatHistoryPage() {
         refsHTML = `
           <div style="margin-top: 12px; padding: 12px; background: #f8fafc; border-radius: 8px; border-left: 3px solid #f59e0b;">
             <p style="font-weight: 600; margin-bottom: 8px; color: #64748b;">📚 相关法条：</p>
-            ${msg.references.map(ref => `
+            ${msg.references
+              .map(
+                (ref) => `
               <div style="margin-bottom: 8px;">
                 <p style="font-weight: 500; color: #1e293b;">${ref.law_name} ${ref.article}</p>
                 <p style="color: #475569; font-size: 14px;">${ref.content}</p>
               </div>
-            `).join('')}
+            `
+              )
+              .join('')}
           </div>
         `
       }
@@ -846,6 +996,74 @@ export default function ChatHistoryPage() {
               )}
             </div>
 
+            <div>
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-sm font-semibold text-slate-900 dark:text-white">律师复核</div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={reviewTaskQuery.isFetching}
+                  onClick={() => {
+                    reviewTaskQuery.refetch()
+                  }}
+                >
+                  刷新
+                </Button>
+              </div>
+
+              {reviewTaskQuery.isLoading ? (
+                <div className="mt-3 text-sm text-slate-600 dark:text-white/60">加载中…</div>
+              ) : reviewTaskQuery.isError ? (
+                <div className="mt-3 text-sm text-slate-600 dark:text-white/60">加载失败</div>
+              ) : (() => {
+                const task = reviewTaskQuery.data?.task ?? null
+                const reviewPrice = Number(pricingQuery.data?.services?.light_consult_review?.price || 19.9)
+                if (!task) {
+                  return (
+                    <div className="mt-3 rounded-xl border border-slate-200/70 p-4 dark:border-white/10">
+                      <div className="text-sm text-slate-700 dark:text-white/70">暂无律师复核记录</div>
+                      <div className="mt-3">
+                        <Button
+                          onClick={() => {
+                            if (!previewTarget) return
+                            openReviewPurchase(previewTarget)
+                          }}
+                        >
+                          购买律师复核（¥{reviewPrice.toFixed(2)}）
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                }
+
+                const status = String(task.status || '')
+                const s = status.toLowerCase()
+                const statusLabel =
+                  s === 'pending' ? '待领取' : s === 'claimed' ? '处理中' : s === 'submitted' ? '已复核' : status
+                const statusVariant: 'success' | 'info' | 'warning' | 'default' =
+                  s === 'submitted' ? 'success' : s === 'claimed' ? 'info' : s === 'pending' ? 'warning' : 'default'
+
+                return (
+                  <div className="mt-3 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Badge variant={statusVariant} size="sm">
+                        {statusLabel}
+                      </Badge>
+                      <div className="text-xs text-slate-500 dark:text-white/45">订单号：{task.order_no}</div>
+                    </div>
+
+                    {s === 'submitted' && task.result_markdown ? (
+                      <div className="rounded-xl border border-slate-200/70 p-4 dark:border-white/10">
+                        <MarkdownContent content={String(task.result_markdown)} className="text-sm" />
+                      </div>
+                    ) : (
+                      <div className="text-sm text-slate-600 dark:text-white/60">复核结果生成后会在此展示</div>
+                    )}
+                  </div>
+                )
+              })()}
+            </div>
+
             <ModalActions>
               <Button variant="outline" onClick={closePreview}>
                 关闭
@@ -866,6 +1084,203 @@ export default function ChatHistoryPage() {
           </div>
         )}
       </Modal>
+
+      <SideBySideModal
+        isOpen={reviewPurchaseOpen}
+        onClose={() => {
+          if (buyReviewMutation.isPending) return
+          closeReviewPurchase()
+        }}
+        leftTitle="律师复核"
+        leftDescription="为本次 AI 咨询购买律师复核服务"
+        left={
+          <div className="space-y-4">
+            <div className="rounded-xl border border-slate-200/70 bg-slate-900/5 px-4 py-3 text-sm text-slate-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-white/70">
+              <div>咨询：{String(reviewPurchaseTarget?.title || '').trim() || 'AI咨询'}</div>
+              <div className="mt-1">
+                价格：¥
+                {Number(pricingQuery.data?.services?.light_consult_review?.price || 19.9).toFixed(2)}
+              </div>
+            </div>
+
+            <Button
+              type="button"
+              fullWidth
+              disabled={buyReviewMutation.isPending}
+              onClick={() => {
+                setShowReviewPaymentPanel(true)
+              }}
+            >
+              去支付
+            </Button>
+
+            <Button
+              type="button"
+              variant="secondary"
+              fullWidth
+              disabled={buyReviewMutation.isPending}
+              onClick={() => {
+                closeReviewPurchase()
+              }}
+            >
+              取消
+            </Button>
+          </div>
+        }
+        rightTitle={showReviewPaymentPanel ? '选择支付方式' : undefined}
+        rightDescription={
+          showReviewPaymentPanel
+            ? `支付 ¥${Number(pricingQuery.data?.services?.light_consult_review?.price || 19.9).toFixed(2)}`
+            : undefined
+        }
+        right={
+          showReviewPaymentPanel && reviewPurchaseTarget ? (
+            <PaymentMethodPicker
+              busy={buyReviewMutation.isPending}
+              options={(() => {
+                const loadingChannels = !channelStatusQuery.data && channelStatusQuery.isLoading
+                const canAlipay = channelStatusQuery.data?.alipay_configured === true
+                const canIkunpay = channelStatusQuery.data?.ikunpay_configured === true
+                const thirdPartyDisabledReason = loadingChannels ? '加载中' : '未配置'
+
+                return [
+                  {
+                    method: 'balance' as PaymentMethod,
+                    label: '余额支付',
+                    description: '即时生效',
+                    enabled: true,
+                  },
+                  {
+                    method: 'alipay' as PaymentMethod,
+                    label: '支付宝',
+                    description: '跳转到支付宝完成支付',
+                    enabled: canAlipay,
+                    disabledReason: thirdPartyDisabledReason,
+                  },
+                  {
+                    method: 'ikunpay' as PaymentMethod,
+                    label: '爱坤支付',
+                    description: '跳转到爱坤支付完成支付',
+                    enabled: canIkunpay,
+                    disabledReason: thirdPartyDisabledReason,
+                  },
+                ]
+              })()}
+              onBack={() => {
+                if (buyReviewMutation.isPending) return
+                setShowReviewPaymentPanel(false)
+              }}
+              onCancel={() => {
+                if (buyReviewMutation.isPending) return
+                closeReviewPurchase()
+              }}
+              onSelect={(method) => {
+                const target = reviewPurchaseTarget
+                if (!target) return
+
+                closeReviewPurchase()
+
+                buyReviewMutation.mutate(
+                  { consultation_id: intOrZero(target.id), payment_method: method },
+                  {
+                    onSuccess: async (data) => {
+                      const orderNo = String((data as any)?.order_no || '').trim()
+                      if (!orderNo) {
+                        toast.success('下单成功')
+                        return
+                      }
+
+                      if (method !== 'balance') {
+                        const url = String((data as any)?.pay_url || '').trim()
+                        if (url) {
+                          window.open(url, '_blank', 'noopener,noreferrer')
+                          toast.success('已打开支付页面')
+                          openPaymentGuide(orderNo, target.id)
+                        } else {
+                          toast.error('未获取到支付链接')
+                        }
+                        return
+                      }
+
+                      toast.success('购买成功')
+                      queryClient.invalidateQueries({
+                        queryKey: queryKeys.consultationReviewTask(target.id) as any,
+                      })
+                    },
+                    onError: (err) => {
+                      const msg = getApiErrorMessage(err, '购买失败')
+                      if (String(msg).includes('余额不足')) {
+                        toast.warning('余额不足，请先充值')
+                        navigate('/profile?recharge=1')
+                        return
+                      }
+                      toast.error(msg)
+                    },
+                  }
+                )
+              }}
+            />
+          ) : undefined
+        }
+        onRightClose={() => {
+          if (buyReviewMutation.isPending) return
+          setShowReviewPaymentPanel(false)
+        }}
+        zIndexClass="z-[80]"
+      />
+
+      <Modal
+        isOpen={paymentGuideOpen}
+        onClose={() => setPaymentGuideOpen(false)}
+        title="支付提示"
+        description="支付完成后请返回本站刷新复核状态"
+        size="sm"
+        zIndexClass="z-[90]"
+      >
+        <div className="space-y-4">
+          <div className="rounded-xl border border-slate-200/70 bg-slate-900/5 px-4 py-3 text-sm text-slate-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-white/70">
+            <div>1) 在新打开的支付页面完成支付</div>
+            <div className="mt-1">2) 回到本页点击“我已支付，刷新状态”</div>
+          </div>
+
+          <Button
+            fullWidth
+            onClick={async () => {
+              setPaymentGuideOpen(false)
+              const cid = paymentGuideConsultationId
+              if (cid) {
+                await queryClient.invalidateQueries({
+                  queryKey: queryKeys.consultationReviewTask(cid) as any,
+                })
+              }
+              toast.success('已刷新状态')
+            }}
+          >
+            我已支付，刷新状态
+          </Button>
+
+          {paymentGuideOrderNo ? (
+            <Link
+              to={`/payment/return?order_no=${encodeURIComponent(paymentGuideOrderNo)}`}
+              className="block"
+            >
+              <Button variant="outline" fullWidth>
+                去支付结果页查看状态
+              </Button>
+            </Link>
+          ) : null}
+
+          {paymentGuideOrderNo ? (
+            <div className="text-xs text-slate-500 dark:text-white/45">订单号：{paymentGuideOrderNo}</div>
+          ) : null}
+        </div>
+      </Modal>
     </div>
   )
+}
+
+function intOrZero(value: unknown): number {
+  const n = Number(value)
+  if (!Number.isFinite(n) || Number.isNaN(n)) return 0
+  return Math.trunc(n)
 }

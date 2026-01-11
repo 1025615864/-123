@@ -17,6 +17,13 @@ class LawReference(BaseModel):
     content: str = Field(..., description="条款内容")
     relevance: float = Field(..., description="相关度分数")
 
+    source: str | None = Field(None, description="来源")
+    source_url: str | None = Field(None, description="来源链接")
+    source_version: str | None = Field(None, description="来源版本")
+    source_hash: str | None = Field(None, description="来源内容哈希")
+    knowledge_id: int | None = Field(None, description="知识库条目ID")
+    ingest_batch_id: str | None = Field(None, description="导入批次ID")
+
 
 class SearchQualityInfo(BaseModel):
     total_candidates: int = Field(0, description="检索候选数量")
@@ -57,6 +64,8 @@ class MessageResponse(BaseModel):
     role: str
     content: str
     references: str | None = None
+    rating: int | None = None
+    feedback: str | None = None
     created_at: datetime
     
     model_config: ClassVar[ConfigDict] = ConfigDict(from_attributes=True)

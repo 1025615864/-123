@@ -14,12 +14,13 @@ from ..schemas.user import (
     UserCreate, UserLogin, UserUpdate, UserResponse,
     Token, LoginResponse, RegisterResponse, PasswordChange, MessageResponse,
     PasswordResetRequest, PasswordResetConfirm,
+    PasswordResetDebugRequest, PasswordResetDebugResponse,
     EmailVerificationRequestResponse,
     SmsSendRequest,
     SmsVerifyRequest,
     SmsSendResponse,
 )
-from ..schemas.quota import UserQuotaDailyResponse
+from ..schemas.quota import UserQuotaDailyResponse, UserQuotaUsageListResponse
 from ..services.user_service import user_service
 from ..services.forum_service import forum_service
 from ..services.email_service import email_service
@@ -186,6 +187,28 @@ async def get_my_quotas(
 ):
     data = await quota_service.get_today_quota(db, current_user)
     return UserQuotaDailyResponse.model_validate(data)
+
+
+@router.get(
+    "/me/quota-usage",
+    response_model=UserQuotaUsageListResponse,
+    summary="获取配额消耗记录（按天）",
+)
+async def get_my_quota_usage(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    days: Annotated[int, Query(ge=1, le=365)] = 30,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 20,
+):
+    data = await quota_service.list_quota_usage(
+        db,
+        current_user,
+        days=int(days),
+        page=int(page),
+        page_size=int(page_size),
+    )
+    return UserQuotaUsageListResponse.model_validate(data)
 
 
 @router.put("/me", response_model=UserResponse, summary="更新当前用户信息")
@@ -494,6 +517,37 @@ async def admin_update_user_role(
 
 
 # ============ 密码重置 ============
+
+
+@router.post(
+    "/admin/debug/password-reset-token",
+    response_model=PasswordResetDebugResponse,
+    summary="生成密码重置 token（仅调试/E2E）",
+)
+async def admin_debug_password_reset_token(
+    data: PasswordResetDebugRequest,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    _ = current_user
+
+    if not bool(settings.debug):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+    user = await user_service.get_by_email(db, str(data.email))
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="用户不存在")
+
+    reset_token = await email_service.generate_reset_token(int(user.id), str(data.email))
+    base = settings.frontend_base_url.rstrip("/")
+    reset_url = f"{base}/reset-password?token={reset_token}"
+
+    return PasswordResetDebugResponse(
+        message="OK",
+        success=True,
+        token=reset_token,
+        reset_url=reset_url,
+    )
 
 @router.post("/password-reset/request", response_model=MessageResponse, summary="请求密码重置")
 @rate_limit(*RateLimitConfig.AUTH_PASSWORD_RESET, by_ip=True)

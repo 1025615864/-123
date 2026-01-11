@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import * as Sentry from '@sentry/react'
 import App from './App'
 import { ThemeProvider } from './contexts/ThemeContext'
 import { LanguageProvider } from './contexts/LanguageContext'
@@ -11,6 +12,26 @@ import './index.css'
 import { getApiErrorMessage } from './utils'
 
 const toastDedupe = new Map<string, number>()
+
+const sentryDsn = (import.meta.env.VITE_SENTRY_DSN ?? '') as string
+if (sentryDsn && sentryDsn.trim()) {
+  const env = (import.meta.env.VITE_SENTRY_ENVIRONMENT ?? '') as string
+  const release = (import.meta.env.VITE_SENTRY_RELEASE ?? '') as string
+  const tracesRaw = (import.meta.env.VITE_SENTRY_TRACES_SAMPLE_RATE ?? '0') as string
+  let traces = 0
+  try {
+    traces = Math.max(0, Math.min(1, Number(tracesRaw)))
+  } catch {
+    traces = 0
+  }
+
+  Sentry.init({
+    dsn: sentryDsn,
+    environment: env && env.trim() ? env.trim() : undefined,
+    release: release && release.trim() ? release.trim() : undefined,
+    tracesSampleRate: traces,
+  })
+}
 
 function emitToastDeduped(type: 'success' | 'error' | 'info' | 'warning', message: string, dedupeMs = 2500) {
   const key = `${type}:${message}`

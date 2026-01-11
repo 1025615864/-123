@@ -102,6 +102,13 @@ type CallbackEventDetailResponse = CallbackEventItem & {
   masked_payload: string | null;
 };
 
+type PaymentEnvUpdateResponse = {
+  message: string;
+  env_file: string;
+  updated_keys: string[];
+  channel_status: PaymentChannelStatusResponse;
+};
+
 function formatTime(dateStr: string) {
   const date = new Date(dateStr);
   return date.toLocaleString("zh-CN", {
@@ -154,6 +161,11 @@ export default function PaymentCallbacksPage() {
   const [tradeNo, setTradeNo] = useState("");
   const [verified, setVerified] = useState<"" | "true" | "false">("");
 
+  const [q, setQ] = useState("");
+  const [hasError, setHasError] = useState<"" | "true" | "false">("");
+  const [fromTime, setFromTime] = useState("");
+  const [toTime, setToTime] = useState("");
+
   const [statsMinutes, setStatsMinutes] = useState(60);
 
   const [reconcileOrderNo, setReconcileOrderNo] = useState("");
@@ -174,6 +186,37 @@ export default function PaymentCallbacksPage() {
     useState("");
   const [platformCertImportMerge, setPlatformCertImportMerge] = useState(true);
 
+  const [configModalOpen, setConfigModalOpen] = useState(false);
+  const [paymentWebhookSecret, setPaymentWebhookSecret] = useState("");
+  const [alipayAppId, setAlipayAppId] = useState("");
+  const [alipayPublicKey, setAlipayPublicKey] = useState("");
+  const [alipayPrivateKey, setAlipayPrivateKey] = useState("");
+  const [alipayNotifyUrl, setAlipayNotifyUrl] = useState("");
+  const [alipayReturnUrl, setAlipayReturnUrl] = useState("");
+  const [ikunpayPid, setIkunpayPid] = useState("");
+  const [ikunpayKey, setIkunpayKey] = useState("");
+  const [ikunpayNotifyUrl, setIkunpayNotifyUrl] = useState("");
+  const [wechatpayMchId, setWechatpayMchId] = useState("");
+  const [wechatpayMchSerialNo, setWechatpayMchSerialNo] = useState("");
+  const [wechatpayPrivateKey, setWechatpayPrivateKey] = useState("");
+  const [wechatpayApiV3Key, setWechatpayApiV3Key] = useState("");
+
+  const fromTs = useMemo(() => {
+    const v = String(fromTime || "").trim();
+    if (!v) return null;
+    const ms = new Date(v).getTime();
+    if (!Number.isFinite(ms)) return null;
+    return Math.floor(ms / 1000);
+  }, [fromTime]);
+
+  const toTs = useMemo(() => {
+    const v = String(toTime || "").trim();
+    if (!v) return null;
+    const ms = new Date(v).getTime();
+    if (!Number.isFinite(ms)) return null;
+    return Math.floor(ms / 1000);
+  }, [toTime]);
+
   const listQueryKey = useMemo(
     () =>
       queryKeys.adminPaymentCallbackEvents(
@@ -182,9 +225,13 @@ export default function PaymentCallbacksPage() {
         provider.trim(),
         orderNo.trim(),
         tradeNo.trim(),
-        verified
+        verified,
+        q.trim(),
+        hasError,
+        fromTs,
+        toTs
       ),
-    [page, pageSize, provider, orderNo, tradeNo, verified]
+    [page, pageSize, provider, orderNo, tradeNo, verified, q, hasError, fromTs, toTs]
   );
 
   const listQuery = useQuery({
@@ -198,6 +245,10 @@ export default function PaymentCallbacksPage() {
           ...(orderNo.trim() ? { order_no: orderNo.trim() } : {}),
           ...(tradeNo.trim() ? { trade_no: tradeNo.trim() } : {}),
           ...(verified ? { verified: verified === "true" } : {}),
+          ...(q.trim() ? { q: q.trim() } : {}),
+          ...(hasError ? { has_error: hasError === "true" } : {}),
+          ...(fromTs ? { from_ts: fromTs } : {}),
+          ...(toTs ? { to_ts: toTs } : {}),
         },
       });
       const data = res.data;
@@ -366,8 +417,41 @@ export default function PaymentCallbacksPage() {
     setOrderNo("");
     setTradeNo("");
     setVerified("");
+    setQ("");
+    setHasError("");
+    setFromTime("");
+    setToTime("");
     setPage(1);
   };
+
+  const envUpdateMutation = useAppMutation<
+    PaymentEnvUpdateResponse,
+    { items: Array<{ key: string; value: string }> }
+  >({
+    mutationFn: async (payload) => {
+      const res = await api.post("/payment/admin/env", payload);
+      return res.data as PaymentEnvUpdateResponse;
+    },
+    successMessage: "已更新配置",
+    errorMessageFallback: "更新配置失败",
+    onSuccess: () => {
+      setConfigModalOpen(false);
+      setPaymentWebhookSecret("");
+      setAlipayAppId("");
+      setAlipayPublicKey("");
+      setAlipayPrivateKey("");
+      setAlipayNotifyUrl("");
+      setAlipayReturnUrl("");
+      setIkunpayPid("");
+      setIkunpayKey("");
+      setIkunpayNotifyUrl("");
+      setWechatpayMchId("");
+      setWechatpayMchSerialNo("");
+      setWechatpayPrivateKey("");
+      setWechatpayApiV3Key("");
+      channelStatusQuery.refetch();
+    },
+  });
 
   const doReconcile = () => {
     const v = reconcileOrderNo.trim();
@@ -483,6 +567,156 @@ export default function PaymentCallbacksPage() {
         </div>
       </div>
 
+      <Modal
+        isOpen={configModalOpen}
+        onClose={() => {
+          setConfigModalOpen(false);
+        }}
+        title="更新支付配置"
+        description="写入后端 env 文件并热加载；不会回显旧密钥。只填写需要更新的项。"
+        size="lg"
+      >
+        <div className="space-y-4">
+          <Input
+            label="PAYMENT_WEBHOOK_SECRET"
+            value={paymentWebhookSecret}
+            onChange={(e) => setPaymentWebhookSecret(e.target.value)}
+            disabled={envUpdateMutation.isPending}
+            placeholder="留空不修改"
+          />
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <Input
+              label="ALIPAY_APP_ID"
+              value={alipayAppId}
+              onChange={(e) => setAlipayAppId(e.target.value)}
+              disabled={envUpdateMutation.isPending}
+              placeholder="留空不修改"
+            />
+            <Input
+              label="ALIPAY_NOTIFY_URL"
+              value={alipayNotifyUrl}
+              onChange={(e) => setAlipayNotifyUrl(e.target.value)}
+              disabled={envUpdateMutation.isPending}
+              placeholder="留空不修改"
+            />
+            <Input
+              label="ALIPAY_RETURN_URL"
+              value={alipayReturnUrl}
+              onChange={(e) => setAlipayReturnUrl(e.target.value)}
+              disabled={envUpdateMutation.isPending}
+              placeholder="留空不修改"
+            />
+            <Input
+              label="IKUNPAY_PID"
+              value={ikunpayPid}
+              onChange={(e) => setIkunpayPid(e.target.value)}
+              disabled={envUpdateMutation.isPending}
+              placeholder="留空不修改"
+            />
+            <Input
+              label="IKUNPAY_NOTIFY_URL"
+              value={ikunpayNotifyUrl}
+              onChange={(e) => setIkunpayNotifyUrl(e.target.value)}
+              disabled={envUpdateMutation.isPending}
+              placeholder="留空不修改"
+            />
+            <Input
+              label="WECHATPAY_MCH_ID"
+              value={wechatpayMchId}
+              onChange={(e) => setWechatpayMchId(e.target.value)}
+              disabled={envUpdateMutation.isPending}
+              placeholder="留空不修改"
+            />
+            <Input
+              label="WECHATPAY_MCH_SERIAL_NO"
+              value={wechatpayMchSerialNo}
+              onChange={(e) => setWechatpayMchSerialNo(e.target.value)}
+              disabled={envUpdateMutation.isPending}
+              placeholder="留空不修改"
+            />
+          </div>
+
+          <Textarea
+            value={alipayPublicKey}
+            onChange={(e) => setAlipayPublicKey(e.target.value)}
+            disabled={envUpdateMutation.isPending}
+            rows={4}
+            placeholder="ALIPAY_PUBLIC_KEY（留空不修改，可粘贴 PEM）"
+          />
+          <Textarea
+            value={alipayPrivateKey}
+            onChange={(e) => setAlipayPrivateKey(e.target.value)}
+            disabled={envUpdateMutation.isPending}
+            rows={4}
+            placeholder="ALIPAY_PRIVATE_KEY（留空不修改，可粘贴 PEM）"
+          />
+
+          <Textarea
+            value={ikunpayKey}
+            onChange={(e) => setIkunpayKey(e.target.value)}
+            disabled={envUpdateMutation.isPending}
+            rows={3}
+            placeholder="IKUNPAY_KEY（留空不修改）"
+          />
+
+          <Textarea
+            value={wechatpayPrivateKey}
+            onChange={(e) => setWechatpayPrivateKey(e.target.value)}
+            disabled={envUpdateMutation.isPending}
+            rows={4}
+            placeholder="WECHATPAY_PRIVATE_KEY（留空不修改，可粘贴 PEM）"
+          />
+          <Input
+            value={wechatpayApiV3Key}
+            onChange={(e) => setWechatpayApiV3Key(e.target.value)}
+            disabled={envUpdateMutation.isPending}
+            placeholder="WECHATPAY_API_V3_KEY（留空不修改）"
+          />
+
+          <ModalActions>
+            <Button
+              variant="outline"
+              onClick={() => setConfigModalOpen(false)}
+              disabled={envUpdateMutation.isPending}
+            >
+              取消
+            </Button>
+            <Button
+              icon={KeyRound}
+              isLoading={envUpdateMutation.isPending}
+              loadingText="更新中..."
+              onClick={() => {
+                const items = [
+                  { key: "PAYMENT_WEBHOOK_SECRET", value: paymentWebhookSecret.trim() },
+                  { key: "ALIPAY_APP_ID", value: alipayAppId.trim() },
+                  { key: "ALIPAY_PUBLIC_KEY", value: alipayPublicKey.trim() },
+                  { key: "ALIPAY_PRIVATE_KEY", value: alipayPrivateKey.trim() },
+                  { key: "ALIPAY_NOTIFY_URL", value: alipayNotifyUrl.trim() },
+                  { key: "ALIPAY_RETURN_URL", value: alipayReturnUrl.trim() },
+                  { key: "IKUNPAY_PID", value: ikunpayPid.trim() },
+                  { key: "IKUNPAY_KEY", value: ikunpayKey.trim() },
+                  { key: "IKUNPAY_NOTIFY_URL", value: ikunpayNotifyUrl.trim() },
+                  { key: "WECHATPAY_MCH_ID", value: wechatpayMchId.trim() },
+                  { key: "WECHATPAY_MCH_SERIAL_NO", value: wechatpayMchSerialNo.trim() },
+                  { key: "WECHATPAY_PRIVATE_KEY", value: wechatpayPrivateKey.trim() },
+                  { key: "WECHATPAY_API_V3_KEY", value: wechatpayApiV3Key.trim() },
+                ].filter((x) => x.value);
+
+                if (items.length === 0) {
+                  toast.error("请至少填写一项配置");
+                  return;
+                }
+                envUpdateMutation.mutate({ items });
+              }}
+              disabled={envUpdateMutation.isPending}
+            >
+              写入并热加载
+            </Button>
+          </ModalActions>
+        </div>
+      </Modal>
+
       <Card variant="surface" padding="md">
         <div className="flex items-center justify-between">
           <div>
@@ -493,6 +727,14 @@ export default function PaymentCallbacksPage() {
               出于安全原因不会回显密钥，仅展示是否已配置与就绪状态
             </p>
           </div>
+          <Button
+            variant="outline"
+            icon={KeyRound}
+            onClick={() => setConfigModalOpen(true)}
+            disabled={envUpdateMutation.isPending}
+          >
+            更新配置
+          </Button>
         </div>
 
         <div className="mt-4 grid grid-cols-1 md:grid-cols-5 gap-3">
@@ -912,6 +1154,52 @@ export default function PaymentCallbacksPage() {
               <option value="false">未验证</option>
             </select>
 
+            <select
+              value={hasError}
+              onChange={(e) => {
+                setHasError(e.target.value as any);
+                setPage(1);
+              }}
+              className="px-3 py-2 rounded-lg border border-slate-200/70 bg-white text-slate-900 text-sm outline-none dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white"
+            >
+              <option value="">全部错误</option>
+              <option value="true">仅错误</option>
+              <option value="false">仅无错</option>
+            </select>
+
+            <div className="w-64">
+              <Input
+                value={q}
+                onChange={(e) => {
+                  setQ(e.target.value);
+                  setPage(1);
+                }}
+                placeholder="关键字（订单/流水/错误）"
+              />
+            </div>
+
+            <div className="w-56">
+              <Input
+                value={fromTime}
+                onChange={(e) => {
+                  setFromTime(e.target.value);
+                  setPage(1);
+                }}
+                type="datetime-local"
+              />
+            </div>
+
+            <div className="w-56">
+              <Input
+                value={toTime}
+                onChange={(e) => {
+                  setToTime(e.target.value);
+                  setPage(1);
+                }}
+                type="datetime-local"
+              />
+            </div>
+
             <div className="w-56">
               <Input
                 value={orderNo}
@@ -934,7 +1222,7 @@ export default function PaymentCallbacksPage() {
               />
             </div>
 
-            {(provider || orderNo || tradeNo || verified) && (
+            {(provider || orderNo || tradeNo || verified || q || hasError || fromTime || toTime) && (
               <Button variant="ghost" size="sm" onClick={clearFilters}>
                 清除筛选
               </Button>

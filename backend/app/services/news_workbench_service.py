@@ -15,6 +15,7 @@ from sqlalchemy import select, desc
 from ..config import get_settings
 from ..models.news import News
 from ..models.news_workbench import NewsAIGeneration, NewsLinkCheck
+from ..utils.pii import sanitize_pii
 
 
 class NewsWorkbenchService:
@@ -170,7 +171,7 @@ class NewsWorkbenchService:
         else:
             user_lines.append("请按任务类型输出最合适的字段。")
 
-        user_prompt = "\n".join(user_lines)
+        user_prompt = sanitize_pii("\n".join(user_lines))
 
         raw_output: str | None = None
         output_payload: dict[str, Any] | None = None

@@ -6,6 +6,8 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import ASGIApp
 
+from ..services.cache_service import cache_service
+
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """基于IP的请求速率限制中间件"""
@@ -70,8 +72,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             _ = self.request_records.pop(ip, None)
             _ = self._ip_last_seen.pop(ip, None)
     
-    def _check_rate_limit(self, ip: str) -> tuple[bool, str]:
-        """检查是否超过速率限制"""
+    def _check_rate_limit_memory(self, ip: str) -> tuple[bool, str, int]:
         current_time = time.time()
         self._clean_old_records(ip, current_time)
 
@@ -81,21 +82,42 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 self.request_records[ip] = []
 
         records = self.request_records[ip]
-        
-        # 检查每秒请求数
+
         one_second_ago = current_time - 1
         requests_last_second = sum(1 for t in records if t > one_second_ago)
         if requests_last_second >= self.requests_per_second:
-            return False, f"每秒请求过多，请稍后再试"
-        
-        # 检查每分钟请求数
+            return False, "每秒请求过多，请稍后再试", 0
+
         if len(records) >= self.requests_per_minute:
-            return False, f"请求过于频繁，请稍后再试"
-        
-        # 记录本次请求
+            return False, "请求过于频繁，请稍后再试", 0
+
         self.request_records[ip].append(current_time)
         self._ip_last_seen[ip] = current_time
-        return True, ""
+        remaining = self.requests_per_minute - len(self.request_records[ip])
+        return True, "", max(0, int(remaining))
+
+    async def _check_rate_limit_redis(self, ip: str) -> tuple[bool, str, int]:
+        redis = cache_service.redis
+        if redis is None:
+            return self._check_rate_limit_memory(ip)
+
+        key_sec = f"rl:ip:{ip}:sec"
+        key_min = f"rl:ip:{ip}:min"
+
+        sec_count = int(await redis.incr(key_sec))
+        if sec_count == 1:
+            _ = await redis.expire(key_sec, 1)
+        if sec_count > int(self.requests_per_second):
+            return False, "每秒请求过多，请稍后再试", 0
+
+        min_count = int(await redis.incr(key_min))
+        if min_count == 1:
+            _ = await redis.expire(key_min, 60)
+        if min_count > int(self.requests_per_minute):
+            return False, "请求过于频繁，请稍后再试", 0
+
+        remaining = int(self.requests_per_minute) - int(min_count)
+        return True, "", max(0, remaining)
     
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         """处理请求"""
@@ -108,7 +130,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         client_ip = self._get_client_ip(request)
         
         # 检查速率限制
-        allowed, message = self._check_rate_limit(client_ip)
+        if cache_service.redis is not None:
+            allowed, message, remaining = await self._check_rate_limit_redis(client_ip)
+        else:
+            allowed, message, remaining = self._check_rate_limit_memory(client_ip)
         if not allowed:
             return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -120,7 +145,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         
         # 添加速率限制头信息
-        remaining = self.requests_per_minute - len(self.request_records[client_ip])
         response.headers["X-RateLimit-Limit"] = str(self.requests_per_minute)
         response.headers["X-RateLimit-Remaining"] = str(max(0, remaining))
         

@@ -1,10 +1,12 @@
 """AI法律咨询助手服务"""
+import os
 import uuid
 import logging
 import time
 from collections.abc import AsyncGenerator
 from typing import cast
 
+import tiktoken
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
@@ -13,6 +15,7 @@ from pydantic import SecretStr
 
 from ..config import get_settings
 from ..schemas.ai import LawReference
+from ..utils.pii import sanitize_pii
 from .ai_response_strategy import ResponseStrategy, ResponseStrategyDecider, SearchQuality
 from .ai_intent import AiIntentClassifier
 from .content_safety import ContentSafetyFilter, RiskLevel
@@ -76,11 +79,18 @@ class LegalKnowledgeBase:
         for doc in documents:
             content = f"【{str(doc.get('law_name', ''))}】{str(doc.get('article', ''))}\n{str(doc.get('content', ''))}"
             texts.append(content)
-            metadatas.append({
-                "law_name": str(doc.get('law_name', '')),
-                "article": str(doc.get('article', '')),
-                "source": str(doc.get('source', '')),
-            })
+            metadatas.append(
+                {
+                    "law_name": str(doc.get("law_name", "")),
+                    "article": str(doc.get("article", "")),
+                    "source": str(doc.get("source", "")),
+                    "source_url": str(doc.get("source_url", "")),
+                    "source_version": str(doc.get("source_version", "")),
+                    "source_hash": str(doc.get("source_hash", "")),
+                    "ingest_batch_id": str(doc.get("ingest_batch_id", "")),
+                    "knowledge_id": str(doc.get("knowledge_id", "")),
+                }
+            )
         
         if texts and self.vector_store:
             add_texts = getattr(self.vector_store, "add_texts", None)
@@ -229,14 +239,126 @@ class AILegalAssistant:
 
 请基于以上信息和格式规范回答用户的问题。"""
 
+    SYSTEM_PROMPT_V2: str = """你是"百姓法律助手"的AI法律咨询员，专门为普通百姓提供法律咨询服务。
+
+## 你的核心职责：
+1. 基于中国法律法规，为用户提供准确、专业的法律咨询
+2. 用通俗易懂的语言解释法律概念
+3. **精准引用法条**：回答时必须引用具体的法律条文作为依据
+4. 对于复杂案件，建议用户寻求专业律师帮助
+
+## 输出优先级（必须遵守）：
+1) 先给出结论（3~5 句话）
+2) 再给出可执行步骤（清单化）
+3) 最后给出法条依据与风险提示
+4) 信息不足时先追问关键点，不要编造事实
+
+## 回答格式规范（必须严格遵守）：
+
+### 1. 结论摘要
+用 3~5 句话给出最核心的结论。
+
+### 2. 行动建议（清单）
+用编号步骤列出下一步动作、材料、期限。
+
+### 3. 法律分析与依据
+结合相关法律条文进行分析，使用以下格式引用法条：
+> 📜 **《法律名称》第X条**：具体条文内容
+
+### 4. 风险评估
+根据用户描述的情况，给出风险等级评估：
+- 🟢 **低风险**：法律关系明确，胜诉可能性较高
+- 🟡 **中风险**：存在争议点，需要补充证据
+- 🔴 **高风险**：法律依据不足或对方占优势
+
+### 5. 追问确认（如需要）
+❓ **为了更好地帮助您，请补充以下信息：**
+1. [具体问题1]
+2. [具体问题2]
+
+## 相关法律参考：
+{context}
+
+{user_profile_prompt}
+
+请基于以上信息和格式规范回答用户的问题。"""
+
+    @classmethod
+    def _system_prompt_for_version(cls, prompt_version: str | None) -> str:
+        pv = str(prompt_version or "").strip().lower()
+        if pv in {"v2", "2", "beta"}:
+            return cls.SYSTEM_PROMPT_V2
+        return cls.SYSTEM_PROMPT
+
+    @staticmethod
+    def _encoding_for_model(model: str | None):
+        m = str(model or "").strip()
+        try:
+            return tiktoken.encoding_for_model(m)
+        except Exception:
+            return tiktoken.get_encoding("cl100k_base")
+
+    @classmethod
+    def _count_tokens(cls, text: str, *, model: str | None) -> int:
+        s = str(text or "")
+        if not s:
+            return 0
+        enc = cls._encoding_for_model(model)
+        try:
+            return int(len(enc.encode(s)))
+        except Exception:
+            return int(max(0, len(s) // 4))
+
+    @classmethod
+    def _estimate_cost_usd(
+        cls,
+        *,
+        model: str | None,
+        prompt_tokens: int,
+        completion_tokens: int,
+    ) -> float | None:
+        m = str(model or "").strip().lower()
+        if not m:
+            return None
+
+        pricing: dict[str, tuple[float, float]] = {
+            "gpt-4o-mini": (0.15, 0.60),
+            "gpt-4o": (5.00, 15.00),
+            "gpt-4.1-mini": (0.15, 0.60),
+            "gpt-4.1": (5.00, 15.00),
+            "gpt-3.5-turbo": (0.50, 1.50),
+        }
+
+        rate = None
+        for k, v in pricing.items():
+            if m == k or m.startswith(k + "-"):
+                rate = v
+                break
+        if rate is None:
+            return None
+
+        in_per_m, out_per_m = rate
+        cost = (float(prompt_tokens) / 1_000_000.0) * float(in_per_m) + (
+            float(completion_tokens) / 1_000_000.0
+        ) * float(out_per_m)
+        return float(round(cost, 6))
+
     def __init__(self):
-        self.llm: ChatOpenAI = ChatOpenAI(
-            model=settings.ai_model,
-            api_key=SecretStr(settings.openai_api_key),
-            base_url=settings.openai_base_url,
-            temperature=0.7,
-            model_kwargs={"max_completion_tokens": 2000},
-        )
+        if str(getattr(settings, "openai_api_key", "") or "").strip():
+            if "OPENAI_API_KEY" not in os.environ:
+                os.environ["OPENAI_API_KEY"] = str(getattr(settings, "openai_api_key", "") or "").strip()
+        if str(getattr(settings, "openai_base_url", "") or "").strip():
+            if "OPENAI_BASE_URL" not in os.environ:
+                os.environ["OPENAI_BASE_URL"] = str(getattr(settings, "openai_base_url", "") or "").strip()
+
+        self.llm: ChatOpenAI = ChatOpenAI()
+        setattr(self.llm, "model_name", str(getattr(settings, "ai_model", "") or "").strip())
+        setattr(self.llm, "temperature", 0.7)
+        mk = getattr(self.llm, "model_kwargs", None)
+        if isinstance(mk, dict):
+            mk["max_completion_tokens"] = 2000
+        else:
+            setattr(self.llm, "model_kwargs", {"max_completion_tokens": 2000})
         self.knowledge_base: LegalKnowledgeBase = LegalKnowledgeBase()
         self.knowledge_base.initialize()
         self.safety_filter: ContentSafetyFilter = ContentSafetyFilter()
@@ -249,17 +371,26 @@ class AILegalAssistant:
         self._max_messages_per_session: int = 50
 
     def _llm_for_model(self, model: str) -> ChatOpenAI:
-        return ChatOpenAI(
-            model=str(model or "").strip(),
-            api_key=SecretStr(settings.openai_api_key),
-            base_url=settings.openai_base_url,
-            temperature=0.7,
-            model_kwargs={"max_completion_tokens": 2000},
-        )
+        if str(getattr(settings, "openai_api_key", "") or "").strip():
+            if "OPENAI_API_KEY" not in os.environ:
+                os.environ["OPENAI_API_KEY"] = str(getattr(settings, "openai_api_key", "") or "").strip()
+        if str(getattr(settings, "openai_base_url", "") or "").strip():
+            if "OPENAI_BASE_URL" not in os.environ:
+                os.environ["OPENAI_BASE_URL"] = str(getattr(settings, "openai_base_url", "") or "").strip()
+
+        llm = ChatOpenAI()
+        setattr(llm, "model_name", str(model or "").strip())
+        setattr(llm, "temperature", 0.7)
+        mk = getattr(llm, "model_kwargs", None)
+        if isinstance(mk, dict):
+            mk["max_completion_tokens"] = 2000
+        else:
+            setattr(llm, "model_kwargs", {"max_completion_tokens": 2000})
+        return llm
 
     def _model_candidates(self) -> list[str]:
         primary = str(getattr(settings, "ai_model", "") or "").strip()
-        fallbacks = getattr(settings, "ai_fallback_models", [])
+        fallbacks = cast(list[str], getattr(settings, "ai_fallback_models", []))
         cleaned_fallbacks = [str(m or "").strip() for m in fallbacks if str(m or "").strip()]
         candidates = [primary] + cleaned_fallbacks
         out: list[str] = []
@@ -303,11 +434,24 @@ class AILegalAssistant:
         """解析法律引用"""
         result: list[LawReference] = []
         for content, metadata, score in references:
+            kid: int | None = None
+            try:
+                raw_kid = metadata.get("knowledge_id")
+                if raw_kid is not None and str(raw_kid).strip():
+                    kid = int(str(raw_kid).strip())
+            except Exception:
+                kid = None
             result.append(LawReference(
                 law_name=str(metadata.get('law_name', '未知法律')),
                 article=str(metadata.get('article', '未知条款')),
                 content=content,
-                relevance=round(float(score), 2)
+                relevance=round(float(score), 2),
+                source=str(metadata.get("source") or "").strip() or None,
+                source_url=str(metadata.get("source_url") or "").strip() or None,
+                source_version=str(metadata.get("source_version") or "").strip() or None,
+                source_hash=str(metadata.get("source_hash") or "").strip() or None,
+                ingest_batch_id=str(metadata.get("ingest_batch_id") or "").strip() or None,
+                knowledge_id=kid,
             ))
         return result
 
@@ -373,6 +517,7 @@ class AILegalAssistant:
         *,
         initial_history: list[dict[str, str]] | None = None,
         user_profile: str | None = None,
+        prompt_version: str | None = None,
     ) -> tuple[str, str, list[LawReference], dict[str, object]]:
         """
         与AI助手对话
@@ -386,9 +531,12 @@ class AILegalAssistant:
         """
         session_id = self.get_or_create_session(session_id, initial_history=initial_history)
 
-        intent_result = self.intent_classifier.classify(message)
+        message_for_ai = sanitize_pii(message)
+        user_profile_for_ai = sanitize_pii(str(user_profile or "").strip()) if user_profile else ""
 
-        safety = self.safety_filter.check_input(message)
+        intent_result = self.intent_classifier.classify(message_for_ai)
+
+        safety = self.safety_filter.check_input(message_for_ai)
         if safety.risk_level == RiskLevel.BLOCKED:
             strategy = ResponseStrategy.REFUSE_ANSWER
             disclaimer = self.disclaimer_manager.get_disclaimer(risk_level=safety.risk_level, strategy=strategy)
@@ -398,7 +546,7 @@ class AILegalAssistant:
             answer = self.safety_filter.sanitize_output(answer)
 
             history = self.conversation_histories.get(session_id, [])
-            history.append({'role': 'user', 'content': message})
+            history.append({'role': 'user', 'content': message_for_ai})
             history.append({'role': 'assistant', 'content': answer})
             self.conversation_histories[session_id] = history[-self._max_messages_per_session:]
             self._last_seen[session_id] = time.time()
@@ -425,8 +573,8 @@ class AILegalAssistant:
             }
             return session_id, answer, [], meta
 
-        references, quality = self.knowledge_base.search_with_quality_control(message, k=5)
-        decision = self.strategy_decider.decide(message, quality, risk_level=safety.risk_level)
+        references, quality = self.knowledge_base.search_with_quality_control(message_for_ai, k=5)
+        decision = self.strategy_decider.decide(message_for_ai, quality, risk_level=safety.risk_level)
         disclaimer = self.disclaimer_manager.get_disclaimer(risk_level=safety.risk_level, strategy=decision.strategy)
         context = self._build_context(references)
 
@@ -436,6 +584,11 @@ class AILegalAssistant:
         fallback_used_out: bool = False
         model_attempts_out: list[str] = []
 
+        prompt_tokens: int = 0
+        completion_tokens: int = 0
+        total_tokens: int = 0
+        estimated_cost_usd: float | None = None
+
         answer: str
         if decision.strategy == ResponseStrategy.REDIRECT:
             answer = "您的问题可能涉及较高风险或需要结合具体案情，建议您尽快咨询专业律师获取针对性意见。"
@@ -443,13 +596,12 @@ class AILegalAssistant:
             answer = str(safety.suggestion or "很抱歉，我无法回答这类问题。")
         else:
             user_profile_prompt = ""
-            user_profile_text = str(user_profile or "").strip()
-            if user_profile_text:
-                user_profile_prompt = "## 用户信息\n" + user_profile_text
+            if user_profile_for_ai:
+                user_profile_prompt = "## 用户信息\n" + user_profile_for_ai
 
             messages: list[BaseMessage] = [
                 SystemMessage(
-                    content=self.SYSTEM_PROMPT.format(
+                    content=self._system_prompt_for_version(prompt_version).format(
                         context=context,
                         user_profile_prompt=user_profile_prompt,
                     )
@@ -458,11 +610,11 @@ class AILegalAssistant:
 
             for msg in history[-10:]:
                 if msg['role'] == 'user':
-                    messages.append(HumanMessage(content=msg['content']))
+                    messages.append(HumanMessage(content=sanitize_pii(str(msg['content'] or ''))))
                 else:
                     messages.append(AIMessage(content=msg['content']))
 
-            messages.append(HumanMessage(content=message))
+            messages.append(HumanMessage(content=message_for_ai))
 
             answer = ""
             model_candidates = self._model_candidates()
@@ -479,6 +631,18 @@ class AILegalAssistant:
                     answer = response.generations[0][0].text
                     model_used = model
                     fallback_used = model != primary_model
+
+                    prompt_tokens = sum(
+                        self._count_tokens(str(getattr(m, "content", "") or ""), model=model)
+                        for m in messages
+                    )
+                    completion_tokens = self._count_tokens(str(answer or ""), model=model)
+                    total_tokens = int(prompt_tokens) + int(completion_tokens)
+                    estimated_cost_usd = self._estimate_cost_usd(
+                        model=model,
+                        prompt_tokens=int(prompt_tokens),
+                        completion_tokens=int(completion_tokens),
+                    )
                     break
                 except Exception:
                     logger.exception("AI服务调用失败 model=%s", str(model))
@@ -494,7 +658,7 @@ class AILegalAssistant:
         answer = self._append_disclaimer(answer, risk_level=safety.risk_level, strategy=decision.strategy)
         answer = self.safety_filter.sanitize_output(answer)
         
-        history.append({'role': 'user', 'content': message})
+        history.append({'role': 'user', 'content': message_for_ai})
         history.append({'role': 'assistant', 'content': answer})
         self.conversation_histories[session_id] = history[-self._max_messages_per_session:]
         self._last_seen[session_id] = time.time()
@@ -507,6 +671,7 @@ class AILegalAssistant:
             "strategy_reason": str(decision.reason),
             "confidence": str(decision.confidence),
             "risk_level": str(safety.risk_level.value),
+            "prompt_version": str(prompt_version or "v1"),
             "intent": str(intent_result.intent),
             "needs_clarification": bool(intent_result.needs_clarification),
             "clarifying_questions": list(intent_result.clarifying_questions),
@@ -520,6 +685,10 @@ class AILegalAssistant:
             "model_used": model_used_out,
             "fallback_used": bool(fallback_used_out),
             "model_attempts": list(model_attempts_out),
+            "prompt_tokens": int(prompt_tokens),
+            "completion_tokens": int(completion_tokens),
+            "total_tokens": int(total_tokens),
+            "estimated_cost_usd": estimated_cost_usd,
         }
         
         return session_id, answer, parsed_refs, meta2
@@ -531,6 +700,7 @@ class AILegalAssistant:
         *,
         initial_history: list[dict[str, str]] | None = None,
         user_profile: str | None = None,
+        prompt_version: str | None = None,
     ) -> AsyncGenerator[tuple[str, dict[str, object]], None]:
         """
         流式对话
@@ -544,9 +714,12 @@ class AILegalAssistant:
         """
         session_id = self.get_or_create_session(session_id, initial_history=initial_history)
 
-        intent_result = self.intent_classifier.classify(message)
+        message_for_ai = sanitize_pii(message)
+        user_profile_for_ai = sanitize_pii(str(user_profile or "").strip()) if user_profile else ""
 
-        safety = self.safety_filter.check_input(message)
+        intent_result = self.intent_classifier.classify(message_for_ai)
+
+        safety = self.safety_filter.check_input(message_for_ai)
         if safety.risk_level == RiskLevel.BLOCKED:
             strategy = ResponseStrategy.REFUSE_ANSWER
             disclaimer = self.disclaimer_manager.get_disclaimer(risk_level=safety.risk_level, strategy=strategy)
@@ -559,6 +732,7 @@ class AILegalAssistant:
                     "strategy_reason": "内容安全拦截",
                     "confidence": "N/A",
                     "risk_level": str(safety.risk_level.value),
+                    "prompt_version": str(prompt_version or "v1"),
                     "intent": str(intent_result.intent),
                     "needs_clarification": bool(intent_result.needs_clarification),
                     "clarifying_questions": list(intent_result.clarifying_questions),
@@ -585,7 +759,7 @@ class AILegalAssistant:
             yield ("content", {"text": full_answer})
 
             history = self.conversation_histories.get(session_id, [])
-            history.append({"role": "user", "content": message})
+            history.append({"role": "user", "content": message_for_ai})
             history.append({"role": "assistant", "content": full_answer})
             self.conversation_histories[session_id] = history[-self._max_messages_per_session:]
             self._last_seen[session_id] = time.time()
@@ -600,6 +774,7 @@ class AILegalAssistant:
                     "risk_level": str(safety.risk_level.value),
                     "intent": str(intent_result.intent),
                     "needs_clarification": bool(intent_result.needs_clarification),
+                    "prompt_version": str(prompt_version or "v1"),
                     "model_used": None,
                     "fallback_used": False,
                     "model_attempts": [],
@@ -607,8 +782,8 @@ class AILegalAssistant:
             )
             return
 
-        references, quality = self.knowledge_base.search_with_quality_control(message, k=5)
-        decision = self.strategy_decider.decide(message, quality, risk_level=safety.risk_level)
+        references, quality = self.knowledge_base.search_with_quality_control(message_for_ai, k=5)
+        decision = self.strategy_decider.decide(message_for_ai, quality, risk_level=safety.risk_level)
         disclaimer = self.disclaimer_manager.get_disclaimer(risk_level=safety.risk_level, strategy=decision.strategy)
         context = self._build_context(references)
         parsed_refs = self._parse_references(references)
@@ -619,13 +794,12 @@ class AILegalAssistant:
         history = self.conversation_histories.get(session_id, [])
 
         user_profile_prompt = ""
-        user_profile_text = str(user_profile or "").strip()
-        if user_profile_text:
-            user_profile_prompt = "## 用户信息\n" + user_profile_text
+        if user_profile_for_ai:
+            user_profile_prompt = "## 用户信息\n" + user_profile_for_ai
 
         messages: list[BaseMessage] = [
             SystemMessage(
-                content=self.SYSTEM_PROMPT.format(
+                content=self._system_prompt_for_version(prompt_version).format(
                     context=context,
                     user_profile_prompt=user_profile_prompt,
                 )
@@ -634,13 +808,17 @@ class AILegalAssistant:
 
         for msg in history[-10:]:
             if msg["role"] == "user":
-                messages.append(HumanMessage(content=msg["content"]))
+                messages.append(HumanMessage(content=sanitize_pii(str(msg["content"] or ""))))
             else:
                 messages.append(AIMessage(content=msg["content"]))
 
-        messages.append(HumanMessage(content=message))
+        messages.append(HumanMessage(content=message_for_ai))
 
         full_answer = ""
+
+        model_used: str | None = None
+        fallback_used: bool = False
+        model_attempts: list[str] = []
 
         if decision.strategy == ResponseStrategy.REDIRECT:
             full_answer = "您的问题可能涉及较高风险或需要结合具体案情，建议您尽快咨询专业律师获取针对性意见。"
@@ -657,6 +835,7 @@ class AILegalAssistant:
                     "strategy_reason": str(decision.reason),
                     "confidence": str(decision.confidence),
                     "risk_level": str(safety.risk_level.value),
+                    "prompt_version": str(prompt_version or "v1"),
                     "intent": str(intent_result.intent),
                     "needs_clarification": bool(intent_result.needs_clarification),
                     "clarifying_questions": list(intent_result.clarifying_questions),
@@ -688,6 +867,7 @@ class AILegalAssistant:
                     "strategy_reason": str(decision.reason),
                     "confidence": str(decision.confidence),
                     "risk_level": str(safety.risk_level.value),
+                    "prompt_version": str(prompt_version or "v1"),
                     "intent": str(intent_result.intent),
                     "needs_clarification": bool(intent_result.needs_clarification),
                     "clarifying_questions": list(intent_result.clarifying_questions),
@@ -707,9 +887,6 @@ class AILegalAssistant:
         else:
             model_candidates = self._model_candidates()
             primary_model = str(getattr(settings, "ai_model", "") or "").strip()
-            model_used: str | None = None
-            fallback_used: bool = False
-            model_attempts: list[str] = []
             stream_selected: bool = False
 
             aiter = None
@@ -745,6 +922,7 @@ class AILegalAssistant:
                     "strategy_reason": str(decision.reason),
                     "confidence": str(decision.confidence),
                     "risk_level": str(safety.risk_level.value),
+                    "prompt_version": str(prompt_version or "v1"),
                     "intent": str(intent_result.intent),
                     "needs_clarification": bool(intent_result.needs_clarification),
                     "clarifying_questions": list(intent_result.clarifying_questions),
@@ -822,6 +1000,34 @@ class AILegalAssistant:
             else:
                 full_answer = self.safety_filter.sanitize_output(with_disclaimer)
 
+        prompt_tokens = 0
+        completion_tokens = 0
+        total_tokens = 0
+        estimated_cost_usd: float | None = None
+        try:
+            prompt_tokens = sum(
+                self._count_tokens(
+                    str(getattr(m, "content", "") or ""),
+                    model=(model_used or str(getattr(settings, "ai_model", "") or "").strip()),
+                )
+                for m in messages
+            )
+            completion_tokens = self._count_tokens(
+                str(full_answer or ""),
+                model=(model_used or str(getattr(settings, "ai_model", "") or "").strip()),
+            )
+            total_tokens = int(prompt_tokens) + int(completion_tokens)
+            estimated_cost_usd = self._estimate_cost_usd(
+                model=(model_used or str(getattr(settings, "ai_model", "") or "").strip()),
+                prompt_tokens=int(prompt_tokens),
+                completion_tokens=int(completion_tokens),
+            )
+        except Exception:
+            prompt_tokens = 0
+            completion_tokens = 0
+            total_tokens = 0
+            estimated_cost_usd = None
+
         history.append({"role": "user", "content": message})
         history.append({"role": "assistant", "content": full_answer})
         self.conversation_histories[session_id] = history[-self._max_messages_per_session:]
@@ -836,11 +1042,16 @@ class AILegalAssistant:
                 "strategy_reason": str(decision.reason),
                 "confidence": str(decision.confidence),
                 "risk_level": str(safety.risk_level.value),
+                "prompt_version": str(prompt_version or "v1"),
                 "intent": str(intent_result.intent),
                 "needs_clarification": bool(intent_result.needs_clarification),
-                "model_used": cast(str | None, locals().get("model_used")),
-                "fallback_used": bool(locals().get("fallback_used") or False),
-                "model_attempts": list(locals().get("model_attempts") or []),
+                "model_used": model_used,
+                "fallback_used": bool(fallback_used),
+                "model_attempts": list(model_attempts),
+                "prompt_tokens": int(prompt_tokens),
+                "completion_tokens": int(completion_tokens),
+                "total_tokens": int(total_tokens),
+                "estimated_cost_usd": estimated_cost_usd,
             },
         )
 

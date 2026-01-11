@@ -3,9 +3,14 @@ import importlib
 import logging
 import os
 from pathlib import Path
+
+from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy import text
+from sqlalchemy.engine import Connection
 from .config import get_settings
 
 settings = get_settings()
@@ -46,6 +51,46 @@ class Base(DeclarativeBase):
     pass
 
 
+def _env_truthy(name: str) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _get_backend_dir() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _get_alembic_script_directory() -> ScriptDirectory:
+    backend_dir = _get_backend_dir()
+    ini_path = backend_dir / "alembic.ini"
+    config = Config(str(ini_path))
+    config.set_main_option("script_location", str(backend_dir / "alembic"))
+    return ScriptDirectory.from_config(config)
+
+
+def _get_alembic_expected_heads() -> tuple[str, ...]:
+    script = _get_alembic_script_directory()
+    return tuple(script.get_heads())
+
+
+def _get_alembic_current_heads(conn: Connection) -> tuple[str, ...]:
+    ctx = MigrationContext.configure(conn)
+    return tuple(ctx.get_current_heads())
+
+
+def _assert_alembic_head(conn: Connection) -> None:
+    expected = _get_alembic_expected_heads()
+    current = _get_alembic_current_heads(conn)
+    if set(current) != set(expected):
+        raise RuntimeError(
+            "Database schema is not at Alembic head. "
+            f"current={list(current)} expected={list(expected)}. "
+            "Run `py scripts/alembic_cmd.py upgrade head` (or `alembic upgrade head`). "
+            "If the database already has the full schema and you only want to mark it, run `py scripts/alembic_cmd.py stamp head`. "
+            "You may temporarily set DB_ALLOW_RUNTIME_DDL=1 to bypass this check."
+        )
+
+
 async def get_db():
     """获取数据库会话"""
     async with AsyncSessionLocal() as session:
@@ -62,6 +107,7 @@ async def init_db() -> None:
         "app.models.user_quota",
         "app.models.user_consent",
         "app.models.consultation",
+        "app.models.consultation_review",
         "app.models.forum",
         "app.models.news",
         "app.models.news_ai",
@@ -78,6 +124,14 @@ async def init_db() -> None:
         "app.models.feedback",
     ):
         _ = importlib.import_module(module_name)
+
+    allow_runtime_ddl = bool(settings.debug) or _env_truthy("DB_ALLOW_RUNTIME_DDL")
+    if not allow_runtime_ddl:
+        async with engine.connect() as conn:
+            _ = await conn.execute(text("SELECT 1"))
+            await conn.run_sync(_assert_alembic_head)
+        return
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
@@ -109,6 +163,27 @@ async def init_db() -> None:
                 tables_result = await conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
                 tables = {row[0] for row in tables_result.fetchall()}
 
+                if "legal_knowledge" in tables:
+                    lk_cols_result = await conn.execute(text("PRAGMA table_info(legal_knowledge)"))
+                    lk_cols = {row[1] for row in lk_cols_result.fetchall()}
+                    if "source_url" not in lk_cols:
+                        _ = await conn.execute(text("ALTER TABLE legal_knowledge ADD COLUMN source_url VARCHAR(500)"))
+                    if "source_version" not in lk_cols:
+                        _ = await conn.execute(text("ALTER TABLE legal_knowledge ADD COLUMN source_version VARCHAR(50)"))
+                    if "source_hash" not in lk_cols:
+                        _ = await conn.execute(text("ALTER TABLE legal_knowledge ADD COLUMN source_hash VARCHAR(64)"))
+                    if "ingest_batch_id" not in lk_cols:
+                        _ = await conn.execute(text("ALTER TABLE legal_knowledge ADD COLUMN ingest_batch_id VARCHAR(36)"))
+                    try:
+                        _ = await conn.execute(
+                            text("CREATE INDEX IF NOT EXISTS ix_legal_knowledge_source_hash ON legal_knowledge(source_hash)")
+                        )
+                        _ = await conn.execute(
+                            text("CREATE INDEX IF NOT EXISTS ix_legal_knowledge_ingest_batch_id ON legal_knowledge(ingest_batch_id)")
+                        )
+                    except Exception:
+                        logger.exception("创建 legal_knowledge 索引失败")
+
                 if "generated_documents" in tables:
                     docs_cols_result = await conn.execute(text("PRAGMA table_info(generated_documents)"))
                     docs_cols = {row[1] for row in docs_cols_result.fetchall()}
@@ -132,9 +207,24 @@ async def init_db() -> None:
                 if "payment_callback_events" not in tables:
                     _ = await conn.execute(
                         text(
-                            "CREATE TABLE IF NOT EXISTS payment_callback_events (id INTEGER PRIMARY KEY AUTOINCREMENT, provider VARCHAR(20) NOT NULL, order_no VARCHAR(64), trade_no VARCHAR(100), amount FLOAT, amount_cents INTEGER, verified BOOLEAN DEFAULT 0, error_message VARCHAR(200), raw_payload TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+                            "CREATE TABLE IF NOT EXISTS payment_callback_events (id INTEGER PRIMARY KEY AUTOINCREMENT, provider VARCHAR(20) NOT NULL, order_no VARCHAR(64), trade_no VARCHAR(100), amount FLOAT, amount_cents INTEGER, verified BOOLEAN DEFAULT 0, error_message VARCHAR(200), raw_payload TEXT, raw_payload_hash VARCHAR(64), source_ip VARCHAR(45), user_agent VARCHAR(512), created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
                         )
                     )
+                else:
+                    cb_cols_result = await conn.execute(text("PRAGMA table_info(payment_callback_events)"))
+                    cb_cols = {row[1] for row in cb_cols_result.fetchall()}
+                    if "raw_payload_hash" not in cb_cols:
+                        _ = await conn.execute(
+                            text("ALTER TABLE payment_callback_events ADD COLUMN raw_payload_hash VARCHAR(64)")
+                        )
+                    if "source_ip" not in cb_cols:
+                        _ = await conn.execute(
+                            text("ALTER TABLE payment_callback_events ADD COLUMN source_ip VARCHAR(45)")
+                        )
+                    if "user_agent" not in cb_cols:
+                        _ = await conn.execute(
+                            text("ALTER TABLE payment_callback_events ADD COLUMN user_agent VARCHAR(512)")
+                        )
                 try:
                     _ = await conn.execute(
                         text(

@@ -1,6 +1,7 @@
 """AI助手API路由"""
 import uuid
 import asyncio
+import hashlib
 import io
 import tempfile
 import json
@@ -23,6 +24,7 @@ from ..models.consultation import Consultation, ChatMessage
 from ..models.user import User
 from ..config import get_settings
 from ..services.ai_metrics import ai_metrics
+from ..services.critical_event_reporter import critical_event_reporter
 from ..services.quota_service import quota_service
 from ..services.report_generator import (
     build_consultation_report_from_export_data,
@@ -48,6 +50,7 @@ from ..schemas.ai import (
 from ..utils.deps import get_current_user, get_current_user_optional
 from ..utils.security import create_access_token, decode_token
 from ..utils.rate_limiter import rate_limit, RateLimitConfig, rate_limiter, get_client_ip
+from ..utils.pii import sanitize_pii
 
 router = APIRouter(prefix="/ai", tags=["AI法律助手"])
 
@@ -77,6 +80,65 @@ ERROR_AI_FORBIDDEN = "AI_FORBIDDEN"
 ERROR_AI_UNAUTHORIZED = "AI_UNAUTHORIZED"
 ERROR_AI_BAD_REQUEST = "AI_BAD_REQUEST"
 ERROR_AI_INTERNAL_ERROR = "AI_INTERNAL_ERROR"
+
+
+def _coerce_int(value: object, default: int = 0) -> int:
+    if value is None:
+        return int(default)
+    if isinstance(value, bool):
+        return int(default)
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return int(default)
+        try:
+            return int(float(s))
+        except Exception:
+            return int(default)
+    return int(default)
+
+
+def _stable_bucket(seed: str) -> int:
+    s = str(seed or "").strip()
+    if not s:
+        return 0
+    h = hashlib.sha256(s.encode("utf-8")).hexdigest()
+    try:
+        return int(h[:8], 16) % 100
+    except Exception:
+        return 0
+
+
+async def _get_system_config_value(db: AsyncSession, key: str) -> str | None:
+    from ..models.system import SystemConfig
+
+    k = str(key or "").strip()
+    if not k:
+        return None
+    res = await db.execute(select(SystemConfig.value).where(SystemConfig.key == k))
+    v = res.scalar_one_or_none()
+    return str(v) if isinstance(v, str) else None
+
+
+async def _select_prompt_version(db: AsyncSession, *, bucket_seed: str) -> str:
+    default_pv = str((await _get_system_config_value(db, "AI_PROMPT_VERSION_DEFAULT")) or "v1").strip() or "v1"
+    v2_pv = str((await _get_system_config_value(db, "AI_PROMPT_VERSION_V2")) or "v2").strip() or "v2"
+
+    percent_raw = await _get_system_config_value(db, "AI_PROMPT_VERSION_V2_PERCENT")
+    percent = _coerce_int(percent_raw, 0)
+    percent = max(0, min(100, int(percent)))
+
+    if percent <= 0:
+        return default_pv
+    if percent >= 100:
+        return v2_pv or default_pv
+
+    bucket = _stable_bucket(bucket_seed)
+    return v2_pv if bucket < percent else default_pv
 
 
 def _audit_event(event: str, payload: dict[str, object]) -> None:
@@ -155,13 +217,11 @@ def _audit_text(value: str | None, *, limit: int = 500) -> str:
     return s
 
 
-def _enforce_guest_ai_quota(request: Request) -> None:
+async def _enforce_guest_ai_quota(request: Request) -> None:
     key = f"ai:guest:{get_client_ip(request)}"
-    allowed, remaining = rate_limiter.is_allowed(key, GUEST_AI_LIMIT, GUEST_AI_WINDOW_SECONDS)
+    allowed, remaining, wait_time = await rate_limiter.check(key, GUEST_AI_LIMIT, GUEST_AI_WINDOW_SECONDS)
     if allowed:
         return
-
-    wait_time = rate_limiter.get_wait_time(key, GUEST_AI_WINDOW_SECONDS)
     raise HTTPException(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         detail=f"游客模式 24 小时内仅可试用 {int(GUEST_AI_LIMIT)} 次，请登录后继续",
@@ -272,8 +332,8 @@ async def chat_with_ai(
     - 如果已登录，咨询记录将绑定到用户账号
     """
     started_at = float(time.time())
-    request_id = uuid.uuid4().hex
-    response.headers["X-Request-Id"] = request_id
+    request_id = str(getattr(request.state, "request_id", "") or "").strip() or uuid.uuid4().hex
+    _ = response.headers.setdefault("X-Request-Id", request_id)
     ai_metrics.record_request("chat")
     client_ip = get_client_ip(request)
     user_id_str = str(current_user.id) if current_user else "guest"
@@ -288,6 +348,19 @@ async def chat_with_ai(
                 error_code=error_code,
                 status_code=503,
                 message=message,
+            )
+            critical_event_reporter.fire_and_forget(
+                event="ai_not_configured",
+                severity="warning",
+                request_id=request_id,
+                title="AI服务未配置",
+                message=message,
+                data={
+                    "endpoint": "chat",
+                    "user_id": user_id_str,
+                    "ip": client_ip,
+                },
+                dedup_key="ai_not_configured",
             )
             _audit_event(
                 "chat_error",
@@ -310,7 +383,7 @@ async def chat_with_ai(
             )
 
         if current_user is None:
-            _enforce_guest_ai_quota(request)
+            await _enforce_guest_ai_quota(request)
         else:
             await quota_service.enforce_ai_chat_quota(db, current_user)
 
@@ -337,6 +410,9 @@ async def chat_with_ai(
         if payload.session_id:
             consultation, seed_history = await _load_seed_history(db, payload.session_id, current_user=current_user)
 
+        bucket_seed = f"u:{current_user.id}" if current_user is not None else f"g:{client_ip or request_id}"
+        prompt_version = await _select_prompt_version(db, bucket_seed=bucket_seed)
+
         assistant = _try_get_ai_assistant()
         if assistant is None:
             error_code = ERROR_AI_UNAVAILABLE
@@ -347,6 +423,19 @@ async def chat_with_ai(
                 error_code=error_code,
                 status_code=503,
                 message=message,
+            )
+            critical_event_reporter.fire_and_forget(
+                event="ai_unavailable",
+                severity="warning",
+                request_id=request_id,
+                title="AI服务不可用",
+                message=message,
+                data={
+                    "endpoint": "chat",
+                    "user_id": user_id_str,
+                    "ip": client_ip,
+                },
+                dedup_key="ai_unavailable",
             )
             return _make_error_response(
                 status_code=503,
@@ -363,6 +452,8 @@ async def chat_with_ai(
         }
         if user_profile and _supports_kwarg(getattr(assistant, "chat", None), "user_profile"):
             chat_kwargs["user_profile"] = user_profile
+        if _supports_kwarg(getattr(assistant, "chat", None), "prompt_version"):
+            chat_kwargs["prompt_version"] = prompt_version
 
         chat_result: object = await cast(Any, assistant).chat(**chat_kwargs)
 
@@ -415,7 +506,18 @@ async def chat_with_ai(
         )
         db.add(user_message)
         
-        refs_json = json.dumps([ref.model_dump() for ref in references], ensure_ascii=False)
+        references_list = [ref.model_dump() for ref in references]
+        meta_to_save: dict[str, object] = {}
+        if isinstance(meta, dict):
+            meta_to_save.update(meta)
+        meta_to_save.setdefault("prompt_version", str(prompt_version or "v1"))
+        meta_to_save.setdefault("duration_ms", int((time.time() - started_at) * 1000))
+        meta_to_save.setdefault("request_id", str(request_id))
+
+        refs_json = json.dumps(
+            {"references": references_list, "meta": meta_to_save},
+            ensure_ascii=False,
+        )
         ai_message = ChatMessage(
             consultation_id=consultation.id,
             role="assistant",
@@ -499,6 +601,20 @@ async def chat_with_ai(
             status_code=sc,
             message=message,
         )
+        if sc >= 500:
+            critical_event_reporter.fire_and_forget(
+                event="ai_http_exception",
+                severity="error",
+                request_id=request_id,
+                title="AI接口异常",
+                message=message,
+                data={
+                    "endpoint": "chat",
+                    "user_id": user_id_str,
+                    "ip": client_ip,
+                },
+                dedup_key="ai_http_exception|chat",
+            )
         _audit_event(
             "chat_error",
             {
@@ -530,6 +646,19 @@ async def chat_with_ai(
             error_code=error_code,
             status_code=500,
             message=str(e),
+        )
+        critical_event_reporter.fire_and_forget(
+            event="ai_unhandled_exception",
+            severity="error",
+            request_id=request_id,
+            title="AI未处理异常",
+            message=str(e),
+            data={
+                "endpoint": "chat",
+                "user_id": user_id_str,
+                "ip": client_ip,
+            },
+            dedup_key="ai_unhandled_exception|chat",
         )
         _audit_event(
             "chat_error",
@@ -570,7 +699,7 @@ async def chat_with_ai_stream(
     - done: 完成信号
     """
     started_at = float(time.time())
-    request_id = uuid.uuid4().hex
+    request_id = str(getattr(request.state, "request_id", "") or "").strip() or uuid.uuid4().hex
     ai_metrics.record_request("chat_stream")
     client_ip = get_client_ip(request)
 
@@ -689,6 +818,19 @@ async def chat_with_ai_stream(
                 status_code=503,
                 message=message,
             )
+            critical_event_reporter.fire_and_forget(
+                event="ai_not_configured",
+                severity="warning",
+                request_id=request_id,
+                title="AI服务未配置",
+                message=message,
+                data={
+                    "endpoint": "chat_stream",
+                    "user_id": user_id_str,
+                    "ip": client_ip,
+                },
+                dedup_key="ai_not_configured",
+            )
             _audit_event(
                 "chat_stream_error",
                 {
@@ -710,7 +852,7 @@ async def chat_with_ai_stream(
             )
 
         if current_user is None:
-            _enforce_guest_ai_quota(request)
+            await _enforce_guest_ai_quota(request)
         else:
             await quota_service.enforce_ai_chat_quota(db, current_user)
 
@@ -732,6 +874,9 @@ async def chat_with_ai_stream(
             },
         )
 
+        bucket_seed = f"u:{current_user_id}" if current_user_id is not None else f"g:{client_ip or request_id}"
+        prompt_version = await _select_prompt_version(db, bucket_seed=bucket_seed)
+
         seed_history: list[dict[str, str]] | None = None
         if payload.session_id:
             _, seed_history = await _load_seed_history(db, payload.session_id, current_user=current_user)
@@ -746,6 +891,19 @@ async def chat_with_ai_stream(
                 error_code=error_code,
                 status_code=503,
                 message=message,
+            )
+            critical_event_reporter.fire_and_forget(
+                event="ai_unavailable",
+                severity="warning",
+                request_id=request_id,
+                title="AI服务不可用",
+                message=message,
+                data={
+                    "endpoint": "chat_stream",
+                    "user_id": user_id_str,
+                    "ip": client_ip,
+                },
+                dedup_key="ai_unavailable",
             )
             return _make_error_response(
                 status_code=503,
@@ -778,6 +936,8 @@ async def chat_with_ai_stream(
                 }
                 if user_profile and _supports_kwarg(getattr(assistant, "chat_stream", None), "user_profile"):
                     stream_kwargs["user_profile"] = user_profile
+                if _supports_kwarg(getattr(assistant, "chat_stream", None), "prompt_version"):
+                    stream_kwargs["prompt_version"] = prompt_version
 
                 async for event_type, data in assistant.chat_stream(**cast(dict, stream_kwargs)):
                     if event_type == "session":
@@ -840,7 +1000,34 @@ async def chat_with_ai_stream(
                     )
                     db.add(user_message)
 
-                    refs_json = json.dumps(references_payload or [], ensure_ascii=False)
+                    meta_to_save: dict[str, object] = {}
+                    if isinstance(done_payload, dict):
+                        for k in (
+                            "strategy_used",
+                            "strategy_reason",
+                            "confidence",
+                            "risk_level",
+                            "prompt_version",
+                            "intent",
+                            "needs_clarification",
+                            "model_used",
+                            "fallback_used",
+                            "model_attempts",
+                            "prompt_tokens",
+                            "completion_tokens",
+                            "total_tokens",
+                            "estimated_cost_usd",
+                        ):
+                            if k in done_payload:
+                                meta_to_save[k] = cast(object, done_payload.get(k))
+                    meta_to_save.setdefault("prompt_version", str(prompt_version or "v1"))
+                    meta_to_save.setdefault("duration_ms", int((time.time() - started_at) * 1000))
+                    meta_to_save.setdefault("request_id", str(request_id))
+
+                    refs_json = json.dumps(
+                        {"references": references_payload or [], "meta": meta_to_save},
+                        ensure_ascii=False,
+                    )
                     ai_message = ChatMessage(
                         consultation_id=consultation.id,
                         role="assistant",
@@ -926,7 +1113,7 @@ async def chat_with_ai_stream(
             },
         )
     except HTTPException as e:
-        sc = int(e.status_code)
+        sc = int(getattr(e, "status_code", 500) or 500)
         error_code = _error_code_for_http(sc)
         message = _extract_message(getattr(e, "detail", ""))
         ai_metrics.record_error(
@@ -936,6 +1123,22 @@ async def chat_with_ai_stream(
             status_code=sc,
             message=message,
         )
+        if sc >= 500:
+            critical_event_reporter.fire_and_forget(
+                event="ai_http_exception",
+                severity="error",
+                request_id=request_id,
+                title="AI接口异常",
+                message=message,
+                data={
+                    "endpoint": "chat_stream",
+                    "status_code": sc,
+                    "error_code": error_code,
+                    "user_id": user_id_str,
+                    "ip": client_ip,
+                },
+                dedup_key=f"ai_http_exception|chat_stream|{sc}|{error_code}",
+            )
         _audit_event(
             "chat_stream_error",
             {
@@ -967,6 +1170,19 @@ async def chat_with_ai_stream(
             error_code=error_code,
             status_code=500,
             message=str(e),
+        )
+        critical_event_reporter.fire_and_forget(
+            event="ai_unhandled_exception",
+            severity="error",
+            request_id=request_id,
+            title="AI未处理异常",
+            message=str(e),
+            data={
+                "endpoint": "chat_stream",
+                "user_id": user_id_str,
+                "ip": client_ip,
+            },
+            dedup_key="ai_unhandled_exception|chat_stream",
         )
         _audit_event(
             "chat_stream_error",
@@ -1263,7 +1479,21 @@ async def export_consultation(
         }
         if msg_references:
             try:
-                msg_data["references"] = cast(object, json.loads(msg_references))
+                parsed = cast(object, json.loads(msg_references))
+                if isinstance(parsed, list):
+                    msg_data["references"] = cast(object, parsed)
+                elif isinstance(parsed, dict):
+                    parsed_dict = cast(dict[str, object], parsed)
+                    refs = parsed_dict.get("references")
+                    if isinstance(refs, list):
+                        msg_data["references"] = cast(object, refs)
+                    else:
+                        msg_data["references"] = []
+                    meta_obj = parsed_dict.get("meta")
+                    if isinstance(meta_obj, dict):
+                        msg_data["references_meta"] = cast(object, meta_obj)
+                else:
+                    msg_data["references"] = []
             except json.JSONDecodeError:
                 msg_data["references"] = []
         export_messages.append(msg_data)
@@ -1334,7 +1564,7 @@ async def transcribe(
     current_user: Annotated[User | None, Depends(get_current_user_optional)] = None,
 ):
     started_at = float(time.time())
-    request_id = uuid.uuid4().hex
+    request_id = str(getattr(request.state, "request_id", "") or "").strip() or uuid.uuid4().hex
     ai_metrics.record_request("transcribe")
     client_ip = get_client_ip(request)
 
@@ -1355,7 +1585,7 @@ async def transcribe(
             _ = await file.read()
         except Exception:
             pass
-        response.headers["X-Request-Id"] = request_id
+        _ = response.headers.setdefault("X-Request-Id", request_id)
         return TranscribeResponse(text="这是一个E2E mock 的语音转写结果")
 
     try:
@@ -1368,6 +1598,19 @@ async def transcribe(
                 error_code=error_code,
                 status_code=503,
                 message=message,
+            )
+            critical_event_reporter.fire_and_forget(
+                event="ai_not_configured",
+                severity="warning",
+                request_id=request_id,
+                title="AI服务未配置",
+                message=message,
+                data={
+                    "endpoint": "transcribe",
+                    "user_id": user_id_str,
+                    "ip": client_ip,
+                },
+                dedup_key="ai_not_configured",
             )
             _audit_event(
                 "transcribe_error",
@@ -1389,7 +1632,7 @@ async def transcribe(
             )
 
         if current_user is None:
-            _enforce_guest_ai_quota(request)
+            await _enforce_guest_ai_quota(request)
 
         content = await file.read()
         if not content:
@@ -1455,6 +1698,17 @@ async def transcribe(
             status_code=500,
             message="transcribe_failed",
         )
+        critical_event_reporter.fire_and_forget(
+            event="ai_transcribe_failed",
+            severity="error",
+            request_id=request_id,
+            title="语音转写失败",
+            message="transcribe_failed",
+            data={
+                "endpoint": "transcribe",
+            },
+            dedup_key="ai_transcribe_failed",
+        )
         return _make_error_response(
             status_code=500,
             error_code=ERROR_AI_INTERNAL_ERROR,
@@ -1472,7 +1726,7 @@ async def analyze_file(
     current_user: Annotated[User | None, Depends(get_current_user_optional)] = None,
 ):
     started_at = float(time.time())
-    request_id = uuid.uuid4().hex
+    request_id = str(getattr(request.state, "request_id", "") or "").strip() or uuid.uuid4().hex
     ai_metrics.record_request("file_analyze")
     client_ip = get_client_ip(request)
 
@@ -1493,7 +1747,7 @@ async def analyze_file(
             _ = await file.read()
         except Exception:
             pass
-        response.headers["X-Request-Id"] = request_id
+        _ = response.headers.setdefault("X-Request-Id", request_id)
         return FileAnalyzeResponse(
             filename=str(file.filename or "attachment"),
             content_type=str(file.content_type or "") or None,
@@ -1511,6 +1765,19 @@ async def analyze_file(
             error_code=error_code,
             status_code=503,
             message=message,
+        )
+        critical_event_reporter.fire_and_forget(
+            event="ai_not_configured",
+            severity="warning",
+            request_id=request_id,
+            title="AI服务未配置",
+            message=message,
+            data={
+                "endpoint": "file_analyze",
+                "user_id": user_id_str,
+                "ip": client_ip,
+            },
+            dedup_key="ai_not_configured",
         )
         _audit_event(
             "file_analyze_error",
@@ -1532,7 +1799,7 @@ async def analyze_file(
         )
 
     if current_user is None:
-        _enforce_guest_ai_quota(request)
+        await _enforce_guest_ai_quota(request)
 
     try:
         content = await file.read()
@@ -1633,6 +1900,8 @@ async def analyze_file(
 
     preview = extracted_norm[:4000]
 
+    extracted_for_ai = sanitize_pii(extracted_norm)
+
     def _summarize_sync() -> str:
         from openai import OpenAI
 
@@ -1646,7 +1915,7 @@ async def analyze_file(
                 },
                 {
                     "role": "user",
-                    "content": f"请分析以下文件内容：\n\n{extracted_norm}",
+                    "content": f"请分析以下文件内容：\n\n{extracted_for_ai}",
                 },
             ],
             temperature=0.2,
@@ -1667,6 +1936,17 @@ async def analyze_file(
             error_code=ERROR_AI_INTERNAL_ERROR,
             status_code=500,
             message="summarize_failed",
+        )
+        critical_event_reporter.fire_and_forget(
+            event="ai_file_analyze_failed",
+            severity="error",
+            request_id=request_id,
+            title="文件分析失败",
+            message="summarize_failed",
+            data={
+                "endpoint": "file_analyze",
+            },
+            dedup_key="ai_file_analyze_failed",
         )
         return _make_error_response(
             status_code=500,

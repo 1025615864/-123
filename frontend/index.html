@@ -6,6 +6,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#f59e0b" />
     <meta name="description" content="百姓法律助手 - 专业法律服务，触手可及" />
+    <meta property="og:title" content="百姓法律助手" />
+    <meta
+      property="og:description"
+      content="百姓法律助手 - 专业法律服务，触手可及"
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="百姓法律助手" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="百姓法律助手" />
+    <meta
+      name="twitter:description"
+      content="百姓法律助手 - 专业法律服务，触手可及"
+    />
     <link rel="manifest" href="/manifest.json" />
     <link rel="apple-touch-icon" href="/vite.svg" />
     <title>百姓法律助手</title>
@@ -17,7 +30,8 @@
       if ("serviceWorker" in navigator) {
         window.addEventListener("load", async () => {
           const isDevHost =
-            location.hostname === "localhost" || location.hostname === "127.0.0.1";
+            location.hostname === "localhost" ||
+            location.hostname === "127.0.0.1";
 
           if (isDevHost) {
             const regs = await navigator.serviceWorker.getRegistrations();

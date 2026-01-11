@@ -1,7 +1,6 @@
 """搜索服务 - 提供全局搜索功能"""
 import logging
 from typing import Literal, cast
-
 from typing_extensions import TypedDict
 from sqlalchemy import or_, func, desc, case
 from sqlalchemy.ext.asyncio import AsyncSession

@@ -23,6 +23,10 @@ class LegalKnowledgeBase(BaseModel):
     category: str = Field(..., min_length=1, max_length=50, description="分类")
     keywords: str | None = Field(None, max_length=500, description="关键词，逗号分隔")
     source: str | None = Field(None, max_length=200, description="来源")
+    source_url: str | None = Field(None, max_length=500, description="来源链接")
+    source_version: str | None = Field(None, max_length=50, description="来源版本")
+    source_hash: str | None = Field(None, max_length=64, description="来源内容哈希")
+    ingest_batch_id: str | None = Field(None, max_length=36, description="导入批次ID")
     effective_date: str | None = Field(None, max_length=20, description="生效日期")
     weight: float = Field(1.0, ge=0, le=10, description="权重")
     is_active: bool = Field(True, description="是否启用")
@@ -43,6 +47,10 @@ class LegalKnowledgeUpdate(BaseModel):
     category: str | None = Field(None, min_length=1, max_length=50)
     keywords: str | None = None
     source: str | None = None
+    source_url: str | None = None
+    source_version: str | None = None
+    source_hash: str | None = None
+    ingest_batch_id: str | None = None
     effective_date: str | None = None
     weight: float | None = Field(None, ge=0, le=10)
     is_active: bool | None = None

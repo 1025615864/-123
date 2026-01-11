@@ -14,6 +14,7 @@ from fastapi import Request, HTTPException, status
 from functools import wraps
 
 from ..config import get_settings
+from ..services.cache_service import cache_service
 
 settings = get_settings()
 
@@ -54,39 +55,53 @@ class RateLimiter:
             _ = self._requests.pop(oldest_key, None)
             _ = self._last_seen.pop(oldest_key, None)
     
-    def is_allowed(self, key: str, max_requests: int, window_seconds: int) -> tuple[bool, int]:
-        """
-        检查是否允许请求
-        
-        Returns:
-            tuple[bool, int]: (是否允许, 剩余配额)
-        """
+    def _memory_is_allowed(self, key: str, max_requests: int, window_seconds: int) -> tuple[bool, int]:
         self._clean_old_requests(key, window_seconds)
 
         if key not in self._requests:
             self._evict_if_needed()
             if key not in self._requests:
                 self._requests[key] = []
-        
+
         total_requests = sum(count for _, count in self._requests[key])
         remaining = max(0, max_requests - total_requests)
-        
+
         if total_requests >= max_requests:
             return False, 0
-        
+
         now = time.time()
         self._requests[key].append((now, 1))
         self._last_seen[key] = now
         return True, remaining - 1
-    
-    def get_wait_time(self, key: str, window_seconds: int) -> float:
-        """获取需要等待的时间（秒）"""
+
+    def _memory_get_wait_time(self, key: str, window_seconds: int) -> float:
         if not self._requests[key]:
             return 0
-        
+
         oldest = min(ts for ts, _ in self._requests[key])
         wait = oldest + window_seconds - time.time()
         return max(0, wait)
+
+    async def check(self, key: str, max_requests: int, window_seconds: int) -> tuple[bool, int, int]:
+        redis = cache_service.redis
+        if redis is not None:
+            count = int(await redis.incr(key))
+            if count == 1:
+                _ = await redis.expire(key, int(window_seconds))
+
+            remaining = max(0, int(max_requests) - int(count))
+            if count <= int(max_requests):
+                return True, remaining, 0
+
+            ttl = int(await redis.ttl(key))
+            wait_time = max(0, ttl)
+            return False, 0, wait_time
+
+        allowed, remaining = self._memory_is_allowed(key, max_requests, window_seconds)
+        if allowed:
+            return True, int(remaining), 0
+        wait_time = int(self._memory_get_wait_time(key, window_seconds))
+        return False, 0, max(0, wait_time)
 
 
 # 全局限流器实例
@@ -127,6 +142,9 @@ class RateLimitConfig:
     
     # 管理员操作
     ADMIN = (200, 60)  # 200次/分钟
+
+    # 支付回调
+    PAYMENT_NOTIFY = (120, 60)  # 120次/分钟
 
 
 def get_client_ip(request: Request) -> str:
@@ -201,19 +219,18 @@ def rate_limit(
                 
                 key = ":".join(parts)
             
-            allowed, remaining = rate_limiter.is_allowed(key, max_requests, window_seconds)
-            
+            allowed, remaining, wait_time = await rate_limiter.check(key, max_requests, window_seconds)
+
             if not allowed:
-                wait_time = rate_limiter.get_wait_time(key, window_seconds)
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     detail=f"请求过于频繁，请在 {int(wait_time)} 秒后重试",
                     headers={
                         "X-RateLimit-Limit": str(max_requests),
                         "X-RateLimit-Remaining": "0",
-                        "X-RateLimit-Reset": str(int(time.time() + wait_time)),
+                        "X-RateLimit-Reset": str(int(time.time() + float(wait_time))),
                         "Retry-After": str(int(wait_time)),
-                    }
+                    },
                 )
             
             return await func(*args, **kwargs)

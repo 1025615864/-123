@@ -3,6 +3,7 @@ from .user import User
 from .user_quota import UserQuotaDaily, UserQuotaPackBalance
 from .user_consent import UserConsent
 from .consultation import Consultation, ChatMessage
+from .consultation_review import ConsultationReviewTask, ConsultationReviewVersion
 from .forum import Post, Comment, PostLike, CommentLike, PostFavorite, PostReaction
 from .news import News, NewsFavorite, NewsViewHistory, NewsSubscription
 from .news_ai import NewsAIAnnotation
@@ -25,6 +26,8 @@ __all__ = [
     "UserConsent",
     "Consultation", 
     "ChatMessage",
+    "ConsultationReviewTask",
+    "ConsultationReviewVersion",
     "Post",
     "Comment", 
     "PostLike",

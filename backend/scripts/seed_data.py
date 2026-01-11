@@ -1,4 +1,5 @@
 """数据库种子数据脚本"""
+import argparse
 import os
 import asyncio
 import sys
@@ -7,7 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from app.database import AsyncSessionLocal, init_db
 from app.models.user import User
 from app.models.forum import Post
@@ -202,10 +203,34 @@ async def create_news(db: AsyncSession):
             view_count=2156
         ),
     ]
+    created = 0
+    updated = 0
     for item in news_items:
-        db.add(item)
+        if getattr(item, "is_top", None) is None:
+            item.is_top = False
+        if getattr(item, "is_published", None) is None:
+            item.is_published = True
+
+        title = str(getattr(item, "title", "") or "").strip()
+        if not title:
+            continue
+        existing = (
+            await db.execute(select(News).where(News.title == title).order_by(News.id.asc()).limit(1))
+        ).scalar_one_or_none()
+        if existing is None:
+            db.add(item)
+            created += 1
+        else:
+            existing.summary = item.summary
+            existing.content = item.content
+            existing.category = item.category
+            existing.is_published = bool(item.is_published) if item.is_published is not None else True
+            existing.is_top = bool(item.is_top) if item.is_top is not None else False
+            existing.view_count = int(getattr(item, "view_count", 0) or 0)
+            db.add(existing)
+            updated += 1
     await db.commit()
-    print(f"✓ 创建了 {len(news_items)} 条新闻")
+    print(f"✓ 创建/更新新闻：新增 {created}，更新 {updated}")
 
 
 async def create_law_firms(db: AsyncSession):
@@ -319,24 +344,73 @@ async def create_posts(db: AsyncSession, users: list):
             user_id=users[2].id if len(users) > 2 else 1
         ),
     ]
+    created = 0
+    updated = 0
     for post in posts:
-        db.add(post)
+        title = str(getattr(post, "title", "") or "").strip()
+        user_id = int(getattr(post, "user_id", 0) or 0)
+        if not title or user_id <= 0:
+            continue
+        existing = (
+            await db.execute(
+                select(Post)
+                .where(Post.title == title, Post.user_id == user_id)
+                .order_by(Post.id.asc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            db.add(post)
+            created += 1
+        else:
+            existing.content = post.content
+            existing.category = post.category
+            existing.is_deleted = False
+            db.add(existing)
+            updated += 1
     await db.commit()
-    print(f"✓ 创建了 {len(posts)} 个帖子")
+    print(f"✓ 创建/更新帖子：新增 {created}，更新 {updated}")
 
 
 async def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--reset-news", action="store_true")
+    parser.add_argument("--reset-posts", action="store_true")
+    parser.add_argument("--reset-all", action="store_true")
+    parser.add_argument("--apply-default-config", action="store_true")
+    parser.add_argument("--seed-legal-knowledge", action="store_true")
+    parser.add_argument("--reset-legal-knowledge", action="store_true")
+    args = parser.parse_args()
+
     print("开始初始化种子数据...")
     await init_db()
     
     async with AsyncSessionLocal() as db:
+        if args.apply_default_config:
+            os.environ["E2E_SEED"] = "1"
         await apply_e2e_defaults(db)
         await db.commit()
+
+        if args.seed_legal_knowledge:
+            from scripts.seed_legal_knowledge import seed_law_knowledge
+
+            reset = bool(args.reset_legal_knowledge or args.reset_all)
+            res = await seed_law_knowledge(db, reset=reset)
+            print(
+                f"✓ 法律知识库：新增 {res['created']}，更新 {res['updated']}，当前总数 {res['total']}"
+            )
+
         users = await create_users(db)
         await create_balances(db, users)
+        if args.reset_all or args.reset_news:
+            await db.execute(delete(News))
+            await db.commit()
         await create_news(db)
         await create_law_firms(db)
         await create_lawyers(db, users)
+        if args.reset_all or args.reset_posts:
+            await db.execute(delete(Post))
+            await db.commit()
         await create_posts(db, users)
     
     print("\n✓ 种子数据初始化完成!")

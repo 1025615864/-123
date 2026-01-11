@@ -10,9 +10,6 @@ on:
 jobs:
   pyright:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
 
     steps:
       - uses: actions/checkout@v4
@@ -26,7 +23,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pyright
-          pip install -r requirements.txt
+          pip install -r backend/requirements.txt
 
       - name: Run Pyright
-        run: pyright .
+        run: pyright -p pyrightconfig.json
