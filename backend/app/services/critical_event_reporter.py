@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import time
+from typing import cast
 
 import httpx
 
@@ -40,7 +41,53 @@ class CriticalEventReporter:
 
     def fire_and_forget(self, **kwargs: object) -> None:
         try:
-            _ = asyncio.create_task(self.report(**kwargs))
+            event_obj = kwargs.get("event")
+            if not isinstance(event_obj, str) or not event_obj.strip():
+                return
+
+            severity_obj = kwargs.get("severity")
+            severity = str(severity_obj).strip() if severity_obj is not None else "error"
+            if not severity:
+                severity = "error"
+
+            request_id_obj = kwargs.get("request_id")
+            request_id = str(request_id_obj).strip() if request_id_obj is not None else None
+            if request_id == "":
+                request_id = None
+
+            title_obj = kwargs.get("title")
+            title = str(title_obj) if title_obj is not None else None
+
+            message_obj = kwargs.get("message")
+            message = str(message_obj) if message_obj is not None else None
+
+            data_obj = kwargs.get("data")
+            data: dict[str, object] | None = None
+            if isinstance(data_obj, dict):
+                safe_data: dict[str, object] = {}
+                for k_obj, v_obj in cast(dict[object, object], data_obj).items():
+                    k = str(k_obj or "").strip()
+                    if not k:
+                        continue
+                    safe_data[k] = v_obj
+                data = safe_data
+
+            dedup_key_obj = kwargs.get("dedup_key")
+            dedup_key = str(dedup_key_obj).strip() if dedup_key_obj is not None else None
+            if dedup_key == "":
+                dedup_key = None
+
+            _ = asyncio.create_task(
+                self.report(
+                    event=str(event_obj).strip(),
+                    severity=severity,
+                    request_id=request_id,
+                    title=title,
+                    message=message,
+                    data=data,
+                    dedup_key=dedup_key,
+                )
+            )
         except Exception:
             return
 

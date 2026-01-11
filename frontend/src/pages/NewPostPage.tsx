@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeft, Eye, FileText, Send } from "lucide-react";
 
-import { Button, Card, Input, ListSkeleton } from "../components/ui";
+import { Button, Card, Input, ListSkeleton, Textarea } from "../components/ui";
 import RichTextEditor from "../components/RichTextEditor";
 import MarkdownContent from "../components/MarkdownContent";
 import PageHeader from "../components/PageHeader";
@@ -19,6 +19,14 @@ const LEGACY_DRAFT_KEY = "forum:newPostDraft";
 
 type Attachment = { name: string; url: string };
 
+type StructuredFields = {
+  facts: string;
+  issues: string;
+  evidence: string;
+  claims: string;
+  progress: string;
+};
+
 interface DraftPayload {
   id: string;
   title: string;
@@ -26,6 +34,8 @@ interface DraftPayload {
   content: string;
   images: string[];
   attachments: Attachment[];
+  structured_enabled?: boolean;
+  structured?: StructuredFields;
   createdAt: number;
   updatedAt: number;
 }
@@ -38,6 +48,68 @@ function createDraftId() {
   return `${Date.now().toString(36)}-${Math.random()
     .toString(36)
     .slice(2, 10)}`;
+}
+
+function escapeRegExp(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function upsertSection(base: string, heading: string, body: string): string {
+  const src = String(base ?? "");
+  const h = String(heading ?? "").trim();
+  const safeBody = String(body ?? "").trim();
+  if (!h) return src;
+
+  const normalized = src.replace(/\r\n/g, "\n");
+  const headingRe = new RegExp(`^##\\s+${escapeRegExp(h)}\\s*$`, "m");
+  const m = normalized.match(headingRe);
+  const nextChunk = `\n\n## ${h}\n\n${safeBody}\n`;
+
+  if (!m || typeof m.index !== "number") {
+    if (!normalized.trim()) return nextChunk.trim() + "\n";
+    return normalized.trimEnd() + nextChunk;
+  }
+
+  const idx = m.index;
+  const afterHeading = normalized.indexOf("\n", idx);
+  const start = afterHeading === -1 ? normalized.length : afterHeading + 1;
+
+  const rest = normalized.slice(start);
+  const nextHeadingRe = /^##\s+.+$/m;
+  const nextMatch = rest.match(nextHeadingRe);
+  const end = nextMatch && typeof nextMatch.index === "number" ? start + nextMatch.index : normalized.length;
+
+  const prefix = normalized.slice(0, start);
+  const suffix = normalized.slice(end);
+  const injected = `\n${safeBody}\n`;
+
+  return (prefix.trimEnd() + injected + suffix.trimStart()).trim() + "\n";
+}
+
+function buildStructuredMarkdown(fields: StructuredFields): string {
+  const facts = String(fields.facts || "").trim() || "（请填写：时间、地点、人物、经过）";
+  const issues = String(fields.issues || "").trim() || "（请填写：核心争议点/你最关心的问题）";
+  const evidence = String(fields.evidence || "").trim() || "（请填写：聊天记录、转账记录、合同、录音等）";
+  const claims = String(fields.claims || "").trim() || "（请填写：希望达到的结果/诉求）";
+  const progress = String(fields.progress || "").trim() || "（请填写：目前进展、关键时间点、是否已协商/报警/起诉等）";
+
+  return (
+    `## 案情经过\n\n${facts}\n\n` +
+    `## 争议焦点\n\n${issues}\n\n` +
+    `## 证据线索\n\n${evidence}\n\n` +
+    `## 诉求/目标\n\n${claims}\n\n` +
+    `## 进展与时间线\n\n${progress}\n`
+  );
+}
+
+function hasStructuredAny(fields: StructuredFields): boolean {
+  return Boolean(
+    String(fields.facts || "").trim() ||
+      String(fields.issues || "").trim() ||
+      String(fields.evidence || "").trim() ||
+      String(fields.claims || "").trim() ||
+      String(fields.progress || "").trim()
+  );
 }
 
 export default function NewPostPage() {
@@ -58,6 +130,13 @@ export default function NewPostPage() {
   const [images, setImages] = useState<string[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [preview, setPreview] = useState(false);
+
+  const [structuredEnabled, setStructuredEnabled] = useState(false);
+  const [caseFacts, setCaseFacts] = useState("");
+  const [caseIssues, setCaseIssues] = useState("");
+  const [caseEvidence, setCaseEvidence] = useState("");
+  const [caseClaims, setCaseClaims] = useState("");
+  const [caseProgress, setCaseProgress] = useState("");
   const [hydrated, setHydrated] = useState(false);
 
   const [draftSaving, setDraftSaving] = useState(false);
@@ -85,6 +164,15 @@ export default function NewPostPage() {
         setAttachments(
           Array.isArray(existing.attachments) ? existing.attachments : []
         );
+        setStructuredEnabled(Boolean((existing as any)?.structured_enabled));
+        const structured = (existing as any)?.structured;
+        if (structured && typeof structured === "object") {
+          setCaseFacts(String((structured as any).facts ?? ""));
+          setCaseIssues(String((structured as any).issues ?? ""));
+          setCaseEvidence(String((structured as any).evidence ?? ""));
+          setCaseClaims(String((structured as any).claims ?? ""));
+          setCaseProgress(String((structured as any).progress ?? ""));
+        }
         setDraftLastSavedAt(
           Number(existing.updatedAt || existing.createdAt || Date.now())
         );
@@ -126,6 +214,15 @@ export default function NewPostPage() {
       setContent(payload.content);
       setImages(payload.images);
       setAttachments(payload.attachments);
+      setStructuredEnabled(Boolean((payload as any)?.structured_enabled));
+      const structured = (payload as any)?.structured;
+      if (structured && typeof structured === "object") {
+        setCaseFacts(String((structured as any).facts ?? ""));
+        setCaseIssues(String((structured as any).issues ?? ""));
+        setCaseEvidence(String((structured as any).evidence ?? ""));
+        setCaseClaims(String((structured as any).claims ?? ""));
+        setCaseProgress(String((structured as any).progress ?? ""));
+      }
       setDraftLastSavedAt(
         Number(payload.updatedAt || payload.createdAt || Date.now())
       );
@@ -142,6 +239,12 @@ export default function NewPostPage() {
     setContent("");
     setImages([]);
     setAttachments([]);
+    setStructuredEnabled(false);
+    setCaseFacts("");
+    setCaseIssues("");
+    setCaseEvidence("");
+    setCaseClaims("");
+    setCaseProgress("");
     setPreview(false);
     setDraftLastSavedAt(null);
     setDraftDirty(false);
@@ -161,6 +264,55 @@ export default function NewPostPage() {
   const handleContentChange = (v: string) => {
     setContent(v);
     setDraftDirty(true);
+  };
+
+  const currentStructuredFields: StructuredFields = useMemo(
+    () => ({
+      facts: caseFacts,
+      issues: caseIssues,
+      evidence: caseEvidence,
+      claims: caseClaims,
+      progress: caseProgress,
+    }),
+    [caseEvidence, caseFacts, caseIssues, caseClaims, caseProgress]
+  );
+
+  const syncStructuredToContent = (mode: "merge" | "replace" | "append") => {
+    if (!structuredEnabled) {
+      toast.info("请先开启结构化模板");
+      return;
+    }
+    const hasAny = hasStructuredAny(currentStructuredFields);
+    const template = buildStructuredMarkdown(currentStructuredFields);
+    if (!hasAny && mode !== "replace") {
+      toast.info("模板字段为空");
+      return;
+    }
+
+    if (mode === "replace") {
+      setContent(template);
+      setDraftDirty(true);
+      toast.success("已生成模板到正文");
+      return;
+    }
+
+    if (mode === "append") {
+      const next = (String(content || "").trimEnd() + "\n\n" + template).trim() + "\n";
+      setContent(next);
+      setDraftDirty(true);
+      toast.success("已插入模板到正文");
+      return;
+    }
+
+    let next = String(content || "");
+    next = upsertSection(next, "案情经过", String(currentStructuredFields.facts || "").trim() || "（请填写：时间、地点、人物、经过）");
+    next = upsertSection(next, "争议焦点", String(currentStructuredFields.issues || "").trim() || "（请填写：核心争议点/你最关心的问题）");
+    next = upsertSection(next, "证据线索", String(currentStructuredFields.evidence || "").trim() || "（请填写：聊天记录、转账记录、合同、录音等）");
+    next = upsertSection(next, "诉求/目标", String(currentStructuredFields.claims || "").trim() || "（请填写：希望达到的结果/诉求）");
+    next = upsertSection(next, "进展与时间线", String(currentStructuredFields.progress || "").trim() || "（请填写：目前进展、关键时间点、是否已协商/报警/起诉等）");
+    setContent(next);
+    setDraftDirty(true);
+    toast.success("已同步到正文");
   };
 
   const handleImagesChange = (v: string[]) => {
@@ -189,6 +341,7 @@ export default function NewPostPage() {
       const isEmpty =
         !title.trim() &&
         !content.trim() &&
+        !hasStructuredAny(currentStructuredFields) &&
         (images?.length ?? 0) === 0 &&
         (attachments?.length ?? 0) === 0;
 
@@ -199,6 +352,8 @@ export default function NewPostPage() {
         content,
         images,
         attachments,
+        structured_enabled: structuredEnabled,
+        structured: currentStructuredFields,
         createdAt: draftCreatedAt,
         updatedAt: Date.now(),
       };
@@ -250,6 +405,8 @@ export default function NewPostPage() {
     content,
     images,
     attachments,
+    structuredEnabled,
+    currentStructuredFields,
     hydrated,
     draftId,
     draftCreatedAt,
@@ -270,6 +427,12 @@ export default function NewPostPage() {
     setContent("");
     setImages([]);
     setAttachments([]);
+    setStructuredEnabled(false);
+    setCaseFacts("");
+    setCaseIssues("");
+    setCaseEvidence("");
+    setCaseClaims("");
+    setCaseProgress("");
     const nextId = createDraftId();
     setDraftId(nextId);
     setDraftCreatedAt(Date.now());
@@ -281,13 +444,13 @@ export default function NewPostPage() {
 
   const publishMutation = useAppMutation<
     { id: number; review_status?: string | null },
-    void
+    { content: string }
   >({
-    mutationFn: async () => {
+    mutationFn: async ({ content: finalContent }) => {
       const res = await api.post("/forum/posts", {
         title,
         category,
-        content,
+        content: finalContent,
         images,
         attachments,
       });
@@ -332,12 +495,32 @@ export default function NewPostPage() {
       toast.error("请填写标题");
       return;
     }
-    if (!content.trim()) {
+    const finalContent =
+      structuredEnabled && hasStructuredAny(currentStructuredFields)
+        ? (() => {
+            let next = String(content || "");
+            if (!next.trim()) {
+              return buildStructuredMarkdown(currentStructuredFields);
+            }
+            next = upsertSection(next, "案情经过", String(currentStructuredFields.facts || "").trim() || "（请填写：时间、地点、人物、经过）");
+            next = upsertSection(next, "争议焦点", String(currentStructuredFields.issues || "").trim() || "（请填写：核心争议点/你最关心的问题）");
+            next = upsertSection(next, "证据线索", String(currentStructuredFields.evidence || "").trim() || "（请填写：聊天记录、转账记录、合同、录音等）");
+            next = upsertSection(next, "诉求/目标", String(currentStructuredFields.claims || "").trim() || "（请填写：希望达到的结果/诉求）");
+            next = upsertSection(next, "进展与时间线", String(currentStructuredFields.progress || "").trim() || "（请填写：目前进展、关键时间点、是否已协商/报警/起诉等）");
+            return next;
+          })()
+        : String(content || "");
+
+    if (!finalContent.trim()) {
       toast.error("请填写内容");
       return;
     }
     if (publishBusy) return;
-    publishMutation.mutate();
+    if (finalContent !== content) {
+      setContent(finalContent);
+      setDraftDirty(true);
+    }
+    publishMutation.mutate({ content: finalContent });
   };
 
   if (!hydrated) {
@@ -378,6 +561,9 @@ export default function NewPostPage() {
               icon={Eye}
               onClick={() => {
                 if (publishBusy) return;
+                if (!preview && structuredEnabled && hasStructuredAny(currentStructuredFields)) {
+                  syncStructuredToContent(content.trim() ? "merge" : "replace");
+                }
                 setPreview((p) => !p);
               }}
               disabled={publishBusy}
@@ -448,6 +634,111 @@ export default function NewPostPage() {
                 </option>
               ))}
             </select>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200/70 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-900 dark:text-white">
+                  结构化发帖模板
+                </div>
+                <div className="text-xs text-slate-500 mt-1 dark:text-white/45">
+                  按案情要素组织内容，便于他人快速理解并回复
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant={structuredEnabled ? "secondary" : "outline"}
+                  onClick={() => {
+                    setStructuredEnabled((v) => !v);
+                    setDraftDirty(true);
+                  }}
+                  disabled={publishBusy}
+                >
+                  {structuredEnabled ? "已开启" : "开启"}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (publishBusy) return;
+                    syncStructuredToContent(content.trim() ? "merge" : "replace");
+                  }}
+                  disabled={publishBusy || !structuredEnabled}
+                >
+                  同步到正文
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (publishBusy) return;
+                    syncStructuredToContent("append");
+                  }}
+                  disabled={publishBusy || !structuredEnabled}
+                >
+                  插入模板
+                </Button>
+              </div>
+            </div>
+
+            {structuredEnabled ? (
+              <div className="mt-4 grid grid-cols-1 gap-4">
+                <Textarea
+                  label="案情经过"
+                  value={caseFacts}
+                  onChange={(e) => {
+                    setCaseFacts(e.target.value);
+                    setDraftDirty(true);
+                  }}
+                  rows={4}
+                  placeholder="时间、地点、人物、经过..."
+                  disabled={publishBusy}
+                />
+                <Textarea
+                  label="争议焦点"
+                  value={caseIssues}
+                  onChange={(e) => {
+                    setCaseIssues(e.target.value);
+                    setDraftDirty(true);
+                  }}
+                  rows={3}
+                  placeholder="你最想解决的问题/争议点..."
+                  disabled={publishBusy}
+                />
+                <Textarea
+                  label="证据线索"
+                  value={caseEvidence}
+                  onChange={(e) => {
+                    setCaseEvidence(e.target.value);
+                    setDraftDirty(true);
+                  }}
+                  rows={3}
+                  placeholder="合同、聊天记录、转账记录、录音、证人..."
+                  disabled={publishBusy}
+                />
+                <Textarea
+                  label="诉求/目标"
+                  value={caseClaims}
+                  onChange={(e) => {
+                    setCaseClaims(e.target.value);
+                    setDraftDirty(true);
+                  }}
+                  rows={3}
+                  placeholder="希望对方做什么/你希望达到的结果..."
+                  disabled={publishBusy}
+                />
+                <Textarea
+                  label="进展与时间线"
+                  value={caseProgress}
+                  onChange={(e) => {
+                    setCaseProgress(e.target.value);
+                    setDraftDirty(true);
+                  }}
+                  rows={3}
+                  placeholder="目前进展、关键时间点、是否协商/报警/起诉..."
+                  disabled={publishBusy}
+                />
+              </div>
+            ) : null}
           </div>
 
           {preview ? (

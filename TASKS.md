@@ -267,63 +267,68 @@
 
 ### P0.2 Redis 生产强依赖（替换内存限流/锁/关键缓存）
 
-- [ ] 生产强制要求 `REDIS_URL`
+- [x] 生产强制要求 `REDIS_URL`
 
-  - [ ] 当 `DEBUG=false` 且 `REDIS_URL` 缺失时，后端启动失败（给出原因与配置提示）
+  - [x] 当 `DEBUG=false` 且 `REDIS_URL` 缺失时，后端启动失败（给出原因与配置提示）
 
-- [ ] 限流：将 `backend/app/utils/rate_limiter.py` 从内存滑窗迁移为 Redis
+- [x] 限流：将 `backend/app/utils/rate_limiter.py` 从内存滑窗迁移为 Redis
 
-  - [ ] 实现策略：`INCR` + `EXPIRE`（或 Lua 滑窗）
+  - [x] 实现策略：`INCR` + `EXPIRE`（或 Lua 滑窗）
   - [ ] 覆盖关键接口（至少）：
-    - [ ] `/api/ai/*`（chat/stream）
-    - [ ] `/api/documents/generate`
-    - [ ] `/api/user/sms/*`（发送/验证）
-    - [ ] `/api/payment/*/notify`（回调入口防滥用）
-  - [ ] 保留开发兜底：`DEBUG=true` 时允许内存限流（可选）
+    - [x] `/api/ai/*`（chat/stream）
+    - [x] `/api/documents/generate`
+    - [x] `/api/user/sms/*`（发送/验证）
+    - [x] `/api/payment/*/notify`（回调入口防滥用）
+  - [x] 保留开发兜底：`DEBUG=true` 时允许内存限流（可选）
 
-- [ ] 分布式锁：新增 Redis Lock 工具（SETNX + PX + token）
+- [x] 分布式锁：新增 Redis Lock 工具（SETNX + PX + token）
 
-  - [ ] 支付回调：按 `provider:trade_no`（或 `order_no`）加锁，保证并发幂等
-  - [ ] 周期任务：统一通过分布式锁运行（替代/统一目前的“Redis 可用时启用”策略）
+  - [x] 支付回调：按 `provider:trade_no`（或 `order_no`）加锁，保证并发幂等
+  - [x] 周期任务：统一通过分布式锁运行（替代/统一目前的“Redis 可用时启用”策略）
 
-- [ ] 验收标准
-  - [ ] 多实例下限流生效（总量不随副本数线性放大）
-  - [ ] 并发回调不会导致重复发放权益/重复记账
-  - [ ] 周期任务在多副本下最多仅 1 个实例执行
+- [x] 验收标准
+  - [x] 多实例下限流生效（总量不随副本数线性放大）
+  - [x] 并发回调不会导致重复发放权益/重复记账
+  - [x] 周期任务在多副本下最多仅 1 个实例执行
+  - [x] 本地回归：`py -m pytest -q`（130 passed）
 
 ### P0.3 上传存储去本地化（对象存储/共享存储）
 
-- [ ] 抽象存储层：为 `backend/app/routers/upload.py` 增加 `StorageProvider`
+- [x] 抽象存储层：为 `backend/app/routers/upload.py` 增加 `StorageProvider`
 
-  - [ ] `LocalStorageProvider`（开发默认）
-  - [ ] `S3CompatibleProvider`（MinIO/OSS/S3）
-  - [ ] 配置项：bucket、endpoint、access_key/secret_key、public_base_url 或 signed url
-  - [ ] 文件命名策略：内容哈希或 UUID；目录按日期/类型分桶
+  - [x] `LocalStorageProvider`（开发默认）
+  - [x] `S3CompatibleProvider`（MinIO/OSS/S3）
+  - [x] 配置项：bucket、endpoint、access_key/secret_key、public_base_url 或 signed url
+  - [x] 文件命名策略：内容哈希或 UUID；目录按日期/类型分桶
 
-- [ ] 兼容与迁移策略
+- [x] 兼容与迁移策略
 
-  - [ ] 保持现有返回 URL 格式兼容（前端无需改或最小改）
+  - [x] 保持现有返回 URL 格式兼容（前端无需改或最小改）
   - [ ] 迁移脚本（可选）：把历史本地文件搬迁到对象存储并更新引用（若 DB 存了 URL）
 
-- [ ] 验收标准
-  - [ ] 容器重启/Pod 漂移后，历史上传文件仍可访问
-  - [ ] 上传/下载在生产多副本下稳定可用
+- [x] 验收标准
+  - [x] 容器重启/Pod 漂移后，历史上传文件仍可访问
+  - [x] 上传/下载在生产多副本下稳定可用
+  - [x] 本地回归：`py -m pytest -q`（130 passed）
 
 ### P0.4 支付资产安全加固（幂等 + 并发防守 + 审计增强）
 
-- [ ] 支付回调接口增加 Redis Lock（见 P0.2），并对关键写入加事务保护
-- [ ] 补充“并发回调”测试用例
-  - [ ] 同一 `trade_no`/`order_no` 同时打入两次，最终只能产生一次权益发放/一次余额入账
-- [ ] 审计增强（不含敏感信息）
-  - [ ] `payment_callback_events` 增加：来源 IP、User-Agent、raw 参数 hash（可选）
+- [x] 支付回调接口增加 Redis Lock（见 P0.2），并对关键写入加事务保护
+- [x] 补充“并发回调”测试用例
+  - [x] 同一 `trade_no`/`order_no` 同时打入两次，最终只能产生一次权益发放/一次余额入账
+- [x] 审计增强（不含敏感信息）
+  - [x] `payment_callback_events` 增加：来源 IP、User-Agent、raw 参数 hash（可选）
+  - [x] 本地回归：`py -m pytest -q`（131 passed）
 
 ### P0.5 依赖与版本稳定性（避免 React 19 生态抖动）
 
-- [ ] 前端依赖版本策略收敛
-  - [ ] 评估将 `package.json` 中关键依赖从 `^` 改为固定版本（或至少锁定 React 生态）
-  - [ ] 强制使用 `npm ci`（已在 CI 中使用则记录）
-- [ ] 后端依赖瘦身
-  - [ ] 清理 `requirements.txt` 中未使用依赖（减少镜像体积与供应链风险）
+- [x] 前端依赖版本策略收敛
+  - [x] 将 `frontend/package.json` 中关键依赖从 `^` 改为固定版本（锁定 React/Vite 等）
+  - [x] `npm ci`（CI 已使用；本地回归已验证）
+  - [x] 前端构建回归：`npm run build`（frontend/ 目录）
+- [x] 后端依赖瘦身
+  - [x] 清理 `requirements.txt` 中未使用依赖（已移除 `packaging` / `typing-extensions`）
+  - [x] 本地回归：`py -m pytest -q`（131 passed）
 
 ---
 
@@ -331,17 +336,18 @@
 
 ### P1.1 错误上报与追踪
 
-- [ ] 引入 Sentry（或等价方案）
-  - [ ] 后端：捕获未处理异常、记录 `request_id/user_id/path`（脱敏）
-  - [ ] 前端：捕获运行时错误、请求错误聚合、source map 上传（生产）
+- [x] 引入 Sentry（或等价方案）
+  - [x] 后端：捕获未处理异常、记录 `request_id/user_id/path`（脱敏；DSN 未配置时不启用）
+  - [x] 前端：捕获运行时错误、请求错误聚合（DSN 未配置时不启用）
 
 ### P1.2 结构化日志与 request_id 全链路
 
-- [ ] 后端：结构化日志（JSON）+ 统一 `request_id`
-  - [ ] 每个请求生成/透传 `X-Request-Id`
-  - [ ] 日志字段统一：request_id、user_id、path、method、status、duration_ms
-- [ ] 前端：在 axios 请求头注入 `X-Request-Id`（或从后端返回透传）
-- [ ] 文档：补充“按 request_id 排障”runbook
+- [x] 后端：结构化日志（JSON）+ 统一 `request_id`
+  - [x] 每个请求生成/透传 `X-Request-Id`
+  - [x] 日志字段统一：request_id、user_id、path、method、status、duration_ms
+- [x] 前端：在 axios 请求头注入 `X-Request-Id`（或从后端返回透传）
+- [x] 文档：补充“按 request_id 排障”runbook
+  - [x] 本地回归：`py -m pytest -q`；`npm --prefix frontend run build`
 
 ---
 
@@ -349,19 +355,19 @@
 
 ### P1.3 法律法规 RAG（回答必须可溯源）
 
-- [ ] 建设法律语料库（法条/司法解释/指导案例）
-  - [ ] ingestion：抓取/导入 → 清洗 → 分段（chunk）→ 向量化 → 入库（ChromaDB 已有依赖）
-  - [ ] 版本化：语料来源/更新时间/哈希，用于追溯
-- [ ] AI 回答支持引用
-  - [ ] 输出结构：结论 + 风险提示 + 依据（法条编号/原文片段/链接）
-  - [ ] 前端展示：引用折叠、复制、跳转原文
+- [x] 建设法律语料库（法条/司法解释/指导案例）
+  - [x] ingestion：支持批量导入（batch-import）→ 同步向量库（vectorize/sync-vector-store）
+  - [x] 版本化：source_url/source_version/source_hash/ingest_batch_id，用于追溯
+- [x] AI 回答支持引用
+  - [x] 输出结构：结论 + 风险提示 + 依据（LawReference 含来源信息）
+  - [x] 前端展示：引用折叠、复制、跳转原文（source_url）
 
 ### P1.4 PII 脱敏（Privacy by Design）
 
-- [ ] 在调用 LLM 前增加“敏感信息清洗层”
-  - [ ] 身份证/手机号/地址/银行卡/姓名等规则脱敏
-  - [ ] 保留可读性：替换为 `【当事人A】/【手机号已脱敏】`
-- [ ] 合规提示：前端对话区显式提示“默认脱敏处理”与免责声明
+- [x] 在调用 LLM 前增加“敏感信息清洗层”
+  - [x] 身份证/手机号/地址/银行卡/姓名等规则脱敏
+  - [x] 保留可读性：替换为 `【当事人A】/【手机号已脱敏】`
+- [x] 合规提示：前端对话区显式提示“默认脱敏处理”与免责声明
 
 ---
 
@@ -369,16 +375,16 @@
 
 ### P1.5 智能合同审查（AI Contract Review）
 
-- [ ] 后端：新增合同审查模块（router/service/model）
-  - [ ] 上传合同（PDF/Word）→ 文本提取（pypdf/docx2txt 已有）
-  - [ ] 生成“风险体检报告”（结构化 JSON + 可渲染 Markdown）
-  - [ ] 支持导出 PDF（复用现有文书导出能力）
-- [ ] 前端：新增合同审查页面
-  - [ ] 上传 → 解析进度 → 报告展示（风险等级/条款列表/修改建议）
-  - [ ] 支持购买：单次/会员权益（复用订单体系）
-- [ ] 验收标准
-  - [ ] 对 3 份示例合同（劳动/租赁/服务）可稳定输出报告
-  - [ ] 报告可保存、可导出、可追溯引用依据（若已完成第十四阶段）
+- [x] 后端：新增合同审查模块（router/service/model）
+  - [x] 上传合同（PDF/Word）→ 文本提取（pypdf/docx2txt 已有）
+  - [x] 生成“风险体检报告”（结构化 JSON + 可渲染 Markdown）
+  - [x] 支持导出 PDF（复用现有文书导出能力）
+- [x] 前端：新增合同审查页面
+  - [x] 上传 → 解析进度 → 报告展示（风险等级/条款列表/修改建议）
+  - [x] 支持购买：单次/会员权益（复用订单体系）
+- [x] 验收标准
+  - [x] 对 3 份示例合同（劳动/租赁/服务）可稳定输出报告
+  - [x] 报告可保存、可导出、可追溯引用依据（若已完成第十四阶段）
 
 ---
 
@@ -386,34 +392,47 @@
 
 ### P2.1 “AI 初诊 + 律师复核”产品化
 
-- [ ] 工作流：AI 生成 → 律师工作台审核/修改 → 用户收到“律师已复核”结果
-- [ ] 权限与审计：
-  - [ ] 律师仅可处理分配给自己的订单
-  - [ ] 修改历史可追溯（版本/操作日志）
-- [ ] 计费与结算：
-  - [ ] 新订单类型：`light_consult_review`（示例）
-  - [ ] 复用现有 payment_orders + settlement 流程
-- [ ] 验收标准
-  - [ ] 用户可购买复核服务；律师可在后台完成审核；结算记录可生成
+- [x] 工作流：AI 生成 → 律师工作台审核/修改 → 用户收到“律师已复核”结果
+- [x] 权限与审计：
+  - [x] 律师仅可处理分配给自己的订单
+  - [x] 修改历史可追溯（版本/操作日志）
+- [x] 计费与结算：
+  - [x] 新订单类型：`light_consult_review`（示例）
+  - [x] 复用现有 payment_orders + settlement 流程
+- [x] 验收标准
+  - [x] 用户可购买复核服务；律师可在后台完成审核；结算记录可生成
 
 ---
 
 ## 第十七阶段：内容生态与增长（结构化案例库 + SEO）（P2）
 
-- [ ] 论坛结构化模板
-  - [ ] 发帖引导：案情经过/争议焦点/证据/诉求/进展
+- [x] 论坛结构化模板
+  - [x] 发帖引导：案情经过/争议焦点/证据/诉求/进展
   - [ ] 管理端：高质量内容加精/沉淀为“案例”
-- [ ] SEO/可索引化
+- [x] SEO/可索引化
   - [ ] 评估 SSR/预渲染（React Router 7 的服务端渲染能力）或静态化导出
-  - [ ] 站点地图 sitemap、canonical、OG tags
+  - [x] 站点地图 sitemap、canonical、OG tags
 
 ---
 
 ## 第十八阶段：反馈飞轮与持续优化（P2/P3）
 
-- [ ] AI 回答反馈（有用/无用 + 原因标签）
-  - [ ] 记录到 DB（脱敏后存储）
-  - [ ] 管理端：反馈聚合、Top 问题、prompt/知识库改进建议
-- [ ] A/B 与 Prompt 版本化
-  - [ ] 为关键 prompt 增加版本号与灰度开关（SystemConfig 仅存非敏感配置）
-  - [ ] 可按版本对比：满意度、成本、响应时延
+- [x] AI 回答反馈（有用/无用 + 原因标签）
+  - [x] 记录到 DB（脱敏后存储）：复用 chat_messages.rating/feedback
+  - [x] 用户侧：AI 回复好评/差评 + 原因标签 + 可选补充说明（写入 /ai/messages/rate）
+  - [x] 管理端：基础统计与最近反馈（/system/stats/ai-feedback + Dashboard 展示）
+  - [x] 管理端：原因标签聚合/Top 问题（Top 标签 + 好/中/差拆分）
+  - [x] 管理端：prompt/知识库改进建议（基于反馈汇总输出行动项）
+- [x] A/B 与 Prompt 版本化
+  - [x] 为关键 prompt 增加版本号与灰度开关（SystemConfig 仅存非敏感配置）
+    - [x] 灰度键：
+      - `AI_PROMPT_VERSION_DEFAULT`
+      - `AI_PROMPT_VERSION_V2`
+      - `AI_PROMPT_VERSION_V2_PERCENT`
+    - [x] 灰度策略：稳定分桶（按 user_id / guest 标识 hash），保证同一用户/游客长期命中同一版本
+  - [x] 在消息侧持久化版本信息（不改表结构）
+    - [x] `chat_messages.references` 升级为 JSON 对象：`{"references": [...], "meta": {...}}`
+    - [x] `meta.prompt_version` 写入，便于回溯与统计
+    - [x] 向后兼容旧格式：旧数据仍可能是 `[...]` 数组
+  - [x] 管理端支持按版本对比
+    - [x] `GET /api/system/stats/ai-feedback` 返回 `by_prompt_version`（满意度/评价数按版本聚合）

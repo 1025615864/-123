@@ -4,7 +4,7 @@ import { ArrowLeft, Eye, Save, RefreshCw } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import api from '../api/client'
-import { Button, Card, Input, ListSkeleton } from '../components/ui'
+import { Button, Card, Input, ListSkeleton, Textarea } from '../components/ui'
 import MarkdownContent from '../components/MarkdownContent'
 import PageHeader from '../components/PageHeader'
 import RichTextEditor from '../components/RichTextEditor'
@@ -15,6 +15,76 @@ import { queryKeys } from '../queryKeys'
 import { getApiErrorMessage } from '../utils'
 
 type Attachment = { name: string; url: string }
+
+type StructuredFields = {
+  facts: string
+  issues: string
+  evidence: string
+  claims: string
+  progress: string
+}
+
+function escapeRegExp(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function upsertSection(base: string, heading: string, body: string): string {
+  const src = String(base ?? '')
+  const h = String(heading ?? '').trim()
+  const safeBody = String(body ?? '').trim()
+  if (!h) return src
+
+  const normalized = src.replace(/\r\n/g, '\n')
+  const headingRe = new RegExp(`^##\\s+${escapeRegExp(h)}\\s*$`, 'm')
+  const m = normalized.match(headingRe)
+  const nextChunk = `\n\n## ${h}\n\n${safeBody}\n`
+
+  if (!m || typeof (m as any).index !== 'number') {
+    if (!normalized.trim()) return nextChunk.trim() + '\n'
+    return normalized.trimEnd() + nextChunk
+  }
+
+  const idx = (m as any).index as number
+  const afterHeading = normalized.indexOf('\n', idx)
+  const start = afterHeading === -1 ? normalized.length : afterHeading + 1
+
+  const rest = normalized.slice(start)
+  const nextHeadingRe = /^##\s+.+$/m
+  const nextMatch = rest.match(nextHeadingRe)
+  const end = nextMatch && typeof (nextMatch as any).index === 'number' ? start + ((nextMatch as any).index as number) : normalized.length
+
+  const prefix = normalized.slice(0, start)
+  const suffix = normalized.slice(end)
+  const injected = `\n${safeBody}\n`
+
+  return (prefix.trimEnd() + injected + suffix.trimStart()).trim() + '\n'
+}
+
+function buildStructuredMarkdown(fields: StructuredFields): string {
+  const facts = String(fields.facts || '').trim() || '（请填写：时间、地点、人物、经过）'
+  const issues = String(fields.issues || '').trim() || '（请填写：核心争议点/你最关心的问题）'
+  const evidence = String(fields.evidence || '').trim() || '（请填写：聊天记录、转账记录、合同、录音等）'
+  const claims = String(fields.claims || '').trim() || '（请填写：希望达到的结果/诉求）'
+  const progress = String(fields.progress || '').trim() || '（请填写：目前进展、关键时间点、是否已协商/报警/起诉等）'
+
+  return (
+    `## 案情经过\n\n${facts}\n\n` +
+    `## 争议焦点\n\n${issues}\n\n` +
+    `## 证据线索\n\n${evidence}\n\n` +
+    `## 诉求/目标\n\n${claims}\n\n` +
+    `## 进展与时间线\n\n${progress}\n`
+  )
+}
+
+function hasStructuredAny(fields: StructuredFields): boolean {
+  return Boolean(
+    String(fields.facts || '').trim() ||
+      String(fields.issues || '').trim() ||
+      String(fields.evidence || '').trim() ||
+      String(fields.claims || '').trim() ||
+      String(fields.progress || '').trim()
+  )
+}
 
 interface PostDetail {
   id: number
@@ -42,6 +112,13 @@ export default function EditPostPage() {
   const [images, setImages] = useState<string[]>([])
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [preview, setPreview] = useState(false)
+
+  const [structuredEnabled, setStructuredEnabled] = useState(false)
+  const [caseFacts, setCaseFacts] = useState('')
+  const [caseIssues, setCaseIssues] = useState('')
+  const [caseEvidence, setCaseEvidence] = useState('')
+  const [caseClaims, setCaseClaims] = useState('')
+  const [caseProgress, setCaseProgress] = useState('')
 
   const [dirty, setDirty] = useState(false)
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null)
@@ -75,10 +152,74 @@ export default function EditPostPage() {
     setContent(data.content || '')
     setImages(Array.isArray(data.images) ? data.images : [])
     setAttachments(Array.isArray(data.attachments) ? data.attachments : [])
+    setStructuredEnabled(false)
+    setCaseFacts('')
+    setCaseIssues('')
+    setCaseEvidence('')
+    setCaseClaims('')
+    setCaseProgress('')
     const t = new Date(data.updated_at || data.created_at).getTime()
     setLastSavedAt(Number.isNaN(t) ? null : t)
     setDirty(false)
   }, [postQuery.data])
+
+  const currentStructuredFields: StructuredFields = useMemo(
+    () => ({
+      facts: caseFacts,
+      issues: caseIssues,
+      evidence: caseEvidence,
+      claims: caseClaims,
+      progress: caseProgress,
+    }),
+    [caseClaims, caseEvidence, caseFacts, caseIssues, caseProgress]
+  )
+
+  const buildMergedContent = (): string => {
+    if (!structuredEnabled || !hasStructuredAny(currentStructuredFields)) {
+      return String(content || '')
+    }
+    let next = String(content || '')
+    if (!next.trim()) return buildStructuredMarkdown(currentStructuredFields)
+    next = upsertSection(next, '案情经过', String(currentStructuredFields.facts || '').trim() || '（请填写：时间、地点、人物、经过）')
+    next = upsertSection(next, '争议焦点', String(currentStructuredFields.issues || '').trim() || '（请填写：核心争议点/你最关心的问题）')
+    next = upsertSection(next, '证据线索', String(currentStructuredFields.evidence || '').trim() || '（请填写：聊天记录、转账记录、合同、录音等）')
+    next = upsertSection(next, '诉求/目标', String(currentStructuredFields.claims || '').trim() || '（请填写：希望达到的结果/诉求）')
+    next = upsertSection(next, '进展与时间线', String(currentStructuredFields.progress || '').trim() || '（请填写：目前进展、关键时间点、是否已协商/报警/起诉等）')
+    return next
+  }
+
+  const syncStructuredToContent = (mode: 'merge' | 'replace' | 'append') => {
+    if (!structuredEnabled) {
+      toast.info('请先开启结构化模板')
+      return
+    }
+    const hasAny = hasStructuredAny(currentStructuredFields)
+    const template = buildStructuredMarkdown(currentStructuredFields)
+    if (!hasAny && mode !== 'replace') {
+      toast.info('模板字段为空')
+      return
+    }
+
+    if (mode === 'replace') {
+      setContent(template)
+      setDirty(true)
+      toast.success('已生成模板到正文')
+      return
+    }
+
+    if (mode === 'append') {
+      const next = (String(content || '').trimEnd() + '\n\n' + template).trim() + '\n'
+      setContent(next)
+      setDirty(true)
+      toast.success('已插入模板到正文')
+      return
+    }
+
+    const merged = buildMergedContent()
+    setContent(merged)
+    setDirty(true)
+    toast.success('已同步到正文')
+  }
 
   const handleTitleChange = (v: string) => {
     setTitle(v)
@@ -105,12 +246,12 @@ export default function EditPostPage() {
     setDirty(true)
   }
 
-  const updateMutation = useAppMutation<{ id: number }, void>({
-    mutationFn: async () => {
+  const updateMutation = useAppMutation<{ id: number }, { content: string }>({
+    mutationFn: async ({ content: finalContent }) => {
       const res = await api.put(`/forum/posts/${postId}`, {
         title,
         category,
-        content,
+        content: finalContent,
         images,
         attachments,
       })
@@ -161,7 +302,16 @@ export default function EditPostPage() {
       return
     }
     if (actionBusy) return
-    updateMutation.mutate()
+    const finalContent = buildMergedContent()
+    if (!finalContent.trim()) {
+      toast.error('请填写内容')
+      return
+    }
+    if (finalContent !== content) {
+      setContent(finalContent)
+      setDirty(true)
+    }
+    updateMutation.mutate({ content: finalContent })
   }
 
   if (postQuery.isLoading && !postQuery.data) {
@@ -213,6 +363,9 @@ export default function EditPostPage() {
               icon={Eye}
               onClick={() => {
                 if (actionBusy) return
+                if (!preview && structuredEnabled && hasStructuredAny(currentStructuredFields)) {
+                  syncStructuredToContent(content.trim() ? 'merge' : 'replace')
+                }
                 setPreview((p) => !p)
               }}
               disabled={actionBusy}
@@ -266,6 +419,109 @@ export default function EditPostPage() {
                 </option>
               ))}
             </select>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200/70 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/5">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-900 dark:text-white">结构化发帖模板</div>
+                <div className="text-xs text-slate-500 mt-1 dark:text-white/45">
+                  可选：用案情要素组织内容，再同步到正文
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant={structuredEnabled ? 'secondary' : 'outline'}
+                  onClick={() => {
+                    setStructuredEnabled((v) => !v)
+                    setDirty(true)
+                  }}
+                  disabled={actionBusy}
+                >
+                  {structuredEnabled ? '已开启' : '开启'}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (actionBusy) return
+                    syncStructuredToContent(content.trim() ? 'merge' : 'replace')
+                  }}
+                  disabled={actionBusy || !structuredEnabled}
+                >
+                  同步到正文
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    if (actionBusy) return
+                    syncStructuredToContent('append')
+                  }}
+                  disabled={actionBusy || !structuredEnabled}
+                >
+                  插入模板
+                </Button>
+              </div>
+            </div>
+
+            {structuredEnabled ? (
+              <div className="mt-4 grid grid-cols-1 gap-4">
+                <Textarea
+                  label="案情经过"
+                  value={caseFacts}
+                  onChange={(e) => {
+                    setCaseFacts(e.target.value)
+                    setDirty(true)
+                  }}
+                  rows={4}
+                  placeholder="时间、地点、人物、经过..."
+                  disabled={actionBusy}
+                />
+                <Textarea
+                  label="争议焦点"
+                  value={caseIssues}
+                  onChange={(e) => {
+                    setCaseIssues(e.target.value)
+                    setDirty(true)
+                  }}
+                  rows={3}
+                  placeholder="你最想解决的问题/争议点..."
+                  disabled={actionBusy}
+                />
+                <Textarea
+                  label="证据线索"
+                  value={caseEvidence}
+                  onChange={(e) => {
+                    setCaseEvidence(e.target.value)
+                    setDirty(true)
+                  }}
+                  rows={3}
+                  placeholder="合同、聊天记录、转账记录、录音、证人..."
+                  disabled={actionBusy}
+                />
+                <Textarea
+                  label="诉求/目标"
+                  value={caseClaims}
+                  onChange={(e) => {
+                    setCaseClaims(e.target.value)
+                    setDirty(true)
+                  }}
+                  rows={3}
+                  placeholder="希望对方做什么/你希望达到的结果..."
+                  disabled={actionBusy}
+                />
+                <Textarea
+                  label="进展与时间线"
+                  value={caseProgress}
+                  onChange={(e) => {
+                    setCaseProgress(e.target.value)
+                    setDirty(true)
+                  }}
+                  rows={3}
+                  placeholder="目前进展、关键时间点、是否协商/报警/起诉..."
+                  disabled={actionBusy}
+                />
+              </div>
+            ) : null}
           </div>
 
           {preview ? (

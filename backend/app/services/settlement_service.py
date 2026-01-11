@@ -10,7 +10,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from fastapi import HTTPException, status
 from cryptography.fernet import Fernet, InvalidToken
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
@@ -258,6 +258,79 @@ class SettlementService:
         db.add(record)
 
         wallet = await self.get_or_create_wallet(db, int(consultation.lawyer_id))
+        wallet.total_income = float(_quantize_amount(float(wallet.total_income or 0.0)) + lawyer_income)
+        wallet.pending_amount = float(_quantize_amount(float(wallet.pending_amount or 0.0)) + lawyer_income)
+        _recalc_wallet_fields(wallet)
+        db.add(wallet)
+
+        await db.commit()
+        await db.refresh(record)
+        return record
+
+    async def ensure_income_record_for_paid_review_order(
+        self,
+        db: AsyncSession,
+        *,
+        lawyer_id: int,
+        order: PaymentOrder,
+    ) -> LawyerIncomeRecord | None:
+        if getattr(order, "status", None) != PaymentStatus.PAID:
+            return None
+
+        if str(order.order_type or "").lower() != "light_consult_review":
+            return None
+
+        order_no = str(getattr(order, "order_no", "") or "").strip() or None
+        if order_no is None:
+            return None
+
+        res = await db.execute(
+            select(LawyerIncomeRecord).where(
+                LawyerIncomeRecord.lawyer_id == int(lawyer_id),
+                LawyerIncomeRecord.order_no == order_no,
+            )
+        )
+        existing = res.scalar_one_or_none()
+        if existing is not None:
+            return existing
+
+        paid_amount = _quantize_amount(float(order.actual_amount or 0.0))
+
+        platform_fee_rate = await self.get_platform_fee_rate(db, int(lawyer_id))
+        if platform_fee_rate < 0:
+            platform_fee_rate = 0.0
+        if platform_fee_rate > 1:
+            platform_fee_rate = 1.0
+
+        platform_fee = (paid_amount * Decimal(str(platform_fee_rate))).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        if platform_fee < Decimal("0"):
+            platform_fee = Decimal("0")
+        if platform_fee > paid_amount:
+            platform_fee = paid_amount
+        lawyer_income = paid_amount - platform_fee
+
+        settle_time = _now() + timedelta(days=int(SETTLEMENT_FREEZE_DAYS))
+
+        record = LawyerIncomeRecord(
+            lawyer_id=int(lawyer_id),
+            consultation_id=None,
+            order_no=order_no,
+            user_paid_amount=float(paid_amount),
+            platform_fee=float(platform_fee),
+            lawyer_income=float(lawyer_income),
+            user_paid_amount_cents=_decimal_to_cents(paid_amount),
+            platform_fee_cents=_decimal_to_cents(platform_fee),
+            lawyer_income_cents=_decimal_to_cents(lawyer_income),
+            withdrawn_amount=0.0,
+            withdrawn_amount_cents=0,
+            status="pending",
+            settle_time=settle_time,
+        )
+        db.add(record)
+
+        wallet = await self.get_or_create_wallet(db, int(lawyer_id))
         wallet.total_income = float(_quantize_amount(float(wallet.total_income or 0.0)) + lawyer_income)
         wallet.pending_amount = float(_quantize_amount(float(wallet.pending_amount or 0.0)) + lawyer_income)
         _recalc_wallet_fields(wallet)

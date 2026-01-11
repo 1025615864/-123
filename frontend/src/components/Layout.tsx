@@ -29,6 +29,58 @@ import {
   toolNavItems,
 } from "../navigation";
 
+function upsertMetaTag(
+  attr: "name" | "property",
+  key: string,
+  content: string
+): () => void {
+  const selector = `meta[${attr}="${key}"]`;
+  const existing = document.head.querySelector(selector) as HTMLMetaElement | null;
+  const created = !existing;
+  const el = existing ?? document.createElement("meta");
+  if (created) {
+    el.setAttribute(attr, key);
+    document.head.appendChild(el);
+  }
+  const prev = el.getAttribute("content");
+  el.setAttribute("content", content);
+  return () => {
+    if (created) {
+      el.remove();
+      return;
+    }
+    if (prev == null) {
+      el.removeAttribute("content");
+    } else {
+      el.setAttribute("content", prev);
+    }
+  };
+}
+
+function upsertLinkRel(rel: string, href: string): () => void {
+  const selector = `link[rel="${rel}"]`;
+  const existing = document.head.querySelector(selector) as HTMLLinkElement | null;
+  const created = !existing;
+  const el = existing ?? document.createElement("link");
+  if (created) {
+    el.rel = rel;
+    document.head.appendChild(el);
+  }
+  const prevHref = el.getAttribute("href");
+  el.setAttribute("href", href);
+  return () => {
+    if (created) {
+      el.remove();
+      return;
+    }
+    if (prevHref == null) {
+      el.removeAttribute("href");
+    } else {
+      el.setAttribute("href", prevHref);
+    }
+  };
+}
+
 export default function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -67,6 +119,25 @@ export default function Layout() {
       setOnboardingOpen(true);
     }
   }, [hideFooter, location.pathname, onboardingStorageKey]);
+
+  useEffect(() => {
+    const url = window.location.href;
+    const cleanups: Array<() => void> = [];
+    cleanups.push(upsertLinkRel("canonical", url));
+    cleanups.push(upsertMetaTag("property", "og:url", url));
+    cleanups.push(upsertMetaTag("property", "og:site_name", "百姓法律助手"));
+
+    const p = location.pathname || "/";
+    const type =
+      p.startsWith("/news/") || p.startsWith("/forum/post/")
+        ? "article"
+        : "website";
+    cleanups.push(upsertMetaTag("property", "og:type", type));
+
+    return () => {
+      for (const fn of cleanups) fn();
+    };
+  }, [location.pathname, location.search]);
 
   const toolsActive = useMemo(() => {
     return toolNavItems.some((it) => isRouteActive(location.pathname, it.path));

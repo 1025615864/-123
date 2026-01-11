@@ -39,6 +39,11 @@ export const queryKeys = {
   lawFirmConsultations: (page: number, pageSize: number) =>
     ["lawfirm-consultations", { page, pageSize }] as const,
 
+  consultationReviewTask: (consultationId: number | null) =>
+    ["consultation-review-task", { consultationId }] as const,
+  lawyerReviewTasks: (page: number, pageSize: number, status: string | null) =>
+    ["lawyer-review-tasks", { page, pageSize, status }] as const,
+
   paymentOrdersBase: () => ["payment-orders"] as const,
   paymentOrders: (
     page: number,

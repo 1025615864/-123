@@ -4,7 +4,6 @@ import inspect
 import sys
 from pathlib import Path
 from typing import Any
-import pytest
 import pytest_asyncio
 from collections.abc import AsyncGenerator
 from httpx import AsyncClient, ASGITransport
@@ -27,6 +26,7 @@ async def test_engine():
     for module_name in (
         "app.models.user",
         "app.models.consultation",
+        "app.models.consultation_review",
         "app.models.forum",
         "app.models.news",
         "app.models.news_ai",

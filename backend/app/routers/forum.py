@@ -2,9 +2,7 @@
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Annotated, cast
-
-from typing_extensions import TypedDict
+from typing import Annotated, TypedDict, cast
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, update, case, and_, or_, desc
@@ -321,9 +319,10 @@ async def get_posts(
     page_size: Annotated[int, Query(ge=1, le=100)] = 20,
     category: str | None = None,
     keyword: str | None = None,
+    is_essence: Annotated[bool | None, Query(description="是否仅精华帖")] = None,
 ):
     """获取帖子列表，支持分类筛选和关键词搜索"""
-    posts, total = await forum_service.get_posts(db, page, page_size, category, keyword)
+    posts, total = await forum_service.get_posts(db, page, page_size, category, keyword, is_essence=is_essence)
     
     user_id = current_user.id if current_user else None
     items = [await _build_post_response(db, post, user_id) for post in posts]
@@ -1080,6 +1079,7 @@ async def admin_get_posts(
     category: str | None = None,
     keyword: str | None = None,
     deleted: bool = False,
+    is_essence: Annotated[bool | None, Query(description="是否仅精华帖")] = None,
 ):
     """管理员获取帖子列表"""
     posts, total = await forum_service.get_posts(
@@ -1088,6 +1088,7 @@ async def admin_get_posts(
         page_size,
         category,
         keyword,
+        is_essence=is_essence,
         include_deleted=True,
         deleted=deleted,
         approved_only=False,

@@ -128,7 +128,7 @@ class Settings(BaseSettings):
     cors_allow_credentials: bool = False
     
     frontend_base_url: str = "http://localhost:5173"
-    redis_url: str = ""
+    redis_url: str = Field(default="", validation_alias=AliasChoices("REDIS_URL", "REDIS_URI"))
     trusted_proxies: list[str] = []
     
     # AI配置
@@ -142,6 +142,62 @@ class Settings(BaseSettings):
     
     # 向量数据库配置
     chroma_persist_dir: str = "./chroma_db"
+
+    storage_provider: str = Field(
+        default="local",
+        validation_alias=AliasChoices("STORAGE_PROVIDER", "UPLOAD_STORAGE_PROVIDER"),
+    )
+    storage_public_base_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("STORAGE_PUBLIC_BASE_URL", "UPLOAD_PUBLIC_BASE_URL"),
+    )
+    storage_s3_bucket: str = Field(
+        default="",
+        validation_alias=AliasChoices("STORAGE_S3_BUCKET", "UPLOAD_S3_BUCKET"),
+    )
+    storage_s3_endpoint_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("STORAGE_S3_ENDPOINT_URL", "UPLOAD_S3_ENDPOINT_URL", "S3_ENDPOINT_URL"),
+    )
+    storage_s3_region: str = Field(
+        default="",
+        validation_alias=AliasChoices("STORAGE_S3_REGION", "UPLOAD_S3_REGION", "AWS_REGION"),
+    )
+    storage_s3_access_key_id: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "STORAGE_S3_ACCESS_KEY_ID",
+            "UPLOAD_S3_ACCESS_KEY_ID",
+            "AWS_ACCESS_KEY_ID",
+        ),
+    )
+    storage_s3_secret_access_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "STORAGE_S3_SECRET_ACCESS_KEY",
+            "UPLOAD_S3_SECRET_ACCESS_KEY",
+            "AWS_SECRET_ACCESS_KEY",
+        ),
+    )
+    storage_s3_prefix: str = Field(
+        default="uploads",
+        validation_alias=AliasChoices("STORAGE_S3_PREFIX", "UPLOAD_S3_PREFIX"),
+    )
+
+    sentry_dsn: str = Field(default="", validation_alias=AliasChoices("SENTRY_DSN"))
+    sentry_environment: str = Field(
+        default="",
+        validation_alias=AliasChoices("SENTRY_ENVIRONMENT", "SENTRY_ENV"),
+    )
+    sentry_release: str = Field(default="", validation_alias=AliasChoices("SENTRY_RELEASE"))
+    sentry_traces_sample_rate: float = Field(
+        default=0.0,
+        validation_alias=AliasChoices("SENTRY_TRACES_SAMPLE_RATE"),
+    )
+    sentry_profiles_sample_rate: float = Field(
+        default=0.0,
+        validation_alias=AliasChoices("SENTRY_PROFILES_SAMPLE_RATE"),
+    )
     
     model_config: ClassVar[SettingsConfigDict] = cast(
         SettingsConfigDict,
@@ -220,6 +276,23 @@ class Settings(BaseSettings):
 
             if not self.payment_webhook_secret or len(self.payment_webhook_secret) < 16:
                 raise ValueError("PAYMENT_WEBHOOK_SECRET must be set when DEBUG is False")
+
+            if not (self.redis_url or "").strip():
+                raise ValueError("REDIS_URL must be set when DEBUG is False")
+
+            provider = str(getattr(self, "storage_provider", "local") or "local").strip().lower()
+            if provider == "s3":
+                if not str(getattr(self, "storage_s3_bucket", "") or "").strip():
+                    raise ValueError("STORAGE_S3_BUCKET must be set when STORAGE_PROVIDER is s3")
+                if not str(getattr(self, "storage_public_base_url", "") or "").strip():
+                    raise ValueError("STORAGE_PUBLIC_BASE_URL must be set when STORAGE_PROVIDER is s3")
+
+            access_key = str(getattr(self, "storage_s3_access_key_id", "") or "").strip()
+            secret_key = str(getattr(self, "storage_s3_secret_access_key", "") or "").strip()
+            if (bool(access_key) ^ bool(secret_key)):
+                raise ValueError(
+                    "STORAGE_S3_ACCESS_KEY_ID and STORAGE_S3_SECRET_ACCESS_KEY must be set together"
+                )
         return self
 
 

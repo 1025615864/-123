@@ -878,6 +878,32 @@ export default function ProfilePage() {
   }, [urlParams]);
 
   useEffect(() => {
+    const buyPack = String(urlParams.get("buyPack") ?? "")
+      .trim()
+      .toLowerCase();
+    if (!(buyPack === "document_generate" || buyPack === "ai_chat")) {
+      return;
+    }
+    if (!user) return;
+    if (buyVipMutation.isPending || buyPackMutation.isPending) return;
+
+    setShowRechargeModal(false);
+    setPackRelatedType(buyPack === "document_generate" ? "document_generate" : "ai_chat");
+    setPaymentMethodContext(null);
+    setShowPaymentPanel(false);
+    setShowPackModal(true);
+
+    setUrlParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        p.delete("buyPack");
+        return p;
+      },
+      { replace: true }
+    );
+  }, [urlParams, user, buyVipMutation.isPending, buyPackMutation.isPending, setUrlParams]);
+
+  useEffect(() => {
     const shouldPhoneVerify = String(urlParams.get("phoneVerify") ?? "")
       .trim()
       .toLowerCase();

@@ -8,9 +8,7 @@ import re
 import sys
 import time
 from datetime import datetime
-from typing import Literal, cast
-
-from typing_extensions import TypedDict
+from typing import Literal, TypedDict, cast
 
 import httpx
 from sqlalchemy import and_, func, or_, select
@@ -22,6 +20,7 @@ from ..services.critical_event_reporter import critical_event_reporter
 from ..models.news import News
 from ..models.news_ai import NewsAIAnnotation
 from ..utils.content_filter import content_filter
+from ..utils.pii import sanitize_pii
 
 
 logger = logging.getLogger(__name__)
@@ -1002,7 +1001,7 @@ class NewsAIPipelineService:
             f"其中 summary 为中文摘要，长度不超过 {int(summary_max_chars)} 字；"
             f"highlights 最多 {int(highlights_max)} 条；keywords 最多 {int(keywords_max)} 个。"
         )
-        user_prompt = f"标题：{title}\n正文：{content}"
+        user_prompt = sanitize_pii(f"标题：{title}\n正文：{content}")
         payload: dict[str, object] = {
             "model": model,
             "messages": [

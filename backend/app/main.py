@@ -7,7 +7,7 @@ import time
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from fastapi.exceptions import ResponseValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -18,6 +18,8 @@ from .services.prometheus_metrics import prometheus_metrics
 from .database import AsyncSessionLocal
 from .routers import api_router, websocket
 from .middleware.logging_middleware import RequestLoggingMiddleware, ErrorLoggingMiddleware
+from .middleware.auth_context_middleware import AuthContextMiddleware
+from .middleware.sentry_context_middleware import SentryContextMiddleware
 from .middleware.request_id_middleware import RequestIdMiddleware
 from .middleware.rate_limit import RateLimitMiddleware
 from .middleware.metrics_middleware import MetricsMiddleware
@@ -28,6 +30,26 @@ from .utils.periodic_task_runner import PeriodicLockedRunner
 settings = get_settings()
 
 logger = logging.getLogger(__name__)
+
+try:
+    import sentry_sdk
+except Exception:
+    sentry_sdk = None
+
+if sentry_sdk is not None:
+    dsn = str(getattr(settings, "sentry_dsn", "") or "").strip()
+    if dsn:
+        env = str(getattr(settings, "sentry_environment", "") or "").strip() or None
+        release = str(getattr(settings, "sentry_release", "") or "").strip() or None
+        traces = float(getattr(settings, "sentry_traces_sample_rate", 0.0) or 0.0)
+        profiles = float(getattr(settings, "sentry_profiles_sample_rate", 0.0) or 0.0)
+        _ = sentry_sdk.init(
+            dsn=dsn,
+            environment=env,
+            release=release,
+            traces_sample_rate=max(0.0, min(1.0, traces)),
+            profiles_sample_rate=max(0.0, min(1.0, profiles)),
+        )
 
 try:
     from .routers import ai
@@ -46,7 +68,6 @@ async def lifespan(app: FastAPI):
 
     runner = PeriodicLockedRunner(stop_event=stop_event, lock_client=cache_service, logger=logger)
 
-    scheduled_enabled = True
     redis_connected = False
 
     async def _scheduled_news_job(session: AsyncSession) -> object:
@@ -74,19 +95,16 @@ async def lifespan(app: FastAPI):
         redis_connected = bool(await cache_service.connect(settings.redis_url))
 
     if (not settings.debug) and (not redis_connected):
-        scheduled_enabled = False
-        logger.warning("Redis未连接且DEBUG为False：已禁用定时新闻任务（避免多worker重复执行）")
+        raise RuntimeError("Redis must be available when DEBUG is False. Please set REDIS_URL and ensure Redis is reachable.")
 
-    scheduled_task: asyncio.Task[None] | None = None
-    if scheduled_enabled:
-        scheduled_task = asyncio.create_task(
-            runner.run(
-                lock_key="locks:scheduled_news",
-                lock_ttl_seconds=60,
-                interval_seconds=30.0,
-                job=_scheduled_news_job_wrapper,
-            )
+    scheduled_task: asyncio.Task[None] | None = asyncio.create_task(
+        runner.run(
+            lock_key="locks:scheduled_news",
+            lock_ttl_seconds=60,
+            interval_seconds=30.0,
+            job=_scheduled_news_job_wrapper,
         )
+    )
 
     rss_feeds_raw = os.getenv("RSS_FEEDS", "").strip()
     rss_ingest_enabled_raw = os.getenv("RSS_INGEST_ENABLED", "").strip().lower()
@@ -394,10 +412,78 @@ app.add_middleware(
 app.add_middleware(MetricsMiddleware)
 app.add_middleware(EnvelopeMiddleware)
 
+app.add_middleware(SentryContextMiddleware)
+app.add_middleware(AuthContextMiddleware)
+
 app.add_middleware(RequestIdMiddleware)
 
 app.include_router(api_router, prefix="/api")
 app.include_router(websocket.router)
+
+
+def _normalize_base_url(raw: str) -> str:
+    base = str(raw or "").strip()
+    if base.endswith("/"):
+        base = base[:-1]
+    return base
+
+
+@app.get("/robots.txt", include_in_schema=False)
+async def robots_txt():
+    base = _normalize_base_url(getattr(settings, "frontend_base_url", "") or "")
+    sitemap_url = f"{base}/sitemap.xml" if base else "/sitemap.xml"
+    content = "\n".join(
+        [
+            "User-agent: *",
+            "Allow: /",
+            "Disallow: /admin",
+            f"Sitemap: {sitemap_url}",
+            "",
+        ]
+    )
+    return PlainTextResponse(content=content, media_type="text/plain")
+
+
+@app.get("/sitemap.xml", include_in_schema=False)
+async def sitemap_xml():
+    base = _normalize_base_url(getattr(settings, "frontend_base_url", "") or "")
+
+    paths = [
+        "/",
+        "/chat",
+        "/chat/history",
+        "/forum",
+        "/news",
+        "/news/topics",
+        "/lawfirm",
+        "/search",
+        "/calculator",
+        "/limitations",
+        "/documents",
+        "/contracts",
+        "/faq",
+        "/vip",
+        "/terms",
+        "/privacy",
+        "/ai-disclaimer",
+    ]
+
+    def _loc(p: str) -> str:
+        if not p.startswith("/"):
+            p = "/" + p
+        return f"{base}{p}" if base else p
+
+    urls_xml: str = "\n".join(
+        f"  <url>\n    <loc>{_loc(p)}</loc>\n  </url>" for p in paths
+    )
+
+    xml = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n"
+        f"{urls_xml}\n"
+        "</urlset>\n"
+    )
+    return Response(content=xml, media_type="application/xml")
 
 
 @app.get("/")

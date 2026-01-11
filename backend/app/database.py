@@ -107,6 +107,7 @@ async def init_db() -> None:
         "app.models.user_quota",
         "app.models.user_consent",
         "app.models.consultation",
+        "app.models.consultation_review",
         "app.models.forum",
         "app.models.news",
         "app.models.news_ai",
@@ -162,6 +163,27 @@ async def init_db() -> None:
                 tables_result = await conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
                 tables = {row[0] for row in tables_result.fetchall()}
 
+                if "legal_knowledge" in tables:
+                    lk_cols_result = await conn.execute(text("PRAGMA table_info(legal_knowledge)"))
+                    lk_cols = {row[1] for row in lk_cols_result.fetchall()}
+                    if "source_url" not in lk_cols:
+                        _ = await conn.execute(text("ALTER TABLE legal_knowledge ADD COLUMN source_url VARCHAR(500)"))
+                    if "source_version" not in lk_cols:
+                        _ = await conn.execute(text("ALTER TABLE legal_knowledge ADD COLUMN source_version VARCHAR(50)"))
+                    if "source_hash" not in lk_cols:
+                        _ = await conn.execute(text("ALTER TABLE legal_knowledge ADD COLUMN source_hash VARCHAR(64)"))
+                    if "ingest_batch_id" not in lk_cols:
+                        _ = await conn.execute(text("ALTER TABLE legal_knowledge ADD COLUMN ingest_batch_id VARCHAR(36)"))
+                    try:
+                        _ = await conn.execute(
+                            text("CREATE INDEX IF NOT EXISTS ix_legal_knowledge_source_hash ON legal_knowledge(source_hash)")
+                        )
+                        _ = await conn.execute(
+                            text("CREATE INDEX IF NOT EXISTS ix_legal_knowledge_ingest_batch_id ON legal_knowledge(ingest_batch_id)")
+                        )
+                    except Exception:
+                        logger.exception("创建 legal_knowledge 索引失败")
+
                 if "generated_documents" in tables:
                     docs_cols_result = await conn.execute(text("PRAGMA table_info(generated_documents)"))
                     docs_cols = {row[1] for row in docs_cols_result.fetchall()}
@@ -185,9 +207,24 @@ async def init_db() -> None:
                 if "payment_callback_events" not in tables:
                     _ = await conn.execute(
                         text(
-                            "CREATE TABLE IF NOT EXISTS payment_callback_events (id INTEGER PRIMARY KEY AUTOINCREMENT, provider VARCHAR(20) NOT NULL, order_no VARCHAR(64), trade_no VARCHAR(100), amount FLOAT, amount_cents INTEGER, verified BOOLEAN DEFAULT 0, error_message VARCHAR(200), raw_payload TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+                            "CREATE TABLE IF NOT EXISTS payment_callback_events (id INTEGER PRIMARY KEY AUTOINCREMENT, provider VARCHAR(20) NOT NULL, order_no VARCHAR(64), trade_no VARCHAR(100), amount FLOAT, amount_cents INTEGER, verified BOOLEAN DEFAULT 0, error_message VARCHAR(200), raw_payload TEXT, raw_payload_hash VARCHAR(64), source_ip VARCHAR(45), user_agent VARCHAR(512), created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
                         )
                     )
+                else:
+                    cb_cols_result = await conn.execute(text("PRAGMA table_info(payment_callback_events)"))
+                    cb_cols = {row[1] for row in cb_cols_result.fetchall()}
+                    if "raw_payload_hash" not in cb_cols:
+                        _ = await conn.execute(
+                            text("ALTER TABLE payment_callback_events ADD COLUMN raw_payload_hash VARCHAR(64)")
+                        )
+                    if "source_ip" not in cb_cols:
+                        _ = await conn.execute(
+                            text("ALTER TABLE payment_callback_events ADD COLUMN source_ip VARCHAR(45)")
+                        )
+                    if "user_agent" not in cb_cols:
+                        _ = await conn.execute(
+                            text("ALTER TABLE payment_callback_events ADD COLUMN user_agent VARCHAR(512)")
+                        )
                 try:
                     _ = await conn.execute(
                         text(

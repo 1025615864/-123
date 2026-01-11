@@ -37,6 +37,7 @@ class OrderType(str, enum.Enum):
     SERVICE = "service"  # 法律服务
     VIP = "vip"  # VIP会员
     RECHARGE = "recharge"  # 余额充值
+    LIGHT_CONSULT_REVIEW = "light_consult_review"  # AI咨询律师复核
 
 
 class PaymentOrder(Base):
@@ -140,4 +141,7 @@ class PaymentCallbackEvent(Base):
     error_message: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     raw_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    raw_payload_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

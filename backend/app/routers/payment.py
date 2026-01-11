@@ -28,11 +28,13 @@ from cryptography.hazmat.primitives.serialization import load_pem_private_key, l
 from ..config import get_settings
 from ..database import get_db
 from ..services.critical_event_reporter import critical_event_reporter
+from ..services.cache_service import cache_service
 from ..models.payment import PaymentOrder, UserBalance, BalanceTransaction, PaymentStatus, PaymentCallbackEvent
 from ..models.system import SystemConfig, AdminLog, LogAction, LogModule
 from ..models.user import User
 from ..models.user_quota import UserQuotaPackBalance
 from ..utils.deps import get_current_user, require_admin
+from ..utils.rate_limiter import rate_limit, RateLimitConfig, get_client_ip
 from ..utils.wechatpay_v3 import (
     WeChatPayPlatformCert,
     fetch_platform_certificates,
@@ -222,6 +224,8 @@ def _get_float_env(key: str, default: float) -> float:
 VIP_DEFAULT_DAYS = _get_int_env("VIP_DEFAULT_DAYS", 30)
 VIP_DEFAULT_PRICE = _get_float_env("VIP_DEFAULT_PRICE", 29.0)
 
+LIGHT_CONSULT_REVIEW_DEFAULT_PRICE = _get_float_env("LIGHT_CONSULT_REVIEW_DEFAULT_PRICE", 19.9)
+
 AI_CHAT_PACK_OPTIONS: dict[int, float] = {
     10: 12.0,
     50: 49.0,
@@ -301,6 +305,13 @@ async def _get_pack_options(db: AsyncSession, related_type: str) -> dict[int, fl
         return _parse_pack_options(raw, fallback=DOCUMENT_GENERATE_PACK_OPTIONS)
     raw = await _get_system_config_value(db, "AI_CHAT_PACK_OPTIONS_JSON")
     return _parse_pack_options(raw, fallback=AI_CHAT_PACK_OPTIONS)
+
+
+async def _get_review_price(db: AsyncSession) -> float:
+    price = await _get_float_config(db, "LIGHT_CONSULT_REVIEW_PRICE", float(LIGHT_CONSULT_REVIEW_DEFAULT_PRICE))
+    if price <= 0:
+        price = float(LIGHT_CONSULT_REVIEW_DEFAULT_PRICE)
+    return float(price)
 
 
 # ============ 请求/响应模型 ============
@@ -389,6 +400,9 @@ class CallbackEventResponse(BaseModel):
 class CallbackEventDetailResponse(CallbackEventResponse):
     raw_payload: str | None
     masked_payload: str | None
+    raw_payload_hash: str | None
+    source_ip: str | None
+    user_agent: str | None
 
 
 class PaymentChannelStatusResponse(BaseModel):
@@ -460,6 +474,8 @@ async def _record_callback_event(
     verified: bool,
     error_message: str | None,
     raw_payload: str | None,
+    source_ip: str | None = None,
+    user_agent: str | None = None,
 ) -> None:
     trade_no_for_key = trade_no if (verified and not error_message) else None
     amount_cents: int | None = None
@@ -468,6 +484,26 @@ async def _record_callback_event(
         q = _quantize_amount(float(amount))
         amount_float = float(q)
         amount_cents = _decimal_to_cents(q)
+
+    payload_hash: str | None = None
+    raw_payload_str = str(raw_payload or "")
+    if raw_payload_str.strip():
+        try:
+            payload_hash = hashlib.sha256(raw_payload_str.encode("utf-8")).hexdigest()
+        except Exception:
+            payload_hash = None
+
+    ua = None
+    if user_agent is not None:
+        ua = str(user_agent)
+        if len(ua) > 512:
+            ua = ua[:512]
+
+    ip = None
+    if source_ip is not None:
+        ip = str(source_ip)
+        if len(ip) > 45:
+            ip = ip[:45]
 
     evt = PaymentCallbackEvent(
         provider=str(provider),
@@ -478,6 +514,9 @@ async def _record_callback_event(
         verified=bool(verified),
         error_message=str(error_message) if error_message else None,
         raw_payload=raw_payload,
+        raw_payload_hash=payload_hash,
+        source_ip=ip,
+        user_agent=ua,
     )
 
     try:
@@ -798,6 +837,58 @@ async def _maybe_confirm_lawyer_consultation_in_tx(db: AsyncSession, order: Paym
     )
 
 
+async def _maybe_create_consultation_review_task_in_tx(db: AsyncSession, order: PaymentOrder) -> None:
+    if str(getattr(order, "order_type", "") or "").lower() != "light_consult_review":
+        return
+
+    related_type = str(getattr(order, "related_type", "") or "").strip().lower()
+    if related_type != "ai_consultation":
+        return
+
+    related_id_raw: object | None = cast(object | None, getattr(order, "related_id", None))
+    related_id: int | None = None
+    if isinstance(related_id_raw, bool) or related_id_raw is None:
+        related_id = None
+    elif isinstance(related_id_raw, int):
+        related_id = related_id_raw
+    elif isinstance(related_id_raw, float):
+        related_id = int(related_id_raw)
+    elif isinstance(related_id_raw, str) and related_id_raw.strip():
+        try:
+            related_id = int(related_id_raw.strip())
+        except Exception:
+            related_id = None
+
+    if related_id is None or related_id <= 0:
+        return
+
+    from ..models.consultation import Consultation
+    from ..models.consultation_review import ConsultationReviewTask
+
+    c_res = await db.execute(select(Consultation).where(Consultation.id == int(related_id)))
+    c = c_res.scalar_one_or_none()
+    if c is None:
+        return
+    if int(getattr(c, "user_id", 0) or 0) != int(order.user_id):
+        return
+
+    existing_res = await db.execute(
+        select(ConsultationReviewTask).where(ConsultationReviewTask.order_id == int(order.id))
+    )
+    existing = existing_res.scalar_one_or_none()
+    if existing is not None:
+        return
+
+    task = ConsultationReviewTask(
+        consultation_id=int(related_id),
+        user_id=int(order.user_id),
+        order_id=int(order.id),
+        order_no=str(order.order_no),
+        status="pending",
+    )
+    db.add(task)
+
+
 async def _maybe_apply_vip_membership_in_tx(db: AsyncSession, order: PaymentOrder) -> None:
     if str(getattr(order, "order_type", "")).lower() != "vip":
         return
@@ -947,6 +1038,7 @@ async def _mark_order_paid_in_tx(
     await _maybe_apply_vip_membership_in_tx(db, order)
     await _maybe_apply_ai_pack_in_tx(db, order)
     await _maybe_confirm_lawyer_consultation_in_tx(db, order)
+    await _maybe_create_consultation_review_task_in_tx(db, order)
 
 
 async def _get_or_create_balance_in_tx(db: AsyncSession, user_id: int) -> UserBalance:
@@ -1008,8 +1100,11 @@ async def create_order(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """创建支付订单"""
-    if data.order_type not in {"consultation", "service", "vip", "recharge", "ai_pack"}:
+    if data.order_type not in {"consultation", "service", "vip", "recharge", "ai_pack", "light_consult_review"}:
         raise HTTPException(status_code=400, detail="无效的订单类型")
+
+    related_id = data.related_id
+    related_type = data.related_type
 
     if data.order_type == "vip":
         vip_days, vip_price = await _get_vip_plan(db)
@@ -1039,12 +1134,51 @@ async def create_order(
         if pack_count is None or pack_count not in options:
             raise HTTPException(status_code=400, detail="无效的次数包")
 
+        related_id = int(pack_count)
+
         amount = _quantize_amount(options[int(pack_count)])
         title = (
             f"文书生成次数包（{int(pack_count)}次）"
             if related_type == "document_generate"
             else f"AI咨询次数包（{int(pack_count)}次）"
         )
+        description = data.description
+    elif data.order_type == "light_consult_review":
+        related_type = str(getattr(data, "related_type", "") or "").strip().lower() or "ai_consultation"
+        if related_type != "ai_consultation":
+            raise HTTPException(status_code=400, detail="无效的关联类型")
+
+        related_id_raw: object | None = cast(object | None, getattr(data, "related_id", None))
+        consultation_id: int | None = None
+        if isinstance(related_id_raw, bool) or related_id_raw is None:
+            consultation_id = None
+        elif isinstance(related_id_raw, int):
+            consultation_id = related_id_raw
+        elif isinstance(related_id_raw, float):
+            consultation_id = int(related_id_raw)
+        elif isinstance(related_id_raw, str) and related_id_raw.strip():
+            try:
+                consultation_id = int(related_id_raw.strip())
+            except Exception:
+                consultation_id = None
+
+        if consultation_id is None or consultation_id <= 0:
+            raise HTTPException(status_code=400, detail="缺少咨询ID")
+
+        from ..models.consultation import Consultation
+
+        c_res = await db.execute(select(Consultation).where(Consultation.id == int(consultation_id)))
+        c = c_res.scalar_one_or_none()
+        if c is None:
+            raise HTTPException(status_code=404, detail="咨询记录不存在")
+        if int(getattr(c, "user_id", 0) or 0) != int(current_user.id):
+            raise HTTPException(status_code=403, detail="无权限购买该咨询的复核")
+
+        related_id = int(consultation_id)
+        related_type = "ai_consultation"
+
+        amount = _quantize_amount(await _get_review_price(db))
+        title = "AI咨询律师复核"
         description = data.description
     else:
         amount = _quantize_amount(data.amount)
@@ -1065,8 +1199,8 @@ async def create_order(
         status=PaymentStatus.PENDING,
         title=title,
         description=description,
-        related_id=data.related_id,
-        related_type=data.related_type,
+        related_id=related_id,
+        related_type=related_type,
         expires_at=datetime.now(timezone.utc) + timedelta(hours=2),  # 2小时过期
     )
     db.add(order)
@@ -1086,6 +1220,7 @@ async def get_pricing(db: Annotated[AsyncSession, Depends(get_db)]):
     vip_days, vip_price = await _get_vip_plan(db)
     ai_options = await _get_pack_options(db, "ai_chat")
     doc_options = await _get_pack_options(db, "document_generate")
+    review_price = await _get_review_price(db)
 
     def _to_list(options: dict[int, float]):
         return [
@@ -1095,6 +1230,9 @@ async def get_pricing(db: Annotated[AsyncSession, Depends(get_db)]):
 
     return {
         "vip": {"days": int(vip_days), "price": float(vip_price)},
+        "services": {
+            "light_consult_review": {"price": float(review_price)},
+        },
         "packs": {
             "ai_chat": _to_list(ai_options),
             "document_generate": _to_list(doc_options),
@@ -1222,6 +1360,7 @@ async def pay_order(
             await _maybe_apply_vip_membership_in_tx(db, order)
             await _maybe_apply_ai_pack_in_tx(db, order)
             await _maybe_confirm_lawyer_consultation_in_tx(db, order)
+            await _maybe_create_consultation_review_task_in_tx(db, order)
 
             await db.commit()
         except HTTPException:
@@ -1327,6 +1466,7 @@ async def pay_order(
 
 
 @router.post("/alipay/notify", summary="支付宝异步通知")
+@rate_limit(*RateLimitConfig.PAYMENT_NOTIFY, by_ip=True)
 async def alipay_notify(request: Request, db: Annotated[AsyncSession, Depends(get_db)]):
     form = await request.form()
     params = {str(k): str(v) for k, v in form.items()}
@@ -1334,6 +1474,8 @@ async def alipay_notify(request: Request, db: Annotated[AsyncSession, Depends(ge
     request_id = str(getattr(request.state, "request_id", "") or "").strip() or uuid.uuid4().hex
 
     payload_raw = json.dumps(params, ensure_ascii=False, separators=(",", ":"))
+    source_ip = get_client_ip(request)
+    user_agent = str(request.headers.get("user-agent") or "")
     order_no_raw = str(params.get("out_trade_no") or "").strip() or None
     trade_no_raw = str(params.get("trade_no") or "").strip() or None
     amount_raw: Decimal | None = None
@@ -1354,6 +1496,8 @@ async def alipay_notify(request: Request, db: Annotated[AsyncSession, Depends(ge
             verified=False,
             error_message="ALIPAY_PUBLIC_KEY 未设置",
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         critical_event_reporter.fire_and_forget(
             event="payment_config_missing",
@@ -1381,6 +1525,8 @@ async def alipay_notify(request: Request, db: Annotated[AsyncSession, Depends(ge
             verified=False,
             error_message="验签失败",
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         return Response(content="failure", status_code=400, media_type="text/plain")
 
@@ -1395,6 +1541,8 @@ async def alipay_notify(request: Request, db: Annotated[AsyncSession, Depends(ge
             verified=True,
             error_message=f"unsupported_sign_type:{sign_type}",
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         return Response(content="failure", status_code=400, media_type="text/plain")
 
@@ -1409,6 +1557,8 @@ async def alipay_notify(request: Request, db: Annotated[AsyncSession, Depends(ge
             verified=True,
             error_message=f"ignored_trade_status:{trade_status}" if trade_status else "ignored_trade_status",
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         return Response(content="success", media_type="text/plain")
 
@@ -1423,6 +1573,8 @@ async def alipay_notify(request: Request, db: Annotated[AsyncSession, Depends(ge
             verified=True,
             error_message="app_id 不匹配",
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         return Response(content="failure", status_code=400, media_type="text/plain")
 
@@ -1440,6 +1592,8 @@ async def alipay_notify(request: Request, db: Annotated[AsyncSession, Depends(ge
             verified=True,
             error_message="缺少字段",
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         return Response(content="failure", status_code=400, media_type="text/plain")
 
@@ -1455,25 +1609,118 @@ async def alipay_notify(request: Request, db: Annotated[AsyncSession, Depends(ge
             verified=True,
             error_message="金额格式错误",
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         return Response(content="failure", status_code=400, media_type="text/plain")
 
-    result = await db.execute(select(PaymentOrder).where(PaymentOrder.order_no == order_no))
-    order = result.scalar_one_or_none()
-    if not order:
-        await _record_callback_event(
-            db,
-            provider="alipay",
-            order_no=order_no,
-            trade_no=trade_no,
-            amount=amount,
-            verified=True,
-            error_message="订单不存在",
-            raw_payload=payload_raw,
-        )
-        return Response(content="failure", status_code=404, media_type="text/plain")
+    lock_key = f"locks:payment_notify:alipay:{trade_no or order_no}"
+    lock_value = uuid.uuid4().hex
+    acquired = await cache_service.acquire_lock(lock_key, lock_value, expire=30)
+    if not acquired:
+        return Response(content="failure", status_code=503, media_type="text/plain")
 
-    if order.status == PaymentStatus.PAID:
+    try:
+        result = await db.execute(select(PaymentOrder).where(PaymentOrder.order_no == order_no))
+        order = result.scalar_one_or_none()
+        if not order:
+            await _record_callback_event(
+                db,
+                provider="alipay",
+                order_no=order_no,
+                trade_no=trade_no,
+                amount=amount,
+                verified=True,
+                error_message="订单不存在",
+                raw_payload=payload_raw,
+                source_ip=source_ip,
+                user_agent=user_agent,
+            )
+            return Response(content="failure", status_code=404, media_type="text/plain")
+
+        if order.status == PaymentStatus.PAID:
+            await _record_callback_event(
+                db,
+                provider="alipay",
+                order_no=order_no,
+                trade_no=trade_no,
+                amount=amount,
+                verified=True,
+                error_message=None,
+                raw_payload=payload_raw,
+                source_ip=source_ip,
+                user_agent=user_agent,
+            )
+            return Response(content="success", media_type="text/plain")
+
+        if order.status != PaymentStatus.PENDING:
+            await _record_callback_event(
+                db,
+                provider="alipay",
+                order_no=order_no,
+                trade_no=trade_no,
+                amount=amount,
+                verified=True,
+                error_message="订单状态异常",
+                raw_payload=payload_raw,
+                source_ip=source_ip,
+                user_agent=user_agent,
+            )
+            return Response(content="failure", status_code=400, media_type="text/plain")
+
+        if _quantize_amount(float(order.actual_amount)) != amount:
+            await _record_callback_event(
+                db,
+                provider="alipay",
+                order_no=order_no,
+                trade_no=trade_no,
+                amount=amount,
+                verified=True,
+                error_message="金额不一致",
+                raw_payload=payload_raw,
+                source_ip=source_ip,
+                user_agent=user_agent,
+            )
+            return Response(content="failure", status_code=400, media_type="text/plain")
+
+        try:
+            await _mark_order_paid_in_tx(
+                db,
+                order=order,
+                payment_method="alipay",
+                trade_no=trade_no,
+                amount=amount,
+            )
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            await _record_callback_event(
+                db,
+                provider="alipay",
+                order_no=order_no,
+                trade_no=trade_no,
+                amount=amount,
+                verified=True,
+                error_message="订单落库失败",
+                raw_payload=payload_raw,
+                source_ip=source_ip,
+                user_agent=user_agent,
+            )
+            critical_event_reporter.fire_and_forget(
+                event="payment_callback_persist_failed",
+                severity="error",
+                request_id=request_id,
+                title="支付回调落库失败",
+                message=str(e),
+                data={
+                    "provider": "alipay",
+                    "order_no": order_no,
+                    "trade_no": trade_no,
+                },
+                dedup_key="payment_callback_persist_failed|alipay",
+            )
+            return Response(content="failure", status_code=500, media_type="text/plain")
+
         await _record_callback_event(
             db,
             provider="alipay",
@@ -1483,86 +1730,17 @@ async def alipay_notify(request: Request, db: Annotated[AsyncSession, Depends(ge
             verified=True,
             error_message=None,
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
+
         return Response(content="success", media_type="text/plain")
-
-    if order.status != PaymentStatus.PENDING:
-        await _record_callback_event(
-            db,
-            provider="alipay",
-            order_no=order_no,
-            trade_no=trade_no,
-            amount=amount,
-            verified=True,
-            error_message="订单状态异常",
-            raw_payload=payload_raw,
-        )
-        return Response(content="failure", status_code=400, media_type="text/plain")
-
-    if _quantize_amount(float(order.actual_amount)) != amount:
-        await _record_callback_event(
-            db,
-            provider="alipay",
-            order_no=order_no,
-            trade_no=trade_no,
-            amount=amount,
-            verified=True,
-            error_message="金额不一致",
-            raw_payload=payload_raw,
-        )
-        return Response(content="failure", status_code=400, media_type="text/plain")
-
-    try:
-        await _mark_order_paid_in_tx(
-            db,
-            order=order,
-            payment_method="alipay",
-            trade_no=trade_no,
-            amount=amount,
-        )
-        await db.commit()
-    except Exception as e:
-        await db.rollback()
-        await _record_callback_event(
-            db,
-            provider="alipay",
-            order_no=order_no,
-            trade_no=trade_no,
-            amount=amount,
-            verified=True,
-            error_message="订单落库失败",
-            raw_payload=payload_raw,
-        )
-        critical_event_reporter.fire_and_forget(
-            event="payment_callback_persist_failed",
-            severity="error",
-            request_id=request_id,
-            title="支付回调落库失败",
-            message=str(e),
-            data={
-                "provider": "alipay",
-                "order_no": order_no,
-                "trade_no": trade_no,
-            },
-            dedup_key="payment_callback_persist_failed|alipay",
-        )
-        return Response(content="failure", status_code=500, media_type="text/plain")
-
-    await _record_callback_event(
-        db,
-        provider="alipay",
-        order_no=order_no,
-        trade_no=trade_no,
-        amount=amount,
-        verified=True,
-        error_message=None,
-        raw_payload=payload_raw,
-    )
-
-    return Response(content="success", media_type="text/plain")
+    finally:
+        _ = await cache_service.release_lock(lock_key, lock_value)
 
 
 @router.api_route("/ikunpay/notify", methods=["GET", "POST"], summary="Ikunpay 异步通知")
+@rate_limit(*RateLimitConfig.PAYMENT_NOTIFY, by_ip=True)
 async def ikunpay_notify(request: Request, db: Annotated[AsyncSession, Depends(get_db)]):
     params: dict[str, str]
     if request.method == "GET":
@@ -1574,6 +1752,8 @@ async def ikunpay_notify(request: Request, db: Annotated[AsyncSession, Depends(g
     request_id = str(getattr(request.state, "request_id", "") or "").strip() or uuid.uuid4().hex
 
     payload_raw = json.dumps(params, ensure_ascii=False, separators=(",", ":"))
+    source_ip = get_client_ip(request)
+    user_agent = str(request.headers.get("user-agent") or "")
     order_no_raw = str(params.get("out_trade_no") or "").strip() or None
     trade_no_raw = str(params.get("trade_no") or "").strip() or None
 
@@ -1595,6 +1775,8 @@ async def ikunpay_notify(request: Request, db: Annotated[AsyncSession, Depends(g
             verified=False,
             error_message="IKUNPAY_KEY 未设置",
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         critical_event_reporter.fire_and_forget(
             event="payment_config_missing",
@@ -1622,6 +1804,8 @@ async def ikunpay_notify(request: Request, db: Annotated[AsyncSession, Depends(g
             verified=False,
             error_message="验签失败",
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         return Response(content="fail", status_code=400, media_type="text/plain")
 
@@ -1636,6 +1820,8 @@ async def ikunpay_notify(request: Request, db: Annotated[AsyncSession, Depends(g
             verified=True,
             error_message="pid 不匹配",
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         return Response(content="fail", status_code=400, media_type="text/plain")
 
@@ -1650,6 +1836,8 @@ async def ikunpay_notify(request: Request, db: Annotated[AsyncSession, Depends(g
             verified=True,
             error_message=f"ignored_trade_status:{trade_status}" if trade_status else "ignored_trade_status",
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         return Response(content="success", media_type="text/plain")
 
@@ -1665,6 +1853,8 @@ async def ikunpay_notify(request: Request, db: Annotated[AsyncSession, Depends(g
             verified=True,
             error_message="缺少字段",
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         return Response(content="fail", status_code=400, media_type="text/plain")
 
@@ -1680,25 +1870,118 @@ async def ikunpay_notify(request: Request, db: Annotated[AsyncSession, Depends(g
             verified=True,
             error_message="金额格式错误",
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         return Response(content="fail", status_code=400, media_type="text/plain")
 
-    result = await db.execute(select(PaymentOrder).where(PaymentOrder.order_no == order_no))
-    order = result.scalar_one_or_none()
-    if not order:
-        await _record_callback_event(
-            db,
-            provider="ikunpay",
-            order_no=order_no,
-            trade_no=trade_no,
-            amount=amount,
-            verified=True,
-            error_message="订单不存在",
-            raw_payload=payload_raw,
-        )
-        return Response(content="fail", status_code=404, media_type="text/plain")
+    lock_key = f"locks:payment_notify:ikunpay:{trade_no or order_no}"
+    lock_value = uuid.uuid4().hex
+    acquired = await cache_service.acquire_lock(lock_key, lock_value, expire=30)
+    if not acquired:
+        return Response(content="fail", status_code=503, media_type="text/plain")
 
-    if order.status == PaymentStatus.PAID:
+    try:
+        result = await db.execute(select(PaymentOrder).where(PaymentOrder.order_no == order_no))
+        order = result.scalar_one_or_none()
+        if not order:
+            await _record_callback_event(
+                db,
+                provider="ikunpay",
+                order_no=order_no,
+                trade_no=trade_no,
+                amount=amount,
+                verified=True,
+                error_message="订单不存在",
+                raw_payload=payload_raw,
+                source_ip=source_ip,
+                user_agent=user_agent,
+            )
+            return Response(content="fail", status_code=404, media_type="text/plain")
+
+        if order.status == PaymentStatus.PAID:
+            await _record_callback_event(
+                db,
+                provider="ikunpay",
+                order_no=order_no,
+                trade_no=trade_no,
+                amount=amount,
+                verified=True,
+                error_message=None,
+                raw_payload=payload_raw,
+                source_ip=source_ip,
+                user_agent=user_agent,
+            )
+            return Response(content="success", media_type="text/plain")
+
+        if order.status != PaymentStatus.PENDING:
+            await _record_callback_event(
+                db,
+                provider="ikunpay",
+                order_no=order_no,
+                trade_no=trade_no,
+                amount=amount,
+                verified=True,
+                error_message="订单状态异常",
+                raw_payload=payload_raw,
+                source_ip=source_ip,
+                user_agent=user_agent,
+            )
+            return Response(content="fail", status_code=400, media_type="text/plain")
+
+        if _quantize_amount(float(order.actual_amount)) != amount:
+            await _record_callback_event(
+                db,
+                provider="ikunpay",
+                order_no=order_no,
+                trade_no=trade_no,
+                amount=amount,
+                verified=True,
+                error_message="金额不一致",
+                raw_payload=payload_raw,
+                source_ip=source_ip,
+                user_agent=user_agent,
+            )
+            return Response(content="fail", status_code=400, media_type="text/plain")
+
+        try:
+            await _mark_order_paid_in_tx(
+                db,
+                order=order,
+                payment_method="ikunpay",
+                trade_no=trade_no,
+                amount=amount,
+            )
+            await db.commit()
+        except Exception as e:
+            await db.rollback()
+            await _record_callback_event(
+                db,
+                provider="ikunpay",
+                order_no=order_no,
+                trade_no=trade_no,
+                amount=amount,
+                verified=True,
+                error_message="订单落库失败",
+                raw_payload=payload_raw,
+                source_ip=source_ip,
+                user_agent=user_agent,
+            )
+            critical_event_reporter.fire_and_forget(
+                event="payment_callback_persist_failed",
+                severity="error",
+                request_id=request_id,
+                title="支付回调落库失败",
+                message=str(e),
+                data={
+                    "provider": "ikunpay",
+                    "order_no": order_no,
+                    "trade_no": trade_no,
+                },
+                dedup_key="payment_callback_persist_failed|ikunpay",
+            )
+            return Response(content="fail", status_code=500, media_type="text/plain")
+
         await _record_callback_event(
             db,
             provider="ikunpay",
@@ -1708,83 +1991,13 @@ async def ikunpay_notify(request: Request, db: Annotated[AsyncSession, Depends(g
             verified=True,
             error_message=None,
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
+
         return Response(content="success", media_type="text/plain")
-
-    if order.status != PaymentStatus.PENDING:
-        await _record_callback_event(
-            db,
-            provider="ikunpay",
-            order_no=order_no,
-            trade_no=trade_no,
-            amount=amount,
-            verified=True,
-            error_message="订单状态异常",
-            raw_payload=payload_raw,
-        )
-        return Response(content="fail", status_code=400, media_type="text/plain")
-
-    if _quantize_amount(float(order.actual_amount)) != amount:
-        await _record_callback_event(
-            db,
-            provider="ikunpay",
-            order_no=order_no,
-            trade_no=trade_no,
-            amount=amount,
-            verified=True,
-            error_message="金额不一致",
-            raw_payload=payload_raw,
-        )
-        return Response(content="fail", status_code=400, media_type="text/plain")
-
-    try:
-        await _mark_order_paid_in_tx(
-            db,
-            order=order,
-            payment_method="ikunpay",
-            trade_no=trade_no,
-            amount=amount,
-        )
-        await db.commit()
-    except Exception as e:
-        await db.rollback()
-        await _record_callback_event(
-            db,
-            provider="ikunpay",
-            order_no=order_no,
-            trade_no=trade_no,
-            amount=amount,
-            verified=True,
-            error_message="订单落库失败",
-            raw_payload=payload_raw,
-        )
-        critical_event_reporter.fire_and_forget(
-            event="payment_callback_persist_failed",
-            severity="error",
-            request_id=request_id,
-            title="支付回调落库失败",
-            message=str(e),
-            data={
-                "provider": "ikunpay",
-                "order_no": order_no,
-                "trade_no": trade_no,
-            },
-            dedup_key="payment_callback_persist_failed|ikunpay",
-        )
-        return Response(content="fail", status_code=500, media_type="text/plain")
-
-    await _record_callback_event(
-        db,
-        provider="ikunpay",
-        order_no=order_no,
-        trade_no=trade_no,
-        amount=amount,
-        verified=True,
-        error_message=None,
-        raw_payload=payload_raw,
-    )
-
-    return Response(content="success", media_type="text/plain")
+    finally:
+        _ = await cache_service.release_lock(lock_key, lock_value)
 
 
 @router.post("/webhook", summary="支付回调（验签）")
@@ -1794,6 +2007,8 @@ async def payment_webhook(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     request_id = str(getattr(request.state, "request_id", "") or "").strip() or uuid.uuid4().hex
+    source_ip = get_client_ip(request)
+    user_agent = str(request.headers.get("user-agent") or "")
     if data.payment_method not in {"alipay", "wechat"}:
         await _record_callback_event(
             db,
@@ -1804,6 +2019,8 @@ async def payment_webhook(
             verified=False,
             error_message="无效的支付方式",
             raw_payload=json.dumps(data.model_dump(), ensure_ascii=False, separators=(",", ":")),
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         raise HTTPException(status_code=400, detail="无效的支付方式")
 
@@ -1824,6 +2041,8 @@ async def payment_webhook(
             verified=False,
             error_message="签名校验失败",
             raw_payload=json.dumps(data.model_dump(), ensure_ascii=False, separators=(",", ":")),
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         raise HTTPException(status_code=400, detail="签名校验失败")
 
@@ -1839,6 +2058,8 @@ async def payment_webhook(
             verified=True,
             error_message="订单不存在",
             raw_payload=json.dumps(data.model_dump(), ensure_ascii=False, separators=(",", ":")),
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         raise HTTPException(status_code=404, detail="订单不存在")
 
@@ -1852,6 +2073,8 @@ async def payment_webhook(
             verified=True,
             error_message=None,
             raw_payload=json.dumps(data.model_dump(), ensure_ascii=False, separators=(",", ":")),
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         return {"message": "OK"}
 
@@ -1865,6 +2088,8 @@ async def payment_webhook(
             verified=True,
             error_message="订单状态异常",
             raw_payload=json.dumps(data.model_dump(), ensure_ascii=False, separators=(",", ":")),
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         raise HTTPException(status_code=400, detail="订单状态异常")
 
@@ -1878,6 +2103,8 @@ async def payment_webhook(
             verified=True,
             error_message="金额不一致",
             raw_payload=json.dumps(data.model_dump(), ensure_ascii=False, separators=(",", ":")),
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         raise HTTPException(status_code=400, detail="金额不一致")
 
@@ -1936,12 +2163,15 @@ async def payment_webhook(
         verified=True,
         error_message=None,
         raw_payload=json.dumps(data.model_dump(), ensure_ascii=False, separators=(",", ":")),
+        source_ip=source_ip,
+        user_agent=user_agent,
     )
 
     return {"message": "OK"}
 
 
 @router.post("/wechat/notify", summary="微信支付回调（验签）")
+@rate_limit(*RateLimitConfig.PAYMENT_NOTIFY, by_ip=True)
 async def wechat_notify(
     request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -1949,6 +2179,9 @@ async def wechat_notify(
     request_id = str(getattr(request.state, "request_id", "") or "").strip() or uuid.uuid4().hex
     body = await request.body()
     payload_raw = body.decode("utf-8", errors="replace")
+
+    source_ip = get_client_ip(request)
+    user_agent = str(request.headers.get("user-agent") or "")
 
     serial = str(request.headers.get("Wechatpay-Serial") or "").strip()
     timestamp = str(request.headers.get("Wechatpay-Timestamp") or "").strip()
@@ -1969,6 +2202,8 @@ async def wechat_notify(
             verified=False,
             error_message="平台证书未配置",
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         raise HTTPException(status_code=400, detail="平台证书未配置")
 
@@ -1982,6 +2217,8 @@ async def wechat_notify(
             verified=False,
             error_message="缺少签名头",
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         raise HTTPException(status_code=400, detail="缺少签名头")
 
@@ -1995,6 +2232,8 @@ async def wechat_notify(
             verified=False,
             error_message="缺少签名类型",
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         raise HTTPException(status_code=400, detail="缺少签名类型")
 
@@ -2008,6 +2247,8 @@ async def wechat_notify(
             verified=False,
             error_message=f"不支持的签名类型:{signature_type}",
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         raise HTTPException(status_code=400, detail="不支持的签名类型")
 
@@ -2027,6 +2268,8 @@ async def wechat_notify(
             verified=False,
             error_message="验签失败",
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         raise HTTPException(status_code=400, detail="验签失败")
 
@@ -2040,6 +2283,8 @@ async def wechat_notify(
             verified=False,
             error_message="WECHATPAY_API_V3_KEY 未设置",
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         critical_event_reporter.fire_and_forget(
             event="payment_config_missing",
@@ -2090,6 +2335,8 @@ async def wechat_notify(
             verified=True,
             error_message="解密失败",
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         raise HTTPException(status_code=400, detail="解密失败")
 
@@ -2123,51 +2370,156 @@ async def wechat_notify(
             verified=True,
             error_message="缺少字段",
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
         return {"code": "SUCCESS", "message": "OK"}
 
-    if trade_state and trade_state != "SUCCESS":
-        await _record_callback_event(
-            db,
-            provider="wechat",
-            order_no=order_no,
-            trade_no=trade_no,
-            amount=amount_yuan,
-            verified=True,
-            error_message=f"ignored_trade_state:{trade_state}",
-            raw_payload=payload_raw,
-        )
-        return {"code": "SUCCESS", "message": "OK"}
+    lock_key = f"locks:payment_notify:wechat:{trade_no or order_no}"
+    lock_value = uuid.uuid4().hex
+    acquired = await cache_service.acquire_lock(lock_key, lock_value, expire=30)
+    if not acquired:
+        return {"code": "FAIL", "message": "BUSY"}
 
-    if amount_yuan is None:
-        await _record_callback_event(
-            db,
-            provider="wechat",
-            order_no=order_no,
-            trade_no=trade_no,
-            amount=None,
-            verified=True,
-            error_message="金额缺失",
-            raw_payload=payload_raw,
-        )
-        return {"code": "SUCCESS", "message": "OK"}
+    try:
+        if trade_state and trade_state != "SUCCESS":
+            await _record_callback_event(
+                db,
+                provider="wechat",
+                order_no=order_no,
+                trade_no=trade_no,
+                amount=amount_yuan,
+                verified=True,
+                error_message=f"ignored_trade_state:{trade_state}",
+                raw_payload=payload_raw,
+                source_ip=source_ip,
+                user_agent=user_agent,
+            )
+            return {"code": "SUCCESS", "message": "OK"}
 
-    result = await db.execute(select(PaymentOrder).where(PaymentOrder.order_no == order_no))
-    order = result.scalar_one_or_none()
-    if not order:
-        await _record_callback_event(
-            db,
-            provider="wechat",
-            order_no=order_no,
-            trade_no=trade_no,
-            amount=amount_yuan,
-            verified=True,
-            error_message="订单不存在",
-            raw_payload=payload_raw,
-        )
-        return {"code": "SUCCESS", "message": "OK"}
+        if amount_yuan is None:
+            await _record_callback_event(
+                db,
+                provider="wechat",
+                order_no=order_no,
+                trade_no=trade_no,
+                amount=None,
+                verified=True,
+                error_message="金额缺失",
+                raw_payload=payload_raw,
+                source_ip=source_ip,
+                user_agent=user_agent,
+            )
+            return {"code": "SUCCESS", "message": "OK"}
 
-    if order.status == PaymentStatus.PAID:
+        result = await db.execute(select(PaymentOrder).where(PaymentOrder.order_no == order_no))
+        order = result.scalar_one_or_none()
+        if not order:
+            await _record_callback_event(
+                db,
+                provider="wechat",
+                order_no=order_no,
+                trade_no=trade_no,
+                amount=amount_yuan,
+                verified=True,
+                error_message="订单不存在",
+                raw_payload=payload_raw,
+                source_ip=source_ip,
+                user_agent=user_agent,
+            )
+            return {"code": "SUCCESS", "message": "OK"}
+
+        if order.status == PaymentStatus.PAID:
+            await _record_callback_event(
+                db,
+                provider="wechat",
+                order_no=order_no,
+                trade_no=trade_no,
+                amount=amount_yuan,
+                verified=True,
+                error_message=None,
+                raw_payload=payload_raw,
+                source_ip=source_ip,
+                user_agent=user_agent,
+            )
+            return {"code": "SUCCESS", "message": "OK"}
+
+        if order.status != PaymentStatus.PENDING:
+            await _record_callback_event(
+                db,
+                provider="wechat",
+                order_no=order_no,
+                trade_no=trade_no,
+                amount=amount_yuan,
+                verified=True,
+                error_message="订单状态异常",
+                raw_payload=payload_raw,
+                source_ip=source_ip,
+                user_agent=user_agent,
+            )
+            return {"code": "SUCCESS", "message": "OK"}
+
+        if _quantize_amount(float(order.actual_amount)) != amount_yuan:
+            await _record_callback_event(
+                db,
+                provider="wechat",
+                order_no=order_no,
+                trade_no=trade_no,
+                amount=amount_yuan,
+                verified=True,
+                error_message="金额不一致",
+                raw_payload=payload_raw,
+                source_ip=source_ip,
+                user_agent=user_agent,
+            )
+            return {"code": "SUCCESS", "message": "OK"}
+
+        try:
+            await _mark_order_paid_in_tx(
+                db,
+                order=order,
+                payment_method="wechat",
+                trade_no=trade_no,
+                amount=amount_yuan,
+            )
+            await db.commit()
+        except HTTPException as e:
+            await db.rollback()
+            sc = int(getattr(e, "status_code", 500) or 500)
+            if sc >= 500:
+                critical_event_reporter.fire_and_forget(
+                    event="payment_callback_persist_failed",
+                    severity="error",
+                    request_id=request_id,
+                    title="支付回调处理失败",
+                    message=str(getattr(e, "detail", "") or ""),
+                    data={
+                        "provider": "wechat",
+                        "order_no": order_no,
+                        "trade_no": trade_no,
+                        "status_code": sc,
+                    },
+                    dedup_key=f"payment_callback_persist_failed|wechat|{sc}",
+                )
+            raise
+        except Exception as e:
+            await db.rollback()
+            critical_event_reporter.fire_and_forget(
+                event="payment_callback_persist_failed",
+                severity="error",
+                request_id=request_id,
+                title="支付回调处理失败",
+                message=str(e),
+                data={
+                    "provider": "wechat",
+                    "order_no": order_no,
+                    "trade_no": trade_no,
+                    "status_code": 500,
+                },
+                dedup_key="payment_callback_persist_failed|wechat|500",
+            )
+            raise
+
         await _record_callback_event(
             db,
             provider="wechat",
@@ -2177,93 +2529,13 @@ async def wechat_notify(
             verified=True,
             error_message=None,
             raw_payload=payload_raw,
+            source_ip=source_ip,
+            user_agent=user_agent,
         )
+
         return {"code": "SUCCESS", "message": "OK"}
-
-    if order.status != PaymentStatus.PENDING:
-        await _record_callback_event(
-            db,
-            provider="wechat",
-            order_no=order_no,
-            trade_no=trade_no,
-            amount=amount_yuan,
-            verified=True,
-            error_message="订单状态异常",
-            raw_payload=payload_raw,
-        )
-        return {"code": "SUCCESS", "message": "OK"}
-
-    if _quantize_amount(float(order.actual_amount)) != amount_yuan:
-        await _record_callback_event(
-            db,
-            provider="wechat",
-            order_no=order_no,
-            trade_no=trade_no,
-            amount=amount_yuan,
-            verified=True,
-            error_message="金额不一致",
-            raw_payload=payload_raw,
-        )
-        return {"code": "SUCCESS", "message": "OK"}
-
-    try:
-        await _mark_order_paid_in_tx(
-            db,
-            order=order,
-            payment_method="wechat",
-            trade_no=trade_no,
-            amount=amount_yuan,
-        )
-        await db.commit()
-    except HTTPException as e:
-        await db.rollback()
-        sc = int(getattr(e, "status_code", 500) or 500)
-        if sc >= 500:
-            critical_event_reporter.fire_and_forget(
-                event="payment_callback_persist_failed",
-                severity="error",
-                request_id=request_id,
-                title="支付回调处理失败",
-                message=str(getattr(e, "detail", "") or ""),
-                data={
-                    "provider": "wechat",
-                    "order_no": order_no,
-                    "trade_no": trade_no,
-                    "status_code": sc,
-                },
-                dedup_key=f"payment_callback_persist_failed|wechat|{sc}",
-            )
-        raise
-    except Exception as e:
-        await db.rollback()
-        critical_event_reporter.fire_and_forget(
-            event="payment_callback_persist_failed",
-            severity="error",
-            request_id=request_id,
-            title="支付回调处理失败",
-            message=str(e),
-            data={
-                "provider": "wechat",
-                "order_no": order_no,
-                "trade_no": trade_no,
-                "status_code": 500,
-            },
-            dedup_key="payment_callback_persist_failed|wechat|500",
-        )
-        raise
-
-    await _record_callback_event(
-        db,
-        provider="wechat",
-        order_no=order_no,
-        trade_no=trade_no,
-        amount=amount_yuan,
-        verified=True,
-        error_message=None,
-        raw_payload=payload_raw,
-    )
-
-    return {"code": "SUCCESS", "message": "OK"}
+    finally:
+        _ = await cache_service.release_lock(lock_key, lock_value)
 
 
 @router.get("/orders", summary="获取订单列表")
@@ -2876,6 +3148,9 @@ async def admin_callback_event_detail(
         created_at=e.created_at,
         raw_payload=e.raw_payload,
         masked_payload=_mask_payload(e.raw_payload),
+        raw_payload_hash=getattr(e, "raw_payload_hash", None),
+        source_ip=getattr(e, "source_ip", None),
+        user_agent=getattr(e, "user_agent", None),
     )
 
 

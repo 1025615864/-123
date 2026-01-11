@@ -17,6 +17,14 @@ export default defineConfig(() => {
           target: proxyTarget,
           changeOrigin: true,
         },
+        '/sitemap.xml': {
+          target: proxyTarget,
+          changeOrigin: true,
+        },
+        '/robots.txt': {
+          target: proxyTarget,
+          changeOrigin: true,
+        },
         '/ws': {
           target: wsProxyTarget,
           changeOrigin: true,

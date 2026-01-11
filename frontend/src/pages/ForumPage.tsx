@@ -53,8 +53,8 @@ export default function ForumPage() {
   const categories = useMemo(
     () =>
       isAuthenticated
-        ? ["我的帖子", "我的收藏", "全部", ...postCategories]
-        : ["全部", ...postCategories],
+        ? ["我的帖子", "我的收藏", "全部", "精选案例", ...postCategories]
+        : ["全部", "精选案例", ...postCategories],
     [isAuthenticated, postCategories]
   );
 
@@ -117,6 +117,7 @@ export default function ForumPage() {
 
   const isFavoritesMode = isAuthenticated && activeCategory === "我的收藏";
   const isMyPostsMode = isAuthenticated && activeCategory === "我的帖子";
+  const isCasesMode = activeCategory === "精选案例";
 
   const postsQueryKey = useMemo(
     () =>
@@ -140,10 +141,15 @@ export default function ForumPage() {
       if (
         !isFavoritesMode &&
         !isMyPostsMode &&
+        !isCasesMode &&
         activeCategory &&
         activeCategory !== "全部"
       ) {
         params.set("category", activeCategory);
+      }
+
+      if (!isFavoritesMode && !isMyPostsMode && isCasesMode) {
+        params.set("is_essence", "true");
       }
       if (debouncedKeyword.trim()) {
         params.set("keyword", debouncedKeyword.trim());
@@ -321,12 +327,16 @@ export default function ForumPage() {
     ? "暂无收藏帖子"
     : isMyPostsMode
     ? "你还没有发布帖子"
+    : isCasesMode
+    ? "暂无精选案例"
     : "暂无符合条件的帖子";
 
   const emptyStateDescription = isFavoritesMode
     ? "去论坛逛逛，收藏感兴趣的帖子会显示在这里"
     : isMyPostsMode
     ? "发布你的第一篇帖子，获取社区帮助"
+    : isCasesMode
+    ? "这里会展示管理员加精沉淀的高质量内容"
     : "试试切换分类或修改搜索关键词";
 
   const prefetchPostDetail = (id: number) => {

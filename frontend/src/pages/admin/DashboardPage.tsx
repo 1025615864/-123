@@ -95,6 +95,24 @@ interface AiFeedbackRecentRating {
   created_at: string | null
 }
 
+interface AiFeedbackTopTag {
+  tag: string
+  count: number
+  good: number
+  neutral: number
+  bad: number
+}
+
+interface AiFeedbackSuggestion {
+  tag: string
+  count: number
+  good: number
+  neutral: number
+  bad: number
+  title: string
+  action: string
+}
+
 interface AiFeedbackStats {
   days: number
   since: string
@@ -108,6 +126,9 @@ interface AiFeedbackStats {
   satisfaction_rate: number
   rating_rate: number
   recent_ratings: AiFeedbackRecentRating[]
+  top_tags?: AiFeedbackTopTag[]
+  tag_messages_scanned?: number
+  improvement_suggestions?: AiFeedbackSuggestion[]
 }
 
 // 简单柱状图组件
@@ -747,6 +768,56 @@ export default function DashboardPage() {
                 最近 {aiFeedback.days} 天
               </span>
             </div>
+
+            {Array.isArray(aiFeedback.top_tags) && aiFeedback.top_tags.length > 0 && (
+              <div>
+                <div className="flex items-center justify-between gap-3 mb-3">
+                  <div className="text-sm font-semibold text-slate-900 dark:text-white">原因标签 Top</div>
+                  <div className="text-xs text-slate-500 dark:text-white/40">
+                    扫描 {Number(aiFeedback.tag_messages_scanned || 0).toLocaleString()} 条带文字反馈
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {aiFeedback.top_tags.slice(0, 12).map((row) => (
+                    <span
+                      key={row.tag}
+                      className="inline-flex items-center gap-2 rounded-full bg-slate-900/5 px-3 py-1 text-xs text-slate-700 dark:bg-white/5 dark:text-white/70"
+                      title={`好评 ${Number(row.good || 0)} · 一般 ${Number(row.neutral || 0)} · 差评 ${Number(row.bad || 0)}`}
+                    >
+                      <span className="font-medium">{row.tag}</span>
+                      <span className="text-slate-500 dark:text-white/40">{Number(row.count || 0)}</span>
+                    </span>
+                  ))}
+                </div>
+                <div className="mt-2 text-xs text-slate-500 dark:text-white/40">
+                  标签来自用户评价时提交的“原因：...”字段（如：原因：清晰易懂 / 步骤可执行）。
+                </div>
+              </div>
+            )}
+
+            {Array.isArray(aiFeedback.improvement_suggestions) && aiFeedback.improvement_suggestions.length > 0 && (
+              <div>
+                <div className="text-sm font-semibold text-slate-900 mb-3 dark:text-white">改进建议</div>
+                <div className="space-y-2">
+                  {aiFeedback.improvement_suggestions.slice(0, 6).map((row) => (
+                    <div key={row.tag} className="rounded-xl border border-slate-200/70 bg-white/60 px-4 py-3 dark:border-white/10 dark:bg-white/5">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="text-sm font-semibold text-slate-900 dark:text-white">{row.title}</div>
+                          <div className="mt-1 text-sm text-slate-700 dark:text-white/70">{row.action}</div>
+                          <div className="mt-2 text-xs text-slate-500 dark:text-white/40">
+                            触发标签：{row.tag}（好评 {Number(row.good || 0)} · 一般 {Number(row.neutral || 0)} · 差评 {Number(row.bad || 0)}）
+                          </div>
+                        </div>
+                        <div className="shrink-0 text-xs font-medium text-slate-600 dark:text-white/60">
+                          {Number(row.count || 0)}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div>
               <div className="text-sm font-semibold text-slate-900 mb-3 dark:text-white">最近反馈</div>

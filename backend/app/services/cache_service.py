@@ -52,6 +52,12 @@ class CacheService:
     def is_connected(self) -> bool:
         """是否已连接"""
         return self._connected
+
+    @property
+    def redis(self) -> Any | None:
+        if self._connected and self._redis:
+            return self._redis
+        return None
     
     async def get(self, key: str) -> str | None:
         """获取缓存"""

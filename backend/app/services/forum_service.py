@@ -457,6 +457,7 @@ class ForumService:
         page_size: int = 20,
         category: str | None = None,
         keyword: str | None = None,
+        is_essence: bool | None = None,
         include_deleted: bool = False,
         deleted: bool | None = None,
         approved_only: bool = True,
@@ -489,6 +490,13 @@ class ForumService:
             search_filter = Post.title.contains(keyword) | Post.content.contains(keyword)
             query = query.where(search_filter)
             count_query = count_query.where(search_filter)
+
+        if is_essence is True:
+            query = query.where(Post.is_essence == True)
+            count_query = count_query.where(Post.is_essence == True)
+        elif is_essence is False:
+            query = query.where(Post.is_essence == False)
+            count_query = count_query.where(Post.is_essence == False)
         
         # 置顶优先，然后按时间倒序
         query = query.order_by(desc(Post.is_pinned), desc(Post.created_at))

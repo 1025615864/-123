@@ -1,6 +1,7 @@
 """AI助手API路由"""
 import uuid
 import asyncio
+import hashlib
 import io
 import tempfile
 import json
@@ -49,6 +50,7 @@ from ..schemas.ai import (
 from ..utils.deps import get_current_user, get_current_user_optional
 from ..utils.security import create_access_token, decode_token
 from ..utils.rate_limiter import rate_limit, RateLimitConfig, rate_limiter, get_client_ip
+from ..utils.pii import sanitize_pii
 
 router = APIRouter(prefix="/ai", tags=["AI法律助手"])
 
@@ -78,6 +80,65 @@ ERROR_AI_FORBIDDEN = "AI_FORBIDDEN"
 ERROR_AI_UNAUTHORIZED = "AI_UNAUTHORIZED"
 ERROR_AI_BAD_REQUEST = "AI_BAD_REQUEST"
 ERROR_AI_INTERNAL_ERROR = "AI_INTERNAL_ERROR"
+
+
+def _coerce_int(value: object, default: int = 0) -> int:
+    if value is None:
+        return int(default)
+    if isinstance(value, bool):
+        return int(default)
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return int(default)
+        try:
+            return int(float(s))
+        except Exception:
+            return int(default)
+    return int(default)
+
+
+def _stable_bucket(seed: str) -> int:
+    s = str(seed or "").strip()
+    if not s:
+        return 0
+    h = hashlib.sha256(s.encode("utf-8")).hexdigest()
+    try:
+        return int(h[:8], 16) % 100
+    except Exception:
+        return 0
+
+
+async def _get_system_config_value(db: AsyncSession, key: str) -> str | None:
+    from ..models.system import SystemConfig
+
+    k = str(key or "").strip()
+    if not k:
+        return None
+    res = await db.execute(select(SystemConfig.value).where(SystemConfig.key == k))
+    v = res.scalar_one_or_none()
+    return str(v) if isinstance(v, str) else None
+
+
+async def _select_prompt_version(db: AsyncSession, *, bucket_seed: str) -> str:
+    default_pv = str((await _get_system_config_value(db, "AI_PROMPT_VERSION_DEFAULT")) or "v1").strip() or "v1"
+    v2_pv = str((await _get_system_config_value(db, "AI_PROMPT_VERSION_V2")) or "v2").strip() or "v2"
+
+    percent_raw = await _get_system_config_value(db, "AI_PROMPT_VERSION_V2_PERCENT")
+    percent = _coerce_int(percent_raw, 0)
+    percent = max(0, min(100, int(percent)))
+
+    if percent <= 0:
+        return default_pv
+    if percent >= 100:
+        return v2_pv or default_pv
+
+    bucket = _stable_bucket(bucket_seed)
+    return v2_pv if bucket < percent else default_pv
 
 
 def _audit_event(event: str, payload: dict[str, object]) -> None:
@@ -156,13 +217,11 @@ def _audit_text(value: str | None, *, limit: int = 500) -> str:
     return s
 
 
-def _enforce_guest_ai_quota(request: Request) -> None:
+async def _enforce_guest_ai_quota(request: Request) -> None:
     key = f"ai:guest:{get_client_ip(request)}"
-    allowed, remaining = rate_limiter.is_allowed(key, GUEST_AI_LIMIT, GUEST_AI_WINDOW_SECONDS)
+    allowed, remaining, wait_time = await rate_limiter.check(key, GUEST_AI_LIMIT, GUEST_AI_WINDOW_SECONDS)
     if allowed:
         return
-
-    wait_time = rate_limiter.get_wait_time(key, GUEST_AI_WINDOW_SECONDS)
     raise HTTPException(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         detail=f"游客模式 24 小时内仅可试用 {int(GUEST_AI_LIMIT)} 次，请登录后继续",
@@ -324,7 +383,7 @@ async def chat_with_ai(
             )
 
         if current_user is None:
-            _enforce_guest_ai_quota(request)
+            await _enforce_guest_ai_quota(request)
         else:
             await quota_service.enforce_ai_chat_quota(db, current_user)
 
@@ -350,6 +409,9 @@ async def chat_with_ai(
         consultation: Consultation | None = None
         if payload.session_id:
             consultation, seed_history = await _load_seed_history(db, payload.session_id, current_user=current_user)
+
+        bucket_seed = f"u:{current_user.id}" if current_user is not None else f"g:{client_ip or request_id}"
+        prompt_version = await _select_prompt_version(db, bucket_seed=bucket_seed)
 
         assistant = _try_get_ai_assistant()
         if assistant is None:
@@ -390,6 +452,8 @@ async def chat_with_ai(
         }
         if user_profile and _supports_kwarg(getattr(assistant, "chat", None), "user_profile"):
             chat_kwargs["user_profile"] = user_profile
+        if _supports_kwarg(getattr(assistant, "chat", None), "prompt_version"):
+            chat_kwargs["prompt_version"] = prompt_version
 
         chat_result: object = await cast(Any, assistant).chat(**chat_kwargs)
 
@@ -442,7 +506,18 @@ async def chat_with_ai(
         )
         db.add(user_message)
         
-        refs_json = json.dumps([ref.model_dump() for ref in references], ensure_ascii=False)
+        references_list = [ref.model_dump() for ref in references]
+        meta_to_save: dict[str, object] = {}
+        if isinstance(meta, dict):
+            meta_to_save.update(meta)
+        meta_to_save.setdefault("prompt_version", str(prompt_version or "v1"))
+        meta_to_save.setdefault("duration_ms", int((time.time() - started_at) * 1000))
+        meta_to_save.setdefault("request_id", str(request_id))
+
+        refs_json = json.dumps(
+            {"references": references_list, "meta": meta_to_save},
+            ensure_ascii=False,
+        )
         ai_message = ChatMessage(
             consultation_id=consultation.id,
             role="assistant",
@@ -535,12 +610,10 @@ async def chat_with_ai(
                 message=message,
                 data={
                     "endpoint": "chat",
-                    "status_code": sc,
-                    "error_code": error_code,
                     "user_id": user_id_str,
                     "ip": client_ip,
                 },
-                dedup_key=f"ai_http_exception|chat|{sc}|{error_code}",
+                dedup_key="ai_http_exception|chat",
             )
         _audit_event(
             "chat_error",
@@ -779,7 +852,7 @@ async def chat_with_ai_stream(
             )
 
         if current_user is None:
-            _enforce_guest_ai_quota(request)
+            await _enforce_guest_ai_quota(request)
         else:
             await quota_service.enforce_ai_chat_quota(db, current_user)
 
@@ -800,6 +873,9 @@ async def chat_with_ai_stream(
                 "session_id": str(payload.session_id or ""),
             },
         )
+
+        bucket_seed = f"u:{current_user_id}" if current_user_id is not None else f"g:{client_ip or request_id}"
+        prompt_version = await _select_prompt_version(db, bucket_seed=bucket_seed)
 
         seed_history: list[dict[str, str]] | None = None
         if payload.session_id:
@@ -860,6 +936,8 @@ async def chat_with_ai_stream(
                 }
                 if user_profile and _supports_kwarg(getattr(assistant, "chat_stream", None), "user_profile"):
                     stream_kwargs["user_profile"] = user_profile
+                if _supports_kwarg(getattr(assistant, "chat_stream", None), "prompt_version"):
+                    stream_kwargs["prompt_version"] = prompt_version
 
                 async for event_type, data in assistant.chat_stream(**cast(dict, stream_kwargs)):
                     if event_type == "session":
@@ -922,7 +1000,34 @@ async def chat_with_ai_stream(
                     )
                     db.add(user_message)
 
-                    refs_json = json.dumps(references_payload or [], ensure_ascii=False)
+                    meta_to_save: dict[str, object] = {}
+                    if isinstance(done_payload, dict):
+                        for k in (
+                            "strategy_used",
+                            "strategy_reason",
+                            "confidence",
+                            "risk_level",
+                            "prompt_version",
+                            "intent",
+                            "needs_clarification",
+                            "model_used",
+                            "fallback_used",
+                            "model_attempts",
+                            "prompt_tokens",
+                            "completion_tokens",
+                            "total_tokens",
+                            "estimated_cost_usd",
+                        ):
+                            if k in done_payload:
+                                meta_to_save[k] = cast(object, done_payload.get(k))
+                    meta_to_save.setdefault("prompt_version", str(prompt_version or "v1"))
+                    meta_to_save.setdefault("duration_ms", int((time.time() - started_at) * 1000))
+                    meta_to_save.setdefault("request_id", str(request_id))
+
+                    refs_json = json.dumps(
+                        {"references": references_payload or [], "meta": meta_to_save},
+                        ensure_ascii=False,
+                    )
                     ai_message = ChatMessage(
                         consultation_id=consultation.id,
                         role="assistant",
@@ -1374,7 +1479,21 @@ async def export_consultation(
         }
         if msg_references:
             try:
-                msg_data["references"] = cast(object, json.loads(msg_references))
+                parsed = cast(object, json.loads(msg_references))
+                if isinstance(parsed, list):
+                    msg_data["references"] = cast(object, parsed)
+                elif isinstance(parsed, dict):
+                    parsed_dict = cast(dict[str, object], parsed)
+                    refs = parsed_dict.get("references")
+                    if isinstance(refs, list):
+                        msg_data["references"] = cast(object, refs)
+                    else:
+                        msg_data["references"] = []
+                    meta_obj = parsed_dict.get("meta")
+                    if isinstance(meta_obj, dict):
+                        msg_data["references_meta"] = cast(object, meta_obj)
+                else:
+                    msg_data["references"] = []
             except json.JSONDecodeError:
                 msg_data["references"] = []
         export_messages.append(msg_data)
@@ -1513,7 +1632,7 @@ async def transcribe(
             )
 
         if current_user is None:
-            _enforce_guest_ai_quota(request)
+            await _enforce_guest_ai_quota(request)
 
         content = await file.read()
         if not content:
@@ -1680,7 +1799,7 @@ async def analyze_file(
         )
 
     if current_user is None:
-        _enforce_guest_ai_quota(request)
+        await _enforce_guest_ai_quota(request)
 
     try:
         content = await file.read()
@@ -1781,6 +1900,8 @@ async def analyze_file(
 
     preview = extracted_norm[:4000]
 
+    extracted_for_ai = sanitize_pii(extracted_norm)
+
     def _summarize_sync() -> str:
         from openai import OpenAI
 
@@ -1794,7 +1915,7 @@ async def analyze_file(
                 },
                 {
                     "role": "user",
-                    "content": f"请分析以下文件内容：\n\n{extracted_norm}",
+                    "content": f"请分析以下文件内容：\n\n{extracted_for_ai}",
                 },
             ],
             temperature=0.2,

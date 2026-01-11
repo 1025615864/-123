@@ -9,9 +9,10 @@ import {
 import { useSearchParams, Link, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
+  Mic,
+  MicOff,
   Send,
-  Bot,
-  User,
+  Sparkles,
   History,
   Plus,
   BookOpen,
@@ -19,14 +20,14 @@ import {
   Brain,
   Search,
   FileText,
-  Lightbulb,
-  Info,
+  ExternalLink,
   ChevronDown,
   ChevronUp,
-  Sparkles,
+  User,
+  Bot,
+  Info,
+  Lightbulb,
   Square,
-  Mic,
-  MicOff,
   Paperclip,
   RotateCcw,
 } from "lucide-react";
@@ -34,7 +35,7 @@ import api from "../api/client";
 import { useAppMutation, useToast } from "../hooks";
 import { getApiErrorMessage } from "../utils";
 import PageHeader from "../components/PageHeader";
-import { Badge, Button, Modal } from "../components/ui";
+import { Badge, Button, Chip, Modal, Textarea } from "../components/ui";
 import MessageActionsBar from "../components/chat/MessageActionsBar";
 import TemplateSelector from "../components/TemplateSelector";
 import { useTheme } from "../contexts/ThemeContext";
@@ -46,6 +47,8 @@ interface LawReference {
   article: string;
   content: string;
   relevance?: number;
+  source_url?: string;
+  source_version?: string;
 }
 
 interface UserQuotaDailyResponse {
@@ -81,6 +84,9 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   references?: LawReference[];
+  referencesMeta?: Record<string, any>;
+  rating?: number | null;
+  feedback?: string | null;
   quickReplies?: string[];
   thinkingSteps?: ThinkingStep[];
   isThinking?: boolean;
@@ -405,13 +411,26 @@ export default function ChatPage() {
               role: string;
               content: string;
               references?: string | null;
+              rating?: number | null;
+              feedback?: string | null;
             }) => {
               let refs: LawReference[] | undefined = undefined;
+              let refsMeta: Record<string, any> | undefined = undefined;
               if (m.references) {
                 try {
                   const parsed = JSON.parse(m.references);
                   if (Array.isArray(parsed)) {
                     refs = parsed as LawReference[];
+                  } else if (parsed && typeof parsed === "object") {
+                    const obj = parsed as any;
+                    const innerRefs = obj?.references;
+                    if (Array.isArray(innerRefs)) {
+                      refs = innerRefs as LawReference[];
+                    }
+                    const meta = obj?.meta;
+                    if (meta && typeof meta === "object") {
+                      refsMeta = meta as Record<string, any>;
+                    }
                   }
                 } catch {
                   refs = undefined;
@@ -423,6 +442,12 @@ export default function ChatPage() {
                 role: m.role as "user" | "assistant",
                 content: m.content,
                 references: refs,
+                referencesMeta: refsMeta,
+                rating:
+                  typeof m.rating === "number" && Number.isFinite(m.rating)
+                    ? m.rating
+                    : null,
+                feedback: typeof m.feedback === "string" ? m.feedback : null,
               };
             }
           )
@@ -1305,7 +1330,7 @@ export default function ChatPage() {
         <PageHeader
           eyebrow="AI智能咨询"
           title="法律咨询助手"
-          description="24小时在线，为您提供专业的法律解答。AI建议仅供参考。"
+          description="24小时在线，为您提供专业的法律解答。AI建议仅供参考；为保护隐私，身份证/手机号/邮箱等信息会默认脱敏处理后再发送给 AI。"
           layout="mdStart"
           tone={actualTheme}
           right={
@@ -1408,6 +1433,8 @@ export default function ChatPage() {
                       messageId={message.id}
                       content={message.content}
                       references={message.references}
+                      rating={message.rating}
+                      feedback={message.feedback}
                       thinkingSteps={message.thinkingSteps}
                       isThinking={message.isThinking}
                       streamState={message.streamState}
@@ -1879,6 +1906,8 @@ function AssistantMessage({
   messageId,
   content,
   references,
+  rating,
+  feedback,
   thinkingSteps,
   isThinking,
   streamState,
@@ -1902,6 +1931,8 @@ function AssistantMessage({
   messageId?: number;
   content: string;
   references?: LawReference[];
+  rating?: number | null;
+  feedback?: string | null;
   thinkingSteps?: ThinkingStep[];
   isThinking?: boolean;
   streamState?: "streaming" | "done" | "stopped" | "error";
@@ -1928,6 +1959,11 @@ function AssistantMessage({
   const [favorited, setFavorited] = useState(false);
   const toast = useToast();
   const [rated, setRated] = useState<number | null>(null);
+  const [rateModalOpen, setRateModalOpen] = useState(false);
+  const [rateModalValue, setRateModalValue] = useState<number | null>(null);
+  const [rateTags, setRateTags] = useState<string[]>([]);
+  const [rateText, setRateText] = useState("");
+  const [localSubmittedFeedback, setLocalSubmittedFeedback] = useState<string | null>(null);
   const [showMeta, setShowMeta] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(true);
 
@@ -1952,7 +1988,12 @@ function AssistantMessage({
 
   useEffect(() => {
     setExpandedRefs({});
+    setLocalSubmittedFeedback(null);
   }, [messageId]);
+
+  useEffect(() => {
+    setRated(typeof rating === "number" && Number.isFinite(rating) ? rating : null);
+  }, [rating, messageId]);
 
   const toggleFavorite = () => {
     if (!messageId) return;
@@ -1985,7 +2026,7 @@ function AssistantMessage({
 
   const rateMutation = useAppMutation<
     { message?: string },
-    { message_id: number; rating: number }
+    { message_id: number; rating: number; feedback?: string }
   >({
     mutationFn: async (payload) => {
       const res = await api.post("/ai/messages/rate", payload);
@@ -1995,8 +2036,41 @@ function AssistantMessage({
     onSuccess: (res, payload) => {
       toast.success(res?.message ?? "评价成功");
       setRated(payload.rating);
+      setLocalSubmittedFeedback(typeof payload.feedback === "string" ? payload.feedback : null);
+      setRateModalOpen(false);
     },
   });
+
+  const RATE_TAGS_GOOD = ["解决了问题", "清晰易懂", "引用充分", "步骤可执行", "态度友好"];
+  const RATE_TAGS_BAD = ["不准确", "不够具体", "答非所问", "缺少依据", "太泛泛", "看不懂"];
+
+  const openRateModal = (value: number) => {
+    if (!messageId) return;
+    if (!localStorage.getItem("token")) {
+      toast.info("登录后可评价");
+      return;
+    }
+    setRateModalValue(value);
+    setRateTags([]);
+    setRateText("");
+    setRateModalOpen(true);
+  };
+
+  const submitRateModal = () => {
+    if (!messageId) return;
+    const value = rateModalValue;
+    if (typeof value !== "number") return;
+    if (rateMutation.isPending) return;
+
+    const tagText = rateTags.map((t) => String(t).trim()).filter(Boolean);
+    const extra = String(rateText ?? "").trim().replace(/\s+/g, " ");
+    const parts: string[] = [];
+    if (tagText.length > 0) parts.push(`原因：${tagText.join(" / ")}`);
+    if (extra) parts.push(`补充：${extra}`);
+    const mergedFeedback = parts.join("；").trim() || undefined;
+
+    rateMutation.mutate({ message_id: messageId, rating: value, feedback: mergedFeedback });
+  };
 
   const blocks = useMemo(() => {
     const rawLines = content.replace(/\r\n/g, "\n").split("\n");
@@ -2254,7 +2328,7 @@ function AssistantMessage({
       return;
     }
     if (rateMutation.isPending) return;
-    rateMutation.mutate({ message_id: messageId, rating: value });
+    openRateModal(value);
   };
 
   const copyTextToClipboard = async (text: string) => {
@@ -2368,6 +2442,16 @@ function AssistantMessage({
     )}`;
     const body = String(activeRef.content ?? "");
     void copyTextToClipboard(`${title}\n${body}`.trim());
+  };
+
+  const openSourceUrl = (url?: string | null) => {
+    const u = String(url ?? "").trim();
+    if (!u) return;
+    try {
+      window.open(u, "_blank", "noopener,noreferrer");
+    } catch {
+      toast.error("打开链接失败");
+    }
   };
 
   const renderedBlocks = useMemo(() => {
@@ -2683,7 +2767,17 @@ function AssistantMessage({
         size="lg"
       >
         <div className="space-y-4">
-          <div className="flex justify-end">
+          <div className="flex justify-end gap-2">
+            {String(activeRef?.source_url ?? "").trim() ? (
+              <Button
+                variant="outline"
+                size="sm"
+                icon={ExternalLink}
+                onClick={() => openSourceUrl(activeRef?.source_url)}
+              >
+                查看原文
+              </Button>
+            ) : null}
             <Button
               variant="outline"
               size="sm"
@@ -2943,6 +3037,65 @@ function AssistantMessage({
         onRegenerate={onRegenerate}
       />
 
+      <Modal
+        isOpen={rateModalOpen}
+        onClose={() => setRateModalOpen(false)}
+        title="评价本条回答"
+        description="请选择原因标签（可选）并填写补充说明（可选）"
+        size="md"
+      >
+        <div className="space-y-4">
+          <div className="flex flex-wrap gap-2">
+            {(rateModalValue === 3 ? RATE_TAGS_GOOD : RATE_TAGS_BAD).map((t) => {
+              const active = rateTags.includes(t);
+              return (
+                <Chip
+                  key={t}
+                  size="sm"
+                  active={active}
+                  onClick={() =>
+                    setRateTags((prev) =>
+                      prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]
+                    )
+                  }
+                >
+                  {t}
+                </Chip>
+              );
+            })}
+          </div>
+
+          <Textarea
+            label="补充说明"
+            placeholder="可选，最多 500 字"
+            value={rateText}
+            maxLength={500}
+            rows={4}
+            onChange={(e) => setRateText(e.target.value)}
+          />
+
+          <div className="flex items-center justify-end gap-2">
+            <Button variant="outline" onClick={() => setRateModalOpen(false)}>
+              取消
+            </Button>
+            <Button
+              variant="primary"
+              isLoading={rateMutation.isPending}
+              loadingText="提交中..."
+              onClick={submitRateModal}
+            >
+              提交
+            </Button>
+          </div>
+          {typeof (localSubmittedFeedback ?? feedback) === "string" &&
+            String(localSubmittedFeedback ?? feedback).trim() && (
+            <div className="text-xs text-slate-500 dark:text-slate-400">
+              已提交反馈：{String(localSubmittedFeedback ?? feedback).trim()}
+            </div>
+          )}
+        </div>
+      </Modal>
+
       {references && references.length > 0 && (
         <div className="pt-2">
           <button
@@ -3023,6 +3176,16 @@ function AssistantMessage({
                         </div>
 
                         <div className="flex items-center gap-1">
+                          {String(item.ref?.source_url ?? "").trim() ? (
+                            <button
+                              type="button"
+                              onClick={() => openSourceUrl(item.ref?.source_url)}
+                              className="p-1.5 rounded-lg text-slate-500 hover:bg-black/5 hover:text-slate-700 dark:text-white/60 dark:hover:bg-white/10 dark:hover:text-white"
+                              title="跳转原文"
+                            >
+                              <ExternalLink className="h-4 w-4" />
+                            </button>
+                          ) : null}
                           <button
                             type="button"
                             onClick={() => {

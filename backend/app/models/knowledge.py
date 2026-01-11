@@ -48,6 +48,14 @@ class LegalKnowledge(Base):
     
     # 来源/出处
     source: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    source_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    source_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    source_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    ingest_batch_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     
     # 生效日期
     effective_date: Mapped[str | None] = mapped_column(String(20), nullable=True)

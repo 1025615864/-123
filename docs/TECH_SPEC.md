@@ -21,7 +21,7 @@
 - **ORM**：SQLAlchemy 2.x（async）
 - **迁移**：Alembic
 - **认证**：JWT（python-jose）
-- **缓存/锁**：Redis（生产推荐，用于周期任务分布式锁）
+- **缓存/限流/锁**：Redis（生产强依赖；当 `DEBUG=false` 时必须可用）
 - **AI**：OpenAI-compatible HTTP API（`OPENAI_API_KEY` + `OPENAI_BASE_URL`）
 - **RAG/向量库**：LangChain + ChromaDB
 - **文档处理**：pypdf、docx2txt、reportlab
@@ -110,8 +110,25 @@ CORS_ALLOW_ORIGINS=http://localhost:5173,http://localhost:3000
 FRONTEND_BASE_URL=http://localhost:5173
 TRUSTED_PROXIES=[]
 
-# Redis（生产推荐）
+# Redis（生产必需，DEBUG=false）
 REDIS_URL=
+
+# 上传存储（可选；默认 local）
+STORAGE_PROVIDER=local
+STORAGE_PUBLIC_BASE_URL=
+STORAGE_S3_BUCKET=
+STORAGE_S3_ENDPOINT_URL=
+STORAGE_S3_REGION=
+STORAGE_S3_ACCESS_KEY_ID=
+STORAGE_S3_SECRET_ACCESS_KEY=
+STORAGE_S3_PREFIX=uploads
+
+# Sentry（可选）
+SENTRY_DSN=
+SENTRY_ENVIRONMENT=
+SENTRY_RELEASE=
+SENTRY_TRACES_SAMPLE_RATE=0
+SENTRY_PROFILES_SAMPLE_RATE=0
 
 # AI
 OPENAI_API_KEY=
@@ -128,7 +145,10 @@ SQL_ECHO=
 - 当 `DEBUG=false`：
   - `JWT_SECRET_KEY/SECRET_KEY` 必须为安全值（且长度足够）
   - `PAYMENT_WEBHOOK_SECRET` 必须配置
-  - Redis 不可用时会禁用部分周期任务（避免多副本重复执行）
+  - `REDIS_URL` 必须配置且 Redis 必须可用（用于限流/分布式锁/周期任务；不可用则启动失败）
+  - 当 `STORAGE_PROVIDER=s3`：
+    - `STORAGE_S3_BUCKET` 必须配置
+    - `STORAGE_PUBLIC_BASE_URL` 必须配置（用于生成/重定向可访问的文件 URL）
 
 ### 生产环境变量清单（建议）
 
@@ -144,7 +164,7 @@ SQL_ECHO=
   - `OPENAI_API_KEY`
   - `OPENAI_BASE_URL`
   - `AI_MODEL`
-- Redis（生产推荐，多副本时强烈建议）
+- Redis（生产必需，`DEBUG=false` 时必须配置且可用）
   - `REDIS_URL`
 - 支付渠道（按启用的渠道配置）
   - IKUNPAY：`IKUNPAY_PID` / `IKUNPAY_KEY` / `IKUNPAY_NOTIFY_URL`（可选 `IKUNPAY_RETURN_URL` / `IKUNPAY_GATEWAY_URL`）
@@ -204,7 +224,7 @@ Authorization: Bearer <token>
 ## 七、重要工程约束（必须遵守）
 
 - **Secrets 不入库**：`OPENAI_API_KEY`、`JWT_SECRET_KEY/SECRET_KEY`、`PAYMENT_WEBHOOK_SECRET` 等必须通过环境变量/Secret Manager 注入；系统配置（SystemConfig）禁止写入敏感信息（后端会返回 400）。
-- **生产周期任务**：生产多副本部署时建议配置 Redis，用于分布式锁，避免任务重复跑。
+- **生产周期任务**：生产多副本部署时使用 Redis 分布式锁，避免任务重复跑。
 
 ---
 
@@ -212,9 +232,9 @@ Authorization: Bearer <token>
 
 ### 8.1 request_id（端到端追踪）
 
-- 前端会为当前会话生成稳定的 `X-Request-Id`，并在所有 API 请求中携带。
+- 前端会为**每个 API 请求**生成 `X-Request-Id`，并在所有 API 请求中携带。
 - 后端会优先使用请求头中的 `X-Request-Id`，并保证响应也带 `X-Request-Id`。
-- 后端请求日志/错误日志会打印 `request_id`，用于从前端报错快速定位到具体请求。
+- 后端请求日志/错误日志会以 **JSON 结构化日志**形式输出 `request_id`，用于从前端报错快速定位到具体请求。
 
 常用排查路径：
 
@@ -222,8 +242,8 @@ Authorization: Bearer <token>
   - 看 Response Headers 中的 `X-Request-Id`
   - 若为 AI 接口错误，响应体也可能包含 `request_id`
 - 后端日志中按 `request_id=<id>` 搜索：
-  - K8s：`kubectl -n <ns> logs deploy/<release>-baixing-assistant-backend | findstr request_id=<id>`
-  - Docker：`docker logs <container> | grep request_id=<id>`
+  - K8s：`kubectl -n <ns> logs deploy/<release>-baixing-assistant-backend | findstr "\"request_id\":\"<id>\""`
+  - Docker：`docker logs <container> | grep '"request_id":"<id>"'`
 
 ### 8.2 Prometheus 指标（/metrics）
 
