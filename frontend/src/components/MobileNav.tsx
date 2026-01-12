@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useMemo, useState } from 'react';
 import { MoreHorizontal } from 'lucide-react';
 import { Modal } from './ui';
+import { useTranslation } from '../contexts/LanguageContext';
 
 import {
   isRouteActive,
@@ -25,6 +26,7 @@ const moreNavItems: NavItem[] = [
 export function MobileNav() {
   const location = useLocation();
   const [moreOpen, setMoreOpen] = useState(false);
+  const { t } = useTranslation();
 
   const isMoreActive = useMemo(() => {
     return moreNavItems.some(
@@ -56,7 +58,7 @@ export function MobileNav() {
             <Link
               key={path}
               to={path}
-              aria-label={label}
+              aria-label={t(label)}
               aria-current={isActive ? 'page' : undefined}
               className={linkClassName(isActive)}
             >
@@ -68,7 +70,7 @@ export function MobileNav() {
                   <span className="absolute -bottom-1 w-1.5 h-1.5 rounded-full bg-blue-600 dark:bg-blue-400" />
                 ) : null}
               </div>
-              <span className="text-[11px] mt-1 leading-none">{label}</span>
+              <span className="text-[11px] mt-1 leading-none">{t(label)}</span>
             </Link>
           );
         })}
@@ -76,7 +78,7 @@ export function MobileNav() {
         <button
           type="button"
           onClick={() => setMoreOpen(true)}
-          aria-label="更多"
+          aria-label={t('layout.moreTitle')}
           aria-current={isMoreActive ? 'page' : undefined}
           className={linkClassName(isMoreActive)}
         >
@@ -86,15 +88,15 @@ export function MobileNav() {
               <span className="absolute -bottom-1 w-1.5 h-1.5 rounded-full bg-blue-600 dark:bg-blue-400" />
             ) : null}
           </div>
-          <span className="text-[11px] mt-1 leading-none">更多</span>
+          <span className="text-[11px] mt-1 leading-none">{t('layout.moreTitle')}</span>
         </button>
       </div>
 
       <Modal
         isOpen={moreOpen}
         onClose={() => setMoreOpen(false)}
-        title="更多"
-        description="快速进入其它功能"
+        title={t('layout.moreTitle')}
+        description={t('layout.moreDescription')}
         size="sm"
         zIndexClass="z-[60]"
       >
@@ -122,7 +124,7 @@ export function MobileNav() {
                   <Icon className="w-5 h-5" />
                 </div>
                 <div className="min-w-0">
-                  <div className="text-sm font-semibold truncate">{label}</div>
+                  <div className="text-sm font-semibold truncate">{t(label)}</div>
                   <div className="text-xs opacity-70 truncate">{path}</div>
                 </div>
               </Link>

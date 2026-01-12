@@ -22,6 +22,7 @@ import { MobileNav } from "./MobileNav";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { useIsMobile } from "../hooks/useMediaQuery";
+import { useTranslation } from "../contexts/LanguageContext";
 import {
   isRouteActive,
   primaryNavItems,
@@ -86,6 +87,7 @@ export default function Layout() {
   const navigate = useNavigate();
   const { isAuthenticated, user, logout } = useAuth();
   const { actualTheme } = useTheme();
+  const { t } = useTranslation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [toolsMenuOpen, setToolsMenuOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
@@ -125,7 +127,7 @@ export default function Layout() {
     const cleanups: Array<() => void> = [];
     cleanups.push(upsertLinkRel("canonical", url));
     cleanups.push(upsertMetaTag("property", "og:url", url));
-    cleanups.push(upsertMetaTag("property", "og:site_name", "百姓法律助手"));
+    cleanups.push(upsertMetaTag("property", "og:site_name", t('layout.siteName')));
 
     const p = location.pathname || "/";
     const type =
@@ -137,7 +139,7 @@ export default function Layout() {
     return () => {
       for (const fn of cleanups) fn();
     };
-  }, [location.pathname, location.search]);
+  }, [location.pathname, location.search, t]);
 
   const toolsActive = useMemo(() => {
     return toolNavItems.some((it) => isRouteActive(location.pathname, it.path));
@@ -180,8 +182,8 @@ export default function Layout() {
       <Modal
         isOpen={onboardingOpen}
         onClose={() => closeOnboarding()}
-        title="快速上手"
-        description="一分钟了解百姓法律助手的核心功能"
+        title={t('layout.quickStartTitle')}
+        description={t('layout.quickStartDescription')}
         size="lg"
       >
         <div className="space-y-4">
@@ -196,10 +198,10 @@ export default function Layout() {
               </div>
               <div>
                 <div className="text-sm font-semibold text-slate-900 dark:text-white">
-                  1) AI 咨询
+                  {t('layout.step1')}
                 </div>
                 <div className="mt-1 text-xs text-slate-600 dark:text-white/55">
-                  输入你的问题，获得清晰可执行的建议
+                  {t('layout.step1Description')}
                 </div>
               </div>
             </button>
@@ -214,10 +216,10 @@ export default function Layout() {
               </div>
               <div>
                 <div className="text-sm font-semibold text-slate-900 dark:text-white">
-                  2) 文书生成
+                  {t('layout.step2')}
                 </div>
                 <div className="mt-1 text-xs text-slate-600 dark:text-white/55">
-                  模板化生成起诉状/答辩状/协议等
+                  {t('layout.step2Description')}
                 </div>
               </div>
             </button>
@@ -232,10 +234,10 @@ export default function Layout() {
               </div>
               <div>
                 <div className="text-sm font-semibold text-slate-900 dark:text-white">
-                  3) 法律资讯
+                  {t('layout.step3')}
                 </div>
                 <div className="mt-1 text-xs text-slate-600 dark:text-white/55">
-                  关注最新政策解读与案例分析
+                  {t('layout.step3Description')}
                 </div>
               </div>
             </button>
@@ -250,10 +252,10 @@ export default function Layout() {
               </div>
               <div>
                 <div className="text-sm font-semibold text-slate-900 dark:text-white">
-                  4) 订单与服务
+                  {t('layout.step4')}
                 </div>
                 <div className="mt-1 text-xs text-slate-600 dark:text-white/55">
-                  查看订单、咨询记录与服务进度
+                  {t('layout.step4Description')}
                 </div>
               </div>
             </button>
@@ -261,14 +263,14 @@ export default function Layout() {
 
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div className="text-xs text-slate-500 dark:text-white/45">
-              {isAuthenticated ? "建议：在个人中心查看权益、配额与消耗记录" : "建议：登录后可保存咨询与查看权益配额"}
+              {isAuthenticated ? t('layout.suggestionAuthed') : t('layout.suggestionGuest')}
             </div>
             <div className="flex items-center gap-2">
               <Button variant="outline" onClick={() => closeOnboarding()}>
-                我知道了
+                {t('layout.gotIt')}
               </Button>
               <Button onClick={() => closeOnboarding("/chat")}>
-                开始咨询
+                {t('layout.startConsultation')}
               </Button>
             </div>
           </div>
@@ -289,7 +291,7 @@ export default function Layout() {
                 </div>
               </div>
               <span className="text-lg font-bold text-slate-900 dark:text-white tracking-tight">
-                百姓法律助手
+                {t('layout.siteName')}
               </span>
             </Link>
 
@@ -308,7 +310,7 @@ export default function Layout() {
                           : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
                       }`}
                     >
-                      {label}
+                      {t(label)}
                       {active && (
                         <span className="absolute bottom-0 left-0 w-full h-0.5 bg-blue-600 rounded-full dark:bg-blue-400" />
                       )}
@@ -327,7 +329,7 @@ export default function Layout() {
                         : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
                     }`}
                   >
-                    法律工具
+                    {t('layout.tools')}
                     {toolsActive && (
                       <span className="absolute bottom-0 left-0 w-full h-0.5 bg-blue-600 rounded-full dark:bg-blue-400" />
                     )}
@@ -351,7 +353,7 @@ export default function Layout() {
                               }`}
                             >
                               <Icon className="h-4 w-4" />
-                              <span>{label}</span>
+                              <span>{t(label)}</span>
                             </Link>
                           );
                         })}
@@ -373,7 +375,7 @@ export default function Layout() {
                           : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-200"
                       }`}
                     >
-                      {label}
+                      {t(label)}
                       {active && (
                         <span className="absolute bottom-0 left-0 w-full h-0.5 bg-blue-600 rounded-full dark:bg-blue-400" />
                       )}
@@ -398,7 +400,7 @@ export default function Layout() {
                       to="/admin"
                       className="px-3 py-1.5 rounded-full text-xs font-medium outline-none transition-all bg-slate-100 text-slate-700 hover:bg-slate-200 active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 dark:focus-visible:ring-offset-slate-900"
                     >
-                      管理后台
+                      {t('layout.adminDashboard')}
                     </Link>
                   )}
                   <Link
@@ -426,14 +428,14 @@ export default function Layout() {
                     size="sm"
                     className="font-medium text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
                   >
-                    登录
+                    {t('common.login')}
                   </LinkButton>
                   <LinkButton
                     to="/register"
                     size="sm"
                     className="px-5 py-2 rounded-lg text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-500/20 hover:shadow-lg hover:shadow-blue-500/30 transition-all"
                   >
-                    注册
+                    {t('common.register')}
                   </LinkButton>
                 </div>
               )}
@@ -441,7 +443,7 @@ export default function Layout() {
               <button
                 type="button"
                 onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-                aria-label={mobileMenuOpen ? "关闭菜单" : "打开菜单"}
+                aria-label={mobileMenuOpen ? t('layout.closeMenu') : t('layout.openMenu')}
                 aria-expanded={mobileMenuOpen}
                 aria-controls={mobileMenuId}
                 className="lg:hidden p-2 rounded-lg text-slate-600 outline-none transition-all hover:bg-slate-50 active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:text-slate-300 dark:hover:bg-slate-800 dark:focus-visible:ring-offset-slate-900"
@@ -477,7 +479,7 @@ export default function Layout() {
                     }`}
                   >
                     <Icon className="h-5 w-5" />
-                    <span>{label}</span>
+                    <span>{t(label)}</span>
                   </Link>
                 );
               })}
@@ -504,7 +506,7 @@ export default function Layout() {
                       onClick={() => setMobileMenuOpen(false)}
                       className="py-3 justify-center"
                     >
-                      登录
+                      {t('common.login')}
                     </LinkButton>
                     <LinkButton
                       to="/register"
@@ -512,7 +514,7 @@ export default function Layout() {
                       onClick={() => setMobileMenuOpen(false)}
                       className="py-3 justify-center bg-blue-600 text-white"
                     >
-                      注册账号
+                      {t('layout.registerAccount')}
                     </LinkButton>
                   </div>
                 )}
@@ -551,7 +553,7 @@ export default function Layout() {
                     <Scale className="h-5 w-5 text-white" />
                   </div>
                   <span className="text-lg font-bold text-slate-900 dark:text-white">
-                    百姓法律助手
+                    {t('layout.siteName')}
                   </span>
                 </div>
                 <p className="text-slate-500 text-sm leading-relaxed mb-6 max-w-sm dark:text-slate-400">
@@ -575,7 +577,7 @@ export default function Layout() {
 
               <div>
                 <h3 className="text-sm font-bold text-slate-900 mb-6 dark:text-white">
-                  快速链接
+                  {t('layout.quickLinks')}
                 </h3>
                 <ul className="space-y-3">
                   {primaryNavItems.slice(0, 5).map(({ path, label }) => (
@@ -584,7 +586,7 @@ export default function Layout() {
                         to={path}
                         className="text-slate-500 hover:text-blue-600 transition-colors text-sm outline-none rounded-md active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:text-slate-400 dark:hover:text-blue-400 dark:focus-visible:ring-offset-slate-900"
                       >
-                        {label}
+                        {t(label)}
                       </Link>
                     </li>
                   ))}
@@ -593,7 +595,7 @@ export default function Layout() {
 
               <div>
                 <h3 className="text-sm font-bold text-slate-900 mb-6 dark:text-white">
-                  联系我们
+                  {t('layout.contactUs')}
                 </h3>
                 <ul className="space-y-4 text-sm text-slate-500 dark:text-slate-400">
                   <li className="flex items-center space-x-3">
@@ -621,13 +623,13 @@ export default function Layout() {
                   to="/privacy"
                   className="text-slate-400 hover:text-slate-600 text-sm outline-none rounded-md transition-colors active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-slate-900"
                 >
-                  隐私政策
+                  {t('layout.privacyPolicy')}
                 </Link>
                 <Link
                   to="/terms"
                   className="text-slate-400 hover:text-slate-600 text-sm outline-none rounded-md transition-colors active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 dark:focus-visible:ring-offset-slate-900"
                 >
-                  服务条款
+                  {t('layout.termsOfService')}
                 </Link>
               </div>
             </div>
