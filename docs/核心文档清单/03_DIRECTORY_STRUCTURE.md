@@ -42,17 +42,22 @@
 backend/app/
 ├── main.py                   # FastAPI 入口；挂载 /api；启动周期任务；中间件
 ├── config.py                 # Pydantic Settings；env 文件解析；生产安全校验
-├── database.py               # Async Engine/Session；init_db() 创建表+自修复
+├── database.py               # Async Engine/Session；init_db()（DEBUG=false 默认仅做 Alembic head 门禁；DEBUG=true/DB_ALLOW_RUNTIME_DDL=1 才允许运行时 DDL）
 ├── routers/                  # API 路由（按业务域拆分）
 │   ├── __init__.py           # 聚合路由：include_router(...)；统一挂载 /api
 │   ├── user.py               # 注册/登录/邮箱验证/短信绑定/管理员用户管理
 │   ├── ai.py                 # AI 咨询（含流式/SSE、会话历史、导出等）
-│   ├── documents.py          # 文书生成/保存/导出
+│   ├── document.py           # 文书生成/保存/导出
+│   ├── document_templates.py # 文书模板资产管理（模板/版本/发布）
+│   ├── contracts.py          # 合同审查（上传->提取->AI 审查；可选启用）
 │   ├── forum.py              # 论坛发帖/评论/审核/管理
 │   ├── news.py               # 新闻/专题/订阅/评论/管理端工作台
 │   ├── payment.py            # 订单创建/支付发起/回调验签/回调审计
 │   ├── lawfirm.py            # 律所/律师/预约咨询（可生成支付订单）
 │   ├── settlement.py         # 律师钱包/收入/提现/审核
+│   ├── reviews.py            # 律师复核（AI 咨询复核任务：用户查询/律师领取/提交）
+│   ├── feedback.py           # 反馈工单（用户提交/管理员处理）
+│   ├── calendar.py           # 日历提醒
 │   ├── upload.py             # 头像/图片/附件上传与静态访问
 │   ├── notification.py       # 通知列表/未读/批量
 │   ├── search.py             # 全局搜索 + 搜索历史

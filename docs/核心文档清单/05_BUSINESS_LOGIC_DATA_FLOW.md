@@ -56,8 +56,9 @@
   - `POST /api/ai/chat/stream`
   - 文件：`backend/app/routers/ai.py`
 - **限流/配额**：
-  - 游客：`_enforce_guest_ai_quota()`（按 IP，内存滑窗）
-  - 登录用户：`quota_service.consume_ai_chat()`（按日配额 + 次数包）
+  - 通用限流：路由上使用 `@rate_limit(*RateLimitConfig.AI_CHAT, ...)`（按 IP；实现为 Redis 优先、内存兜底）
+  - 游客配额：`_enforce_guest_ai_quota()`（按 IP；实现为 Redis 优先、内存兜底）
+  - 登录用户：`quota_service.enforce_ai_chat_quota()`（按日配额 + 次数包）
 - **数据落库**：
   - `consultations`：会话
   - `chat_messages`：消息
@@ -73,7 +74,7 @@
 - **入口**：`POST /api/documents/generate`
   - 文件：`backend/app/routers/document.py::generate_document`
 - **关键校验**：
-  - 游客生成次数（可通过 env 配置）
+  - 游客生成次数（可通过 env 配置；实现为 Redis 优先、内存兜底）
   - 登录用户：`quota_service.enforce_document_generate_quota()`
   - 输入长度限制（facts/claims/evidence）
 - **模板选择**：
@@ -133,7 +134,7 @@
 ### 5.2 RSS 采集与运行记录
 
 - 表：`news_sources`、`news_ingest_runs`
-- 周期任务：`backend/app/main.py`（Redis 可用时启用分布式锁，避免多副本重复跑）
+- 周期任务：`backend/app/main.py`（统一通过 `PeriodicLockedRunner` + Redis 分布式锁运行；生产 `DEBUG=false` 时 Redis 不可用会启动失败）
 
 ### 5.3 News AI 标注
 
@@ -174,6 +175,10 @@
   - `ikunpay`：生成支付跳转 URL
   - `wechat`：明确返回 400（暂未开放）
 
+补充：
+
+- 前端可通过 `GET /api/payment/channel-status` 获取可用支付方式（不含敏感信息），用于动态显示/隐藏入口。
+
 ### 6.3 支付回调与审计
 
 - 支付宝：`POST /api/payment/alipay/notify`
@@ -189,6 +194,7 @@
   - `_maybe_apply_vip_membership_in_tx(db, order)`：更新 `users.vip_expires_at`
   - `_maybe_apply_ai_pack_in_tx(db, order)`：更新 `user_quota_pack_balances`
   - `_maybe_confirm_lawyer_consultation_in_tx(db, order)`：联动律师咨询状态
+  - `_maybe_create_consultation_review_task_in_tx(db, order)`：若 `order_type=light_consult_review` 则自动生成复核任务
 
 ---
 
@@ -216,7 +222,41 @@
 
 ---
 
-## 8. 典型请求链路示例（支付-回调闭环）
+## 8. 合同审查（Contract Review）
+
+### 8.1 上传并审查
+
+- **入口**：`POST /api/contracts/review`
+  - 文件：`backend/app/routers/contracts.py::review_contract`
+- **关键校验**：
+  - 游客试用次数：按 IP（Redis 优先、内存兜底）
+  - 登录用户：使用配额服务校验（具体规则以实现为准）
+  - 调用前对文本做 PII 脱敏：`utils/pii.py::sanitize_pii`
+- **输出**：结构化审查结果（`ContractReviewResponse`）
+
+---
+
+## 9. 律师复核（Consultation Review）
+
+### 9.1 用户侧查询复核任务
+
+- **入口**：`GET /api/reviews/consultations/{consultation_id}`
+  - 文件：`backend/app/routers/reviews.py::get_review_task_for_consultation`
+- **关键校验**：咨询必须属于当前用户
+- **返回**：`task` 可能为空；存在时包含任务状态与最新版本（`latest_version`）
+
+### 9.2 律师侧任务列表/领取/提交
+
+- 列表：`GET /api/reviews/lawyer/tasks?status=`
+- 领取：`POST /api/reviews/lawyer/tasks/{task_id}/claim`
+- 提交：`POST /api/reviews/lawyer/tasks/{task_id}/submit`
+- **权限**：使用 `require_lawyer_verified`，并额外校验 `Lawyer.is_verified==true`
+- **关键状态机**：`pending -> claimed -> submitted`
+- **提交副作用**：写入 `consultation_review_versions`，并生成律师收入记录（复用 settlement）
+
+---
+
+## 10. 典型请求链路示例（支付-回调闭环）
 
 1. 前端下单：`POST /api/payment/orders`
 2. 前端发起支付：`POST /api/payment/orders/{order_no}/pay` → 得到 `pay_url`

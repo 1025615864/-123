@@ -1,10 +1,29 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Outlet, Link, useLocation, Navigate } from 'react-router-dom'
-import { 
-  LayoutDashboard, Users, Newspaper, Building2, 
-  Settings, LogOut, Scale, ChevronRight, Database, FileQuestion, Flame, FileText, Bell, Layers, MessageSquare, Rss, Activity, Shield, CreditCard, BarChart3 
+import { Link, Navigate, Outlet, useLocation } from 'react-router-dom'
+import {
+  LayoutDashboard,
+  Users,
+  Newspaper,
+  Building2,
+  Settings,
+  LogOut,
+  Scale,
+  ChevronRight,
+  Database,
+  FileQuestion,
+  Flame,
+  FileText,
+  Bell,
+  Layers,
+  MessageSquare,
+  Rss,
+  Activity,
+  Shield,
+  CreditCard,
+  BarChart3,
 } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { Button, EmptyState } from './ui'
 
 type SidebarLeafItem = {
   icon: typeof LayoutDashboard
@@ -128,21 +147,39 @@ export default function AdminLayout() {
 
   // 权限检查：必须登录且为管理员
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace />
+    const redirect = `${location.pathname}${location.search}`
+    return <Navigate to={`/login?return_to=${encodeURIComponent(redirect)}`} replace />
   }
 
   if (user?.role !== 'admin' && user?.role !== 'super_admin') {
     return (
-      <div className="min-h-screen bg-slate-50 dark:bg-[#0a0618] flex items-center justify-center">
-        <div className="text-center">
-          <h1 className="text-2xl font-bold text-slate-900 dark:text-white mb-4">权限不足</h1>
-          <p className="text-slate-600 dark:text-white/50 mb-6">您没有权限访问管理后台</p>
-          <Link 
-            to="/" 
-            className="text-amber-700 hover:underline dark:text-amber-400"
-          >
-            返回首页
-          </Link>
+      <div className="min-h-screen bg-slate-50 dark:bg-[#0a0618] flex items-center justify-center px-6">
+        <div className="w-full max-w-lg">
+          <EmptyState
+            icon={Shield}
+            title="需要管理员权限"
+            description="当前账号无权访问管理后台，请切换管理员账号登录"
+            tone="dark"
+            action={
+              <div className="flex flex-col sm:flex-row gap-3 justify-center">
+                <Button
+                  variant="outline"
+                  onClick={async () => {
+                    try {
+                      await logout()
+                    } finally {
+                      // noop
+                    }
+                  }}
+                >
+                  退出登录
+                </Button>
+                <Link to="/">
+                  <Button>返回首页</Button>
+                </Link>
+              </div>
+            }
+          />
         </div>
       </div>
     )

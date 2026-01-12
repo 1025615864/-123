@@ -156,6 +156,8 @@
   - [x] `auth:` 登录/注册/邮箱验证/找回密码最小闭环
   - [x] `payment:` 下单->拉起支付->回跳->订单 paid（可用 mock/沙箱，保留真实渠道冒烟脚本）
   - [x] `admin:` 新闻审核/配置的关键路径冒烟
+  - [x] `role:` 全角色路由巡检（普通用户/管理员/律师按 App 路由逐页访问；捕获 Console error、requestfailed、4xx/5xx 响应、页面异常与明显占位符/破图）
+    - 依赖：seed_data 账号 admin/lawyer1 标记 email_verified/phone_verified=true（否则 require_lawyer_verified 会导致律师工作台接口 403 并出现 Console 红字）
 - [x] 前后端契约与兼容性
   - [x] 对关键接口补充 Schema/contract 测试（尤其是支付、文书、用户验证）
   - [x] 对 API envelope 切换行为补充边界用例（非 JSON/非 2xx/空响应）
@@ -212,6 +214,19 @@
 - [x] 管理后台侧边栏信息架构整理
   - [x] 侧边栏条目过多：将“相关设置”收敛为二级菜单/二级跳转并合并同类项
   - [x] 目标：常用入口优先、低频设置收纳、层级清晰且不增加点击成本
+
+## 第十二阶段：全角色体验与权限守卫（P1）
+
+- [x] 前端：角色路由守卫统一化
+  - [x] 未登录访问受限页：统一跳转 /login 并保留 return_to
+  - [x] 普通用户访问 /admin：给出明确“需要管理员权限”的页面态（避免静默空白/循环跳转）
+  - [x] 非律师访问 /lawyer：给出“需要律师权限/去申请认证”的页面态（避免接口 403 后 Console 红字）
+- [x] 前端：对 require_lawyer_verified 的 403 做更友好的引导
+  - [x] 文案区分：未绑律师资料 / 律师认证未通过 / 需手机号验证 / 需邮箱验证
+  - [x] 提供直达动作：跳转到 /profile?phoneVerify=1 或 /profile?emailVerify=1
+- [x] 体验一致性：页面级 empty/error/skeleton 组件统一
+  - [x] News/Forum/LawFirm/Orders/Notifications 等列表页统一“加载中/空/失败”可重试交互
+  - [x] 详情页（新闻/帖子/律所/律师）404 统一页面态与返回入口
 
 ## 持续性约束（Checklist）
 
@@ -437,3 +452,21 @@
     - [x] 向后兼容旧格式：旧数据仍可能是 `[...]` 数组
   - [x] 管理端支持按版本对比
     - [x] `GET /api/system/stats/ai-feedback` 返回 `by_prompt_version`（满意度/评价数按版本聚合）
+
+---
+
+## 第十九阶段：Runtime UX Audit（运行时体验审计）（P1）
+
+- [x] 2026-01-12 Playwright 运行时审计（http://localhost:5173）
+
+  - [x] 覆盖路由（未登录态）：`/`、`/login`、`/register`、`/chat`、`/news`、`/news/1`、`/news/topics`、`/documents`、`/contracts`、`/calendar`、`/calculator`、`/limitations`、`/lawfirm`、`/forum`、`/profile`、`/orders`、`/vip`、`/privacy`、`/terms`、`/search`、`/admin/payment-callbacks`、`/payment/return?order_no=TEST_ORDER`
+  - [x] 审计维度：Console Errors/Warnings、Network 4xx/5xx、页面 `undefined/null/nan` 文本、图片裂开（naturalWidth=0）、关键交互空提交校验
+  - [x] 修复：登录页空提交校验提示不明显（浏览器原生 required 拦截）
+    - 变更：`frontend/src/pages/LoginPage.tsx` 为表单增加 `noValidate`，确保展示自定义错误文案（"请输入用户名/请输入密码"）
+  - [x] 修复：未登录访问 `/payment/return` 触发 `/api/payment/orders/{order_no}` 401 导致 Console 红字
+    - 变更：`frontend/src/pages/PaymentReturnPage.tsx` 未登录/未授权时禁用查询、显示“去登录”引导（带 redirect 回跳），并隐藏“刷新”按钮
+  - [x] 验证：以上路由在未登录态下 Console error/warn=0，Network 4xx/5xx=0，无 `undefined/null/nan` 文本，无图片裂开
+  - [x] 验证：`npm --prefix frontend run build` 通过
+
+- [ ] 建议：补一个“未登录态全站路由 smoke”Playwright 用例（不依赖登录），纳入 CI（用于提前发现 Console 红字/静态资源 404）
+- [ ] 建议：对“需要登录”但可被直接访问的页面，统一做 page-level guard（避免进入页面后再发起 401 请求）

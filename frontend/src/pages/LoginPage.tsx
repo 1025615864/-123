@@ -45,7 +45,7 @@ export default function LoginPage() {
       await login(username, password)
       toast.success('登录成功！')
 
-      const rawRedirect = searchParams.get('redirect')
+      const rawRedirect = searchParams.get('return_to') || searchParams.get('redirect')
       let redirectTo = '/'
       if (rawRedirect) {
         try {
@@ -108,7 +108,7 @@ export default function LoginPage() {
               <p className="text-slate-600 dark:text-white/50 mt-2">登录您的账户继续使用</p>
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-5">
+            <form onSubmit={handleSubmit} className="space-y-5" noValidate>
               <Input
                 label="用户名"
                 icon={User}

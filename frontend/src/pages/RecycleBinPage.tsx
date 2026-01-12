@@ -6,6 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '../api/client'
 import PageHeader from '../components/PageHeader'
 import { Button, Card, EmptyState, Input, ListSkeleton, Modal, ModalActions, Pagination } from '../components/ui'
+import { RequireAuth } from '../components/RouteGuards'
 import { useAuth } from '../contexts/AuthContext'
 import { useTheme } from '../contexts/ThemeContext'
 import { useAppMutation, useToast } from '../hooks'
@@ -225,12 +226,9 @@ export default function RecycleBinPage() {
 
   if (!isAuthenticated) {
     return (
-      <div className="text-center py-20">
-        <p className="text-slate-600 dark:text-white/50">登录后可查看回收站</p>
-        <Link to="/login" className="text-amber-600 hover:underline mt-4 inline-block dark:text-amber-400">
-          去登录
-        </Link>
-      </div>
+      <RequireAuth>
+        <div />
+      </RequireAuth>
     )
   }
 

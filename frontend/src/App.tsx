@@ -3,6 +3,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 import Layout from "./components/Layout";
 import AdminLayout from "./components/AdminLayout";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { RequireAuth, RequireLawyer } from "./components/RouteGuards";
 import { AuthProvider } from "./contexts/AuthContext";
 import { ToastProvider } from "./hooks";
 
@@ -127,40 +128,143 @@ function App() {
               <Route path="/" element={<Layout />}>
                 <Route index element={<HomePage />} />
                 <Route path="chat" element={<ChatPage />} />
-                <Route path="chat/history" element={<ChatHistoryPage />} />
+                <Route
+                  path="chat/history"
+                  element={
+                    <RequireAuth>
+                      <ChatHistoryPage />
+                    </RequireAuth>
+                  }
+                />
                 <Route path="forum" element={<ForumPage />} />
-                <Route path="forum/new" element={<NewPostPage />} />
-                <Route path="forum/drafts" element={<DraftsPage />} />
-                <Route path="forum/recycle-bin" element={<RecycleBinPage />} />
-                <Route path="forum/my-comments" element={<MyCommentsPage />} />
+                <Route
+                  path="forum/new"
+                  element={
+                    <RequireAuth>
+                      <NewPostPage />
+                    </RequireAuth>
+                  }
+                />
+                <Route
+                  path="forum/drafts"
+                  element={
+                    <RequireAuth>
+                      <DraftsPage />
+                    </RequireAuth>
+                  }
+                />
+                <Route
+                  path="forum/recycle-bin"
+                  element={
+                    <RequireAuth>
+                      <RecycleBinPage />
+                    </RequireAuth>
+                  }
+                />
+                <Route
+                  path="forum/my-comments"
+                  element={
+                    <RequireAuth>
+                      <MyCommentsPage />
+                    </RequireAuth>
+                  }
+                />
                 <Route path="forum/post/:postId" element={<PostDetailPage />} />
                 <Route
                   path="forum/post/:postId/edit"
-                  element={<EditPostPage />}
+                  element={
+                    <RequireAuth>
+                      <EditPostPage />
+                    </RequireAuth>
+                  }
                 />
                 <Route path="search" element={<SearchPage />} />
                 <Route
                   path="notifications"
-                  element={<NotificationsFrontPage />}
+                  element={
+                    <RequireAuth>
+                      <NotificationsFrontPage />
+                    </RequireAuth>
+                  }
                 />
-                <Route path="feedback" element={<FeedbackPage />} />
-                <Route path="orders" element={<OrdersHubPage />} />
+                <Route
+                  path="feedback"
+                  element={
+                    <RequireAuth>
+                      <FeedbackPage />
+                    </RequireAuth>
+                  }
+                />
+                <Route
+                  path="orders"
+                  element={
+                    <RequireAuth>
+                      <OrdersHubPage />
+                    </RequireAuth>
+                  }
+                />
                 <Route path="payment/return" element={<PaymentReturnPage />} />
                 <Route path="news" element={<NewsPage />} />
                 <Route
                   path="news/subscriptions"
-                  element={<NewsSubscriptionsPage />}
+                  element={
+                    <RequireAuth>
+                      <NewsSubscriptionsPage />
+                    </RequireAuth>
+                  }
                 />
                 <Route path="news/topics" element={<NewsTopicsPage />} />
                 <Route path="news/topics/:topicId" element={<NewsTopicDetailPage />} />
                 <Route path="news/:newsId" element={<NewsDetailPage />} />
                 <Route path="lawfirm" element={<LawFirmPage />} />
-                <Route path="lawyer/verification" element={<LawyerVerificationPage />} />
-                <Route path="lawyer" element={<LawyerDashboardPage />} />
-                <Route path="lawyer/income" element={<LawyerIncomePage />} />
-                <Route path="lawyer/withdraw" element={<LawyerWithdrawPage />} />
-                <Route path="lawyer/withdrawals" element={<LawyerWithdrawalsPage />} />
-                <Route path="lawyer/bank-accounts" element={<LawyerBankAccountsPage />} />
+                <Route
+                  path="lawyer/verification"
+                  element={
+                    <RequireAuth>
+                      <LawyerVerificationPage />
+                    </RequireAuth>
+                  }
+                />
+                <Route
+                  path="lawyer"
+                  element={
+                    <RequireLawyer>
+                      <LawyerDashboardPage />
+                    </RequireLawyer>
+                  }
+                />
+                <Route
+                  path="lawyer/income"
+                  element={
+                    <RequireLawyer>
+                      <LawyerIncomePage />
+                    </RequireLawyer>
+                  }
+                />
+                <Route
+                  path="lawyer/withdraw"
+                  element={
+                    <RequireLawyer>
+                      <LawyerWithdrawPage />
+                    </RequireLawyer>
+                  }
+                />
+                <Route
+                  path="lawyer/withdrawals"
+                  element={
+                    <RequireLawyer>
+                      <LawyerWithdrawalsPage />
+                    </RequireLawyer>
+                  }
+                />
+                <Route
+                  path="lawyer/bank-accounts"
+                  element={
+                    <RequireLawyer>
+                      <LawyerBankAccountsPage />
+                    </RequireLawyer>
+                  }
+                />
                 <Route
                   path="lawfirm/consultations"
                   element={<Navigate to="/orders?tab=consultations" replace />}
@@ -169,7 +273,14 @@ function App() {
                 <Route path="lawfirm/:firmId" element={<LawFirmDetailPage />} />
                 <Route path="calculator" element={<FeeCalculatorPage />} />
                 <Route path="limitations" element={<LimitationsCalculatorPage />} />
-                <Route path="calendar" element={<CalendarPage />} />
+                <Route
+                  path="calendar"
+                  element={
+                    <RequireAuth>
+                      <CalendarPage />
+                    </RequireAuth>
+                  }
+                />
                 <Route path="documents" element={<DocumentGeneratorPage />} />
                 <Route path="contracts" element={<ContractReviewPage />} />
                 <Route path="faq" element={<FaqPage />} />
@@ -183,7 +294,14 @@ function App() {
                 <Route path="privacy" element={<PrivacyPolicyPage />} />
                 <Route path="ai-disclaimer" element={<AiDisclaimerPage />} />
                 <Route path="vip" element={<VipPage />} />
-                <Route path="profile" element={<ProfilePage />} />
+                <Route
+                  path="profile"
+                  element={
+                    <RequireAuth>
+                      <ProfilePage />
+                    </RequireAuth>
+                  }
+                />
                 <Route path="*" element={<NotFoundPage />} />
               </Route>
             </Routes>

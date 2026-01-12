@@ -4,8 +4,8 @@
 
 ### 前端
 
-- **框架**：React 19 + TypeScript
-- **构建**：Vite 7
+- **框架**：React 19.2.3 + TypeScript 5.9.3
+- **构建**：Vite 7.2.7
 - **路由**：React Router DOM 7
 - **状态/数据请求**：React Query 5
 - **HTTP 请求**：Axios
@@ -21,7 +21,7 @@
 - **ORM**：SQLAlchemy 2.x（async）
 - **迁移**：Alembic
 - **认证**：JWT（python-jose）
-- **缓存/限流/锁**：Redis（生产强依赖；当 `DEBUG=false` 时必须可用）
+- **缓存/限流/锁**：Redis（生产强依赖；当 `DEBUG=false` 时必须配置且可用，否则启动失败）
 - **AI**：OpenAI-compatible HTTP API（`OPENAI_API_KEY` + `OPENAI_BASE_URL`）
 - **RAG/向量库**：LangChain + ChromaDB
 - **文档处理**：pypdf、docx2txt、reportlab
@@ -146,6 +146,7 @@ SQL_ECHO=
   - `JWT_SECRET_KEY/SECRET_KEY` 必须为安全值（且长度足够）
   - `PAYMENT_WEBHOOK_SECRET` 必须配置
   - `REDIS_URL` 必须配置且 Redis 必须可用（用于限流/分布式锁/周期任务；不可用则启动失败）
+  - DB 默认启用 Alembic head 门禁：当 DB schema 未升级到 `head`，启动失败并提示迁移命令；如需临时允许运行时 DDL，可设置 `DB_ALLOW_RUNTIME_DDL=1`（不建议长期使用）
   - 当 `STORAGE_PROVIDER=s3`：
     - `STORAGE_S3_BUCKET` 必须配置
     - `STORAGE_PUBLIC_BASE_URL` 必须配置（用于生成/重定向可访问的文件 URL）
