@@ -42,6 +42,14 @@
 - 优化：初始化数据脚本幂等化（`backend/scripts/seed_data.py` / `seed_legal_knowledge.py`），支持一键重置与清晰日志
 - 优化：管理后台侧边栏信息架构（多分组二级菜单）
 - 新增：Release 工作流（tag -> GitHub Release + 构建产物上传）
+- 文档：一致性审计并按代码真实状态同步核心文档
+  - 更新：`docs/核心文档清单/03_DIRECTORY_STRUCTURE.md`（补齐实际路由模块与 init_db 门禁说明）
+  - 更新：`docs/核心文档清单/02_TECH_STACK_ARCHITECTURE.md`（前端依赖固定版本；迁移/限流描述与代码一致）
+  - 更新：`docs/核心文档清单/04_DATABASE_SCHEMA_ERD.md`（补充律师复核相关表与关系；更新迁移说明）
+  - 更新：`docs/核心文档清单/05_BUSINESS_LOGIC_DATA_FLOW.md`（补充合同审查/律师复核/支付渠道状态；修正 Redis 强依赖与周期任务锁策略）
+  - 更新：`docs/核心文档清单/06_CODE_AUDIT.md`（迁移/限流现状描述与代码一致）
+  - 更新：`docs/TECH_SPEC.md`、`docs/API_DESIGN.md`、`docs/DATABASE.md`（补齐新模块与生产门禁要点）
+  - 更新：`docs/README.md`（更新时间与“以代码为准”说明）、`继任者必读.md`（生产门禁与模块定位补充）
 
 ## [2026-01-08]
 

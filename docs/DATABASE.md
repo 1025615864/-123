@@ -9,7 +9,9 @@
 - **开发/轻量部署**：SQLite（默认）
 - **生产/多实例**：PostgreSQL（推荐）
 
-为保证两种数据库下的结构一致，建议统一采用 Alembic 做“正式迁移”；同时保留 `init_db()` 中少量 **SQLite 自修复**（用于历史版本平滑升级/兜底）。
+为保证两种数据库下的结构一致，建议统一采用 Alembic 做“正式迁移”。当前代码在生产环境默认启用 **Alembic head 门禁**：当 `DEBUG=false` 且未设置 `DB_ALLOW_RUNTIME_DDL=1` 时，启动阶段会校验 DB 是否已升级到 `head`，否则启动失败并给出迁移命令指引。
+
+同时，代码也保留了运行时 DDL 的兜底路径（仅用于本地开发/应急）：当 `DEBUG=true` 或显式设置 `DB_ALLOW_RUNTIME_DDL=1` 时，`init_db()` 允许执行 `create_all` 与少量补列/补索引逻辑。
 
 > 注意：从第十二阶段（P0.1）开始，生产环境（`DEBUG=false`）将逐步收敛为 **Alembic Only**：
 >
@@ -161,6 +163,33 @@
 | rating          | int         | 评价（1-3）            |
 | feedback        | text        | 用户反馈               |
 | created_at      | datetime    | 创建时间               |
+
+---
+
+#### consultation_review_tasks 律师复核任务
+
+- 表：`consultation_review_tasks`
+- 说明：用户为某次 AI 咨询购买“律师复核”后生成的任务，律师可领取并提交复核稿。
+- 唯一约束：`order_id` 唯一（防重复发放/重复建任务）。
+- 关键字段：
+  - `consultation_id`：FK -> `consultations.id`
+  - `user_id`：FK -> `users.id`
+  - `order_id` / `order_no`：FK -> `payment_orders.id`；`order_no` 冗余便于检索
+  - `status`：`pending/claimed/submitted`
+  - `lawyer_id`：FK -> `lawyers.id`（可空，未领取）
+  - `result_markdown`：最终复核稿（Markdown）
+  - `claimed_at/submitted_at/created_at/updated_at`
+
+#### consultation_review_versions 复核版本
+
+- 表：`consultation_review_versions`
+- 说明：每次提交/更新复核稿时写入一条版本记录用于审计与追溯。
+- 关键字段：
+  - `task_id`：FK -> `consultation_review_tasks.id`
+  - `editor_user_id`：FK -> `users.id`
+  - `editor_role`：例如 `lawyer`
+  - `content_markdown`：提交内容
+  - `created_at`
 
 ---
 

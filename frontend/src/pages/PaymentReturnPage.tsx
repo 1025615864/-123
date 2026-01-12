@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { CheckCircle, Clock, ExternalLink, RefreshCw, XCircle } from "lucide-react";
 import PageHeader from "../components/PageHeader";
 import { Badge, Button, Card, EmptyState, Skeleton } from "../components/ui";
 import api from "../api/client";
 import { useTheme } from "../contexts/ThemeContext";
+import { useAuth } from "../contexts/AuthContext";
 import { useToast } from "../hooks";
 
 type OrderDetail = {
@@ -67,8 +68,10 @@ function orderTypeToNextStep(orderType: string | null | undefined): {
 
 export default function PaymentReturnPage() {
   const { actualTheme } = useTheme();
+  const { isAuthenticated } = useAuth();
   const toast = useToast();
   const [urlParams] = useSearchParams();
+  const location = useLocation();
 
   const orderNo = useMemo(() => {
     const byOrderNo = String(urlParams.get("order_no") ?? "").trim();
@@ -84,11 +87,17 @@ export default function PaymentReturnPage() {
       const res = await api.get(`/payment/orders/${encodeURIComponent(orderNo)}`);
       return res.data as OrderDetail;
     },
-    enabled: Boolean(orderNo),
+    enabled: Boolean(orderNo) && isAuthenticated,
     retry: 1,
     refetchOnWindowFocus: false,
     placeholderData: (prev) => prev,
   });
+
+  const isUnauthorized = useMemo(() => {
+    const err: any = detailQuery.error;
+    const status = err?.response?.status;
+    return status === 401 || status === 403;
+  }, [detailQuery.error]);
 
   const [pollingLeft, setPollingLeft] = useState(0);
   const pollingTimerRef = useRef<number | null>(null);
@@ -201,6 +210,33 @@ export default function PaymentReturnPage() {
 
   const Icon = icon;
 
+  if (!isAuthenticated || isUnauthorized) {
+    const redirect = `${location.pathname}${location.search}`
+    return (
+      <div className="space-y-10">
+        <PageHeader
+          eyebrow="支付"
+          title="请先登录"
+          description="登录后即可查看支付结果与订单状态"
+          layout="mdStart"
+          tone={actualTheme}
+        />
+
+        <EmptyState
+          icon={ExternalLink}
+          title="需要登录"
+          description="支付回跳页需要登录后才能查询订单状态"
+          tone={actualTheme}
+          action={
+            <Link to={`/login?return_to=${encodeURIComponent(redirect)}`} className="mt-6 inline-block">
+              <Button>去登录</Button>
+            </Link>
+          }
+        />
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-10">
       <PageHeader
@@ -210,7 +246,7 @@ export default function PaymentReturnPage() {
         layout="mdStart"
         tone={actualTheme}
         right={
-          orderNo ? (
+          orderNo && isAuthenticated && !isUnauthorized ? (
             <Button
               variant="outline"
               icon={RefreshCw}

@@ -92,10 +92,10 @@
 - 框架：FastAPI
 - 运行：Uvicorn
 - ORM：SQLAlchemy 2.x（async）
-- 迁移：Alembic（仓库已有 migration；同时保留 `init_db()` 的兜底自修复）
+- 迁移：Alembic（仓库包含 baseline + 多个 migration；生产 `DEBUG=false` 默认启用 Alembic head 门禁）
 - DB：SQLite（默认）/ PostgreSQL（生产推荐）
 - 鉴权：JWT（python-jose + cryptography）
-- 缓存/锁：Redis（生产推荐，用于周期任务分布式锁）
+- 缓存/锁：Redis（生产强依赖；`DEBUG=false` 时 Redis 不可用会启动失败，用于限流/分布式锁/周期任务）
 - AI：OpenAI-compatible（openai/httpx），LangChain + ChromaDB（RAG）
 
 ### 3.2 前端
@@ -191,7 +191,7 @@ docker compose -f docker-compose.prod.yml up -d --build
 生产建议：
 
 - 使用 PostgreSQL
-- 使用 Redis（`DEBUG=false` 且 Redis 不可用时，周期任务/News AI pipeline 会被禁用以避免多副本重复执行）
+- 使用 Redis（生产 `DEBUG=false` 时为强依赖：Redis 不可用会启动失败；用于限流/分布式锁/周期任务）
 - 通过 Secret Manager 注入：
   - `JWT_SECRET_KEY/SECRET_KEY`
   - `PAYMENT_WEBHOOK_SECRET`

@@ -1558,7 +1558,7 @@ export default function ChatPage() {
                   。登录后可保存历史记录。
                 </span>
                 <Link
-                  to={`/login?redirect=${encodeURIComponent(
+                  to={`/login?return_to=${encodeURIComponent(
                     `${location.pathname}${location.search}`
                   )}`}
                   className="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"

@@ -619,7 +619,7 @@ export default function ChatHistoryPage() {
 
   if (!isAuthenticated) {
     const redirect = `${location.pathname}${location.search}`
-    return <Navigate to={`/login?redirect=${encodeURIComponent(redirect)}`} replace />
+    return <Navigate to={`/login?return_to=${encodeURIComponent(redirect)}`} replace />
   }
 
   const isInitialLoading = consultationsQuery.isLoading && consultations.length === 0

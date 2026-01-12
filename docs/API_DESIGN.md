@@ -48,6 +48,10 @@ Authorization: Bearer <token>
 }
 ```
 
+补充：
+
+- 合同审查（`/api/contracts/*`）也使用类似的 `error_code` 结构（例如 `AI_NOT_CONFIGURED`），用于在未配置 AI 时返回可理解错误。
+
 ### 3.2 常用状态码
 
 | 状态码 | 含义                         |
@@ -205,6 +209,7 @@ Authorization: Bearer <token>
 ### 4.7 支付（/api/payment）
 
 - `GET /api/payment/pricing`：价格表（VIP/次数包）
+- `GET /api/payment/channel-status`：渠道配置状态（public，不含敏感信息；用于前端动态显示可用支付方式）
 - `POST /api/payment/orders`：创建订单
 - `POST /api/payment/orders/{order_no}/pay`：发起支付
 
@@ -299,6 +304,17 @@ Authorization: Bearer <token>
 
 - `GET /api/admin/stats`
 - `GET /api/admin/export/*`：导出 users/posts/news/lawfirms/knowledge/consultations
+
+### 4.18 合同审查（/api/contracts）
+
+- `POST /api/contracts/review`：上传合同并生成风险审查报告
+
+### 4.19 律师复核（/api/reviews）
+
+- `GET /api/reviews/consultations/{consultation_id}`：用户查询某次咨询的复核任务
+- `GET /api/reviews/lawyer/tasks?status=`：律师任务列表（含未领取任务与分配给自己的任务）
+- `POST /api/reviews/lawyer/tasks/{task_id}/claim`：领取任务
+- `POST /api/reviews/lawyer/tasks/{task_id}/submit`：提交复核结果
 
 ### 4.17 WebSocket
 

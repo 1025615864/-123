@@ -9,8 +9,9 @@
 ### 1.1 数据库迁移策略混用（长期风险）
 
 - **现状**：
-  - `backend/app/database.py::init_db()` 使用 `Base.metadata.create_all()` 并包含大量 SQLite/PG 的“自修复”DDL（补列/补索引/更新 cents 字段等）。
-  - Alembic 迁移目录存在，但 `versions/` 中 migration 数量有限。
+  - `backend/app/database.py::init_db()` 在 `DEBUG=true` 或设置 `DB_ALLOW_RUNTIME_DDL=1` 时，会允许 `Base.metadata.create_all()` 与少量 SQLite/PG 运行时 DDL 兜底；
+  - 当 `DEBUG=false` 且未设置 `DB_ALLOW_RUNTIME_DDL=1` 时，默认启用 **Alembic head 门禁**（schema 不在 head 会启动失败并提示迁移命令）。
+  - Alembic 已存在 baseline + 多个迁移，但仍可能与“运行时 DDL 兜底路径”并存，带来一致性治理成本。
 - **风险**：
   - 结构演进不完全可追溯，容易出现“开发库 OK、生产库漂移”的情况。
   - `create_all` 会掩盖缺迁移的问题。
@@ -20,7 +21,7 @@
 
 ### 1.2 内存限流器在生产多副本下不一致
 
-- **现状**：`backend/app/utils/rate_limiter.py` 使用进程内内存滑动窗口。
+- **现状**：`backend/app/utils/rate_limiter.py` 采用 Redis 优先的计数限流（`INCR`+`EXPIRE`），Redis 不可用时才回退到进程内内存限流。
 - **风险**：
   - 多实例部署时每个实例独立计数，整体限流失真。
   - 进程重启会清空计数。

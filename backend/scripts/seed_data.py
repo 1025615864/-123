@@ -3,6 +3,7 @@ import argparse
 import os
 import asyncio
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -76,6 +77,7 @@ async def apply_e2e_defaults(db: AsyncSession) -> None:
 
 async def create_users(db: AsyncSession):
     """创建测试用户"""
+    now = datetime.now(timezone.utc)
     users = [
         User(
             username="admin",
@@ -83,6 +85,10 @@ async def create_users(db: AsyncSession):
             nickname="管理员",
             hashed_password=hash_password("admin123"),
             role="admin",
+            email_verified=True,
+            email_verified_at=now,
+            phone_verified=True,
+            phone_verified_at=now,
             is_active=True
         ),
         User(
@@ -91,6 +97,10 @@ async def create_users(db: AsyncSession):
             nickname="李律师",
             hashed_password=hash_password("lawyer123"),
             role="lawyer",
+            email_verified=True,
+            email_verified_at=now,
+            phone_verified=True,
+            phone_verified_at=now,
             is_active=True
         ),
         User(
@@ -118,6 +128,11 @@ async def create_users(db: AsyncSession):
             existing.nickname = user.nickname
             existing.hashed_password = user.hashed_password
             existing.role = user.role
+            if user.username in {"admin", "lawyer1"}:
+                existing.email_verified = True
+                existing.email_verified_at = now
+                existing.phone_verified = True
+                existing.phone_verified_at = now
             existing.is_active = user.is_active
             result_users.append(existing)
 

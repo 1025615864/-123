@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, Eye, Save, RefreshCw } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import api from '../api/client'
-import { Button, Card, Input, ListSkeleton, Textarea } from '../components/ui'
+import { Button, Card, EmptyState, Input, ListSkeleton, Textarea } from '../components/ui'
 import MarkdownContent from '../components/MarkdownContent'
 import PageHeader from '../components/PageHeader'
 import RichTextEditor from '../components/RichTextEditor'
@@ -100,11 +100,12 @@ interface PostDetail {
 
 export default function EditPostPage() {
   const { postId } = useParams<{ postId: string }>()
-  const navigate = useNavigate()
-  const toast = useToast()
-  const queryClient = useQueryClient()
   const { isAuthenticated } = useAuth()
   const { actualTheme } = useTheme()
+  const toast = useToast()
+  const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  const location = useLocation()
 
   const [title, setTitle] = useState('')
   const [category, setCategory] = useState('法律咨询')
@@ -286,7 +287,8 @@ export default function EditPostPage() {
   const handleSave = () => {
     if (!isAuthenticated) {
       toast.error('请先登录')
-      navigate('/login')
+      const redirect = `${location.pathname}${location.search}`
+      navigate(`/login?return_to=${encodeURIComponent(redirect)}`)
       return
     }
     if (!title.trim()) {
@@ -324,12 +326,22 @@ export default function EditPostPage() {
 
   if (!postQuery.data) {
     return (
-      <div className="text-center py-20">
-        <p className="text-slate-600 dark:text-white/50">帖子不存在或已被删除</p>
-        <Link to="/forum" className="text-amber-600 hover:underline mt-4 inline-block dark:text-amber-400">
-          返回论坛
-        </Link>
-      </div>
+      <EmptyState
+        icon={RefreshCw}
+        title="帖子不存在或已被删除"
+        description="请返回论坛重新选择，或稍后再试"
+        tone={actualTheme}
+        action={
+          <div className="flex flex-col sm:flex-row gap-3">
+            <Link to="/forum">
+              <Button variant="outline">返回论坛</Button>
+            </Link>
+            <Button onClick={() => postQuery.refetch()} disabled={postQuery.isFetching}>
+              重试
+            </Button>
+          </div>
+        }
+      />
     )
   }
 

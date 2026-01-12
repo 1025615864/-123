@@ -28,14 +28,14 @@
 
 ### 1.2 前端（React SPA）
 
-- **React**：`react ^19.2.3`、`react-dom ^19.2.3`
-- **TypeScript**：`~5.9.3`
-- **构建工具**：`vite ^7.2.4`
-- **路由**：`react-router-dom ^7.10.1`
-- **数据请求/缓存**：`@tanstack/react-query ^5.90.12`
-- **HTTP**：`axios ^1.13.2`
-- **样式**：TailwindCSS 4（`tailwindcss ^4.1.18`）
-- **E2E**：Playwright（`@playwright/test ^1.49.1`）
+- **React**：`react 19.2.3`、`react-dom 19.2.3`
+- **TypeScript**：`5.9.3`
+- **构建工具**：`vite 7.2.7`
+- **路由**：`react-router-dom 7.10.1`
+- **数据请求/缓存**：`@tanstack/react-query 5.90.12`
+- **HTTP**：`axios 1.13.2`
+- **样式**：TailwindCSS 4（`tailwindcss 4.1.18`）
+- **E2E**：Playwright（`@playwright/test 1.57.0`）
 
 ### 1.3 部署与基础设施
 
@@ -98,9 +98,9 @@
 
 - 默认 SQLite：`DATABASE_URL=sqlite+aiosqlite:///./data/app.db`
 - 生产推荐 PostgreSQL：并通过 Alembic 管理迁移
-- `backend/app/database.py` 在启动时会：
-  - `Base.metadata.create_all`（确保缺表可用）
-  - 对 SQLite/PG 做少量“自修复”DDL（补列、补索引等）
+- `backend/app/database.py:init_db()` 在启动时会：
+  - 当 `DEBUG=false` 且未设置 `DB_ALLOW_RUNTIME_DDL=1`：仅做 **Alembic head 门禁**（schema 未到 head 则启动失败并提示迁移命令）
+  - 当 `DEBUG=true` 或设置 `DB_ALLOW_RUNTIME_DDL=1`：允许执行 `Base.metadata.create_all()` 与少量运行时 DDL 兜底（便于本地开发/应急）
 
 > 风险提示：`create_all + 自修复` 与 Alembic 并存，会带来“结构演进一致性”的长期风险；建议最终以 Alembic 为唯一迁移通道。
 
@@ -111,7 +111,7 @@
 - **JWT**：token 里 `sub=<user_id>`（`backend/app/utils/security.py`）
 - **Secrets 不入库**：`/api/system/configs` 对敏感 key/value 做服务端拦截（`backend/app/routers/system.py`）
 - **生产环境强校验**：`DEBUG=false` 时校验 `SECRET_KEY` 与 `PAYMENT_WEBHOOK_SECRET`（`backend/app/config.py`）
-- **限流**：内存滑动窗口（`backend/app/utils/rate_limiter.py`），按 IP/路径（部分场景也可按 user）
+- **限流**：Redis 优先（`INCR`+`EXPIRE`），不可用时内存兜底（`backend/app/utils/rate_limiter.py`）；生产 `DEBUG=false` 时强制要求 Redis 可用
 
 ---
 

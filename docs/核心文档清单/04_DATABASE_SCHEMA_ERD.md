@@ -15,6 +15,8 @@
 
 - `consultations`：咨询会话
 - `chat_messages`：会话消息
+- `consultation_review_tasks`：律师复核任务（与咨询、订单、律师关联；按 `order_id` 唯一防重入）
+- `consultation_review_versions`：复核提交版本（每次提交一条，用于审计/追溯）
 
 ### 1.3 论坛
 
@@ -105,6 +107,12 @@
 
   - `consultations.user_id -> users.id`（可空：游客）
   - `chat_messages.consultation_id -> consultations.id`
+  - `consultation_review_tasks.consultation_id -> consultations.id`
+  - `consultation_review_tasks.user_id -> users.id`
+  - `consultation_review_tasks.order_id -> payment_orders.id`
+  - `consultation_review_tasks.lawyer_id -> lawyers.id`（可空：未领取）
+  - `consultation_review_versions.task_id -> consultation_review_tasks.id`
+  - `consultation_review_versions.editor_user_id -> users.id`
 
 - **论坛**
 
@@ -154,6 +162,13 @@ erDiagram
 
   USERS ||--o{ CONSULTATIONS : opens
   CONSULTATIONS ||--o{ CHAT_MESSAGES : contains
+
+  CONSULTATIONS ||--o{ CONSULTATION_REVIEW_TASKS : reviewed
+  USERS ||--o{ CONSULTATION_REVIEW_TASKS : owns
+  PAYMENT_ORDERS ||--o{ CONSULTATION_REVIEW_TASKS : creates
+  LAWYERS ||--o{ CONSULTATION_REVIEW_TASKS : handles
+  CONSULTATION_REVIEW_TASKS ||--o{ CONSULTATION_REVIEW_VERSIONS : has
+  USERS ||--o{ CONSULTATION_REVIEW_VERSIONS : edits
 
   USERS ||--o{ POSTS : writes
   POSTS ||--o{ COMMENTS : has
@@ -223,8 +238,11 @@ erDiagram
 
 ## 4. 迁移与一致性说明
 
-- Alembic：`backend/alembic/*`（当前仓库包含至少一个 migration：news workbench 表）
-- `backend/app/database.py:init_db()`：在启动时会 `create_all` 并对 SQLite/PG 做兜底增量 DDL。
+- Alembic：`backend/alembic/*`
+  - 当前仓库已包含 baseline + 多个 migration（例如 news workbench、knowledge/payment audit、consultation review）。
+- `backend/app/database.py:init_db()`：
+  - 当 `DEBUG=false` 且未设置 `DB_ALLOW_RUNTIME_DDL=1`：默认仅做 **Alembic head 门禁**（非 head 则启动失败并提示迁移命令）。
+  - 当 `DEBUG=true` 或设置 `DB_ALLOW_RUNTIME_DDL=1`：允许运行时 DDL（`create_all` + 少量补列/补索引兜底）。
 
 建议（面向长期演进）：
 

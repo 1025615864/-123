@@ -3,6 +3,7 @@ import {
   useParams,
   Link,
   useNavigate,
+  useLocation,
   useSearchParams,
 } from "react-router-dom";
 import {
@@ -49,6 +50,7 @@ import {
   Button,
   Badge,
   FadeInImage,
+  EmptyState,
   Modal,
   ModalActions,
   Skeleton,
@@ -58,6 +60,7 @@ import MarkdownContent from "../components/MarkdownContent";
 import RichTextEditor from "../components/RichTextEditor";
 import { getApiErrorMessage } from "../utils";
 import { queryKeys } from "../queryKeys";
+import { useTheme } from "../contexts/ThemeContext";
 
 interface Author {
   id: number;
@@ -259,9 +262,11 @@ function ImageGallery({ images }: { images: string[] }) {
 export default function PostDetailPage() {
   const { postId } = useParams<{ postId: string }>();
   const { isAuthenticated, user } = useAuth();
+  const { actualTheme } = useTheme();
   const toast = useToast();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
 
   const isDeletedView = searchParams.get("deleted") === "1";
@@ -1448,18 +1453,24 @@ export default function PostDetailPage() {
   }
 
   if (isDeletedView && !isAuthenticated) {
+    const redirect = `${location.pathname}${location.search}`
     return (
-      <div className="text-center py-20">
-        <p className="text-slate-600 dark:text-white/50">
-          登录后可查看回收站帖子
-        </p>
-        <Link
-          to="/login"
-          className="text-amber-600 hover:underline mt-4 inline-block dark:text-amber-400"
-        >
-          去登录
-        </Link>
-      </div>
+      <EmptyState
+        icon={Trash2}
+        title="请先登录"
+        description="登录后可查看回收站帖子"
+        tone={actualTheme}
+        action={
+          <div className="flex flex-col sm:flex-row gap-3">
+            <Link to={`/login?return_to=${encodeURIComponent(redirect)}`}>
+              <Button>去登录</Button>
+            </Link>
+            <Link to="/forum">
+              <Button variant="outline">返回论坛</Button>
+            </Link>
+          </div>
+        }
+      />
     );
   }
 
@@ -1474,29 +1485,29 @@ export default function PostDetailPage() {
       ? "帖子不存在，或你暂无权限查看（可能正在审核中/已被驳回/已被删除）"
       : "帖子不存在或已被删除";
 
+    const redirect = `${location.pathname}${location.search}`
+    const title = isForbidden ? "暂无权限" : isNotFound ? "帖子不存在" : "加载失败"
+    const desc = detail ? `${hint}（${String(detail)}）` : hint
+
     return (
-      <div className="text-center py-20">
-        <p className="text-slate-600 dark:text-white/50">{hint}</p>
-        {detail ? (
-          <p className="text-slate-500 text-sm mt-2 dark:text-white/40">
-            {String(detail)}
-          </p>
-        ) : null}
-        {!isAuthenticated ? (
-          <Link
-            to="/login"
-            className="text-amber-600 hover:underline mt-4 inline-block dark:text-amber-400"
-          >
-            登录后再试
-          </Link>
-        ) : null}
-        <Link
-          to="/forum"
-          className="text-amber-600 hover:underline mt-4 inline-block dark:text-amber-400"
-        >
-          返回论坛
-        </Link>
-      </div>
+      <EmptyState
+        icon={FileText}
+        title={title}
+        description={desc}
+        tone={actualTheme}
+        action={
+          <div className="flex flex-col sm:flex-row gap-3">
+            {!isAuthenticated ? (
+              <Link to={`/login?return_to=${encodeURIComponent(redirect)}`}>
+                <Button>登录后再试</Button>
+              </Link>
+            ) : null}
+            <Link to="/forum">
+              <Button variant={isAuthenticated ? "primary" : "outline"}>返回论坛</Button>
+            </Link>
+          </div>
+        }
+      />
     );
   }
 

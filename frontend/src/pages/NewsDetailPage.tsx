@@ -17,6 +17,7 @@ import {
   Button,
   Badge,
   FadeInImage,
+  EmptyState,
   Textarea,
   Pagination,
   Skeleton,
@@ -26,6 +27,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import api from "../api/client";
 import { useToast } from "../hooks";
 import { useAuth } from "../contexts/AuthContext";
+import { useTheme } from "../contexts/ThemeContext";
 import { getApiErrorMessage } from "../utils";
 import { queryKeys } from "../queryKeys";
 import MarkdownContent from "../components/MarkdownContent";
@@ -192,6 +194,7 @@ function upsertLinkRel(rel: string, href: string): () => void {
 export default function NewsDetailPage() {
   const { newsId } = useParams<{ newsId: string }>();
   const { isAuthenticated, user } = useAuth();
+  const { actualTheme } = useTheme();
   const toast = useToast();
 
   const queryClient = useQueryClient();
@@ -672,18 +675,24 @@ export default function NewsDetailPage() {
   }
 
   if (!news) {
+    const err = newsQuery.isError
+      ? getApiErrorMessage(newsQuery.error, "新闻信息加载失败，请稍后重试")
+      : null;
     return (
-      <div className="text-center py-20">
-        <p className="text-slate-600 dark:text-white/50">
-          新闻不存在或已被删除
-        </p>
-        <Link
-          to="/news"
-          className="text-amber-600 hover:underline mt-4 inline-block dark:text-amber-400"
-        >
-          返回新闻列表
-        </Link>
-      </div>
+      <EmptyState
+        icon={UserIcon}
+        title={err ? "加载失败" : "新闻不存在或已被删除"}
+        description={err || "请返回新闻列表重新选择，或稍后再试"}
+        tone={actualTheme}
+        action={
+          <div className="flex flex-col sm:flex-row gap-3">
+            <Link to="/news">
+              <Button variant="outline">返回新闻列表</Button>
+            </Link>
+            {err ? <Button onClick={handleRefreshAll}>重试</Button> : null}
+          </div>
+        }
+      />
     );
   }
 
