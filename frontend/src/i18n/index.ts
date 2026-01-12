@@ -45,16 +45,24 @@ export function detectBrowserLanguage(): Language {
 
 // 从localStorage获取语言设置
 export function getSavedLanguage(): Language {
-  const saved = localStorage.getItem('language');
-  if (saved === 'zh' || saved === 'en') {
-    return saved;
+  try {
+    const saved = localStorage.getItem('language');
+    if (saved === 'zh' || saved === 'en') {
+      return saved;
+    }
+  } catch {
+    // ignore
   }
   return detectBrowserLanguage();
 }
 
 // 保存语言设置
 export function saveLanguage(lang: Language): void {
-  localStorage.setItem('language', lang);
+  try {
+    localStorage.setItem('language', lang);
+  } catch {
+    // ignore
+  }
 }
 
 export { zh, en };
