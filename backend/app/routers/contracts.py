@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import json
 import os
 import tempfile
 import time
@@ -11,12 +12,18 @@ from typing import Annotated, cast
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from ..config import get_settings
 from ..database import get_db
+from ..models.system import SystemConfig
 from ..models.user import User
 from ..schemas.contracts import ContractReviewResponse
-from ..services.contract_review_service import call_openai_contract_review
+from ..services.contract_review_service import (
+    call_openai_contract_review,
+    apply_contract_review_rules,
+    render_contract_review_markdown,
+)
 from ..services.quota_service import quota_service
 from ..utils.deps import get_current_user_optional
 from ..utils.pii import sanitize_pii
@@ -29,6 +36,21 @@ settings = get_settings()
 ERROR_CONTRACT_NOT_CONFIGURED = "AI_NOT_CONFIGURED"
 ERROR_CONTRACT_BAD_REQUEST = "CONTRACT_BAD_REQUEST"
 ERROR_CONTRACT_INTERNAL_ERROR = "CONTRACT_INTERNAL_ERROR"
+
+CONTRACT_REVIEW_RULES_KEY = "CONTRACT_REVIEW_RULES_JSON"
+
+
+async def _load_contract_review_rules(db: AsyncSession) -> dict[str, object] | None:
+    try:
+        res = await db.execute(select(SystemConfig).where(SystemConfig.key == CONTRACT_REVIEW_RULES_KEY))
+        cfg = res.scalar_one_or_none()
+        raw = str(getattr(cfg, "value", "") or "").strip() if cfg is not None else ""
+        if not raw:
+            return None
+        obj = json.loads(raw)
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
 
 
 def _get_int_env(key: str, default: int) -> int:
@@ -254,9 +276,11 @@ async def review_contract(
     preview = extracted_norm[:4000]
     extracted_for_ai = sanitize_pii(extracted_norm)
 
+    rules = await _load_contract_review_rules(db)
+
     try:
         report_json, report_md = await asyncio.to_thread(
-            call_openai_contract_review, extracted_text=extracted_for_ai
+            call_openai_contract_review, extracted_text=extracted_for_ai, rules=rules
         )
     except Exception:
         return _make_error_response(
@@ -272,13 +296,20 @@ async def review_contract(
         except Exception:
             pass
 
+    merged = apply_contract_review_rules(
+        cast(dict[str, object], report_json or {}),
+        extracted_text=extracted_norm,
+        rules=cast(dict[str, object] | None, rules),
+    )
+    merged_md = render_contract_review_markdown(cast(dict[str, object], merged))
+
     res = ContractReviewResponse(
         filename=filename,
         content_type=content_type,
         text_chars=len(extracted_norm),
         text_preview=preview,
-        report_json=cast(dict[str, object], report_json or {}),
-        report_markdown=str(report_md or "").strip() + "\n",
+        report_json=cast(dict[str, object], merged or {}),
+        report_markdown=str(merged_md or "").strip() + "\n",
         request_id=request_id,
     )
 

@@ -115,7 +115,12 @@ def render_contract_review_markdown(report: dict[str, Any]) -> str:
     return "\n".join(md).strip() + "\n"
 
 
-def build_contract_review_prompt(*, extracted_text: str, focus: str | None) -> tuple[str, str]:
+def build_contract_review_prompt(
+    *,
+    extracted_text: str,
+    focus: str | None,
+    rules: dict[str, Any] | None = None,
+) -> tuple[str, str]:
     sys = (
         "你是专业的合同审查律师助理。"
         "你必须输出严格的 JSON（不要输出多余解释文字）。"
@@ -124,6 +129,13 @@ def build_contract_review_prompt(*, extracted_text: str, focus: str | None) -> t
         "missing_clauses([string]), recommended_edits([{clause,before,after}]), questions_to_confirm([string])."
         "如果无法确定，字段可以为空字符串或空数组，但必须是合法 JSON。"
     )
+
+    if rules and isinstance(rules, dict):
+        try:
+            rules_json = json.dumps(rules, ensure_ascii=False)
+            sys = sys + "\n" + "以下是系统配置的条款库/风险库规则（请遵循并在输出中体现）：" + "\n" + rules_json
+        except Exception:
+            pass
 
     user_lines = ["以下是合同文本（可能已脱敏）：", extracted_text]
     focus_norm = str(focus or "").strip()
@@ -135,10 +147,143 @@ def build_contract_review_prompt(*, extracted_text: str, focus: str | None) -> t
     return sys, user
 
 
-def call_openai_contract_review(*, extracted_text: str, focus: str | None = None) -> tuple[dict[str, Any], str]:
+def _normalize_severity(value: object) -> str:
+    s = str(value or "").strip().lower()
+    if s in {"low", "medium", "high"}:
+        return s
+    return ""
+
+
+def _severity_rank(value: object) -> int:
+    s = _normalize_severity(value)
+    if s == "high":
+        return 3
+    if s == "medium":
+        return 2
+    if s == "low":
+        return 1
+    return 0
+
+
+def apply_contract_review_rules(
+    report: dict[str, Any],
+    *,
+    extracted_text: str,
+    rules: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not report or not isinstance(report, dict):
+        report = {}
+
+    if not rules or not isinstance(rules, dict):
+        return report
+
+    text = str(extracted_text or "")
+    if not text.strip():
+        return report
+
+    missing = _as_list(report.get("missing_clauses"))
+    missing_norm = {str(x).strip() for x in missing if str(x).strip()}
+
+    required_clauses = rules.get("required_clauses")
+    if isinstance(required_clauses, list):
+        for item in required_clauses:
+            if isinstance(item, str):
+                name = item.strip()
+                patterns = [name] if name else []
+            elif isinstance(item, dict):
+                name = str(item.get("name") or "").strip()
+                raw_patterns = item.get("patterns")
+                patterns: list[str] = []
+                if isinstance(raw_patterns, list):
+                    for p in raw_patterns:
+                        pp = str(p or "").strip()
+                        if pp:
+                            patterns.append(pp)
+                if not patterns and name:
+                    patterns = [name]
+            else:
+                continue
+
+            if not name or not patterns:
+                continue
+
+            found = False
+            for p in patterns:
+                if p and p in text:
+                    found = True
+                    break
+            if found:
+                continue
+            if name not in missing_norm:
+                missing.append(name)
+                missing_norm.add(name)
+
+    risks = _as_list(report.get("risks"))
+    risk_title_norm = set()
+    risk_max_rank = _severity_rank(report.get("overall_risk_level") or report.get("risk_level"))
+
+    for it in risks:
+        if not isinstance(it, dict):
+            continue
+        title = str(it.get("title") or "").strip()
+        if title:
+            risk_title_norm.add(title)
+        risk_max_rank = max(risk_max_rank, _severity_rank(it.get("severity")))
+
+    risk_keywords = rules.get("risk_keywords")
+    if isinstance(risk_keywords, list):
+        for item in risk_keywords:
+            if not isinstance(item, dict):
+                continue
+            keyword = str(item.get("keyword") or "").strip()
+            if not keyword:
+                continue
+            if keyword not in text:
+                continue
+
+            title = str(item.get("title") or keyword).strip() or keyword
+            if title in risk_title_norm:
+                continue
+
+            severity = _normalize_severity(item.get("severity")) or "medium"
+            problem = str(item.get("problem") or "").strip()
+            suggestion = str(item.get("suggestion") or "").strip()
+
+            risks.append(
+                {
+                    "title": title,
+                    "severity": severity,
+                    "problem": problem,
+                    "suggestion": suggestion,
+                }
+            )
+            risk_title_norm.add(title)
+            risk_max_rank = max(risk_max_rank, _severity_rank(severity))
+
+    report["missing_clauses"] = missing
+    report["risks"] = risks
+
+    existing_level = str(report.get("overall_risk_level") or report.get("risk_level") or "").strip()
+    if not existing_level:
+        report["overall_risk_level"] = "low" if risk_max_rank <= 1 else "medium" if risk_max_rank == 2 else "high"
+    else:
+        current_rank = _severity_rank(existing_level)
+        merged_rank = max(current_rank, risk_max_rank)
+        if merged_rank > current_rank:
+            report["overall_risk_level"] = "low" if merged_rank <= 1 else "medium" if merged_rank == 2 else "high"
+
+    return report
+
+
+def call_openai_contract_review(
+    *,
+    extracted_text: str,
+    focus: str | None = None,
+    rules: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], str]:
     from openai import OpenAI
 
-    sys, user = build_contract_review_prompt(extracted_text=extracted_text, focus=focus)
+    sys, user = build_contract_review_prompt(extracted_text=extracted_text, focus=focus, rules=rules)
 
     client = OpenAI(api_key=settings.openai_api_key, base_url=settings.openai_base_url)
     model = str(settings.ai_model or "").strip() or "gpt-4o-mini"

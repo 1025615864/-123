@@ -29,7 +29,7 @@ services:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres123@db:5432/baixing_law
       - JWT_SECRET_KEY=your-super-secret-jwt-key-change-in-production
       - DEBUG=true
-      - CORS_ALLOW_ORIGINS=http://localhost:3000,http://localhost:5173
+      - CORS_ALLOW_ORIGINS=["http://localhost:3000","http://localhost:5173"]
     ports:
       - "8000:8000"
     depends_on:

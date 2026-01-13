@@ -606,6 +606,39 @@ async def get_ai_ops_status(
     )
 
 
+class PublicAiStatusResponse(BaseModel):
+    voice_transcribe_enabled: bool
+    reason: str | None = None
+
+
+@router.get("/public/ai/status", response_model=PublicAiStatusResponse)
+async def get_public_ai_status():
+    from ..config import get_settings
+
+    settings = get_settings()
+
+    ai_router_enabled = False
+    try:
+        from ..routers import ai as _ai_router
+
+        _ = _ai_router
+        ai_router_enabled = True
+    except Exception:
+        ai_router_enabled = False
+
+    openai_api_key_configured = bool(str(settings.openai_api_key or "").strip())
+
+    enabled = bool(ai_router_enabled and openai_api_key_configured)
+    reason: str | None = None
+    if not enabled:
+        reason = "AI_NOT_CONFIGURED"
+
+    return PublicAiStatusResponse(
+        voice_transcribe_enabled=enabled,
+        reason=reason,
+    )
+
+
 @router.get("/metrics")
 async def get_metrics(
     _current_user: Annotated[User, Depends(require_admin)],
