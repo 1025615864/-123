@@ -50,6 +50,10 @@
   - 更新：`docs/核心文档清单/06_CODE_AUDIT.md`（迁移/限流现状描述与代码一致）
   - 更新：`docs/TECH_SPEC.md`、`docs/API_DESIGN.md`、`docs/DATABASE.md`（补齐新模块与生产门禁要点）
   - 更新：`docs/README.md`（更新时间与“以代码为准”说明）、`继任者必读.md`（生产门禁与模块定位补充）
+  - 更新：`docs/核心文档清单/02_TECH_STACK_ARCHITECTURE.md`（补充架构总览 Mermaid 图、关键不变量与互链入口）
+  - 更新：`docs/TECH_SPEC.md`（补充运行模式与门禁矩阵，并链接架构总览/DB 运维）
+  - 更新：`docs/DATABASE.md`（补充 DB 运维 Runbook：备份/恢复/演练/迁移发布/回滚）
+  - 更新：`docs/核心文档清单/README.md`（补充指向 TECH_SPEC/DATABASE 的权威入口链接）
 
 ## [2026-01-08]
 
