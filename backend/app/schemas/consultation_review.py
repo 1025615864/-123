@@ -34,6 +34,9 @@ class ConsultationReviewTaskItem(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    due_at: datetime | None = None
+    is_overdue: bool = False
+
     latest_version: ConsultationReviewVersionItem | None = None
 
     model_config = ConfigDict(from_attributes=True)

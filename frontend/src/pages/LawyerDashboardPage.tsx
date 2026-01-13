@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { CheckCircle2, FileText, Handshake, MessageSquareText, RotateCcw, XCircle } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
 import PageHeader from '../components/PageHeader'
 import { Badge, Button, Card, EmptyState, ListSkeleton, Modal, ModalActions, Pagination, Skeleton, Textarea } from '../components/ui'
 import api from '../api/client'
@@ -51,6 +52,8 @@ type ReviewTaskItem = {
   result_markdown: string | null
   claimed_at: string | null
   submitted_at: string | null
+  due_at?: string | null
+  is_overdue?: boolean
   created_at: string
   updated_at: string
 }
@@ -112,7 +115,18 @@ export default function LawyerDashboardPage() {
   const toast = useToast()
   const queryClient = useQueryClient()
 
+  const [searchParams, setSearchParams] = useSearchParams()
+  const didInitTabFromUrlRef = useRef(false)
+
   const [activeTab, setActiveTab] = useState<'consultations' | 'reviews'>('consultations')
+
+  useEffect(() => {
+    if (didInitTabFromUrlRef.current) return
+    const raw = String(searchParams.get('tab') || '').trim().toLowerCase()
+    if (raw === 'reviews') setActiveTab('reviews')
+    if (raw === 'consultations') setActiveTab('consultations')
+    didInitTabFromUrlRef.current = true
+  }, [searchParams])
 
   const [messagesOpen, setMessagesOpen] = useState(false)
   const [messagesConsultationId, setMessagesConsultationId] = useState<number | null>(null)
@@ -470,6 +484,14 @@ export default function LawyerDashboardPage() {
               onClick={() => {
                 if (actionBusy || reviewBusy) return
                 setActiveTab('consultations')
+                setSearchParams(
+                  (prev) => {
+                    const next = new URLSearchParams(prev)
+                    next.delete('tab')
+                    return next
+                  },
+                  { replace: true }
+                )
               }}
             >
               预约
@@ -481,6 +503,14 @@ export default function LawyerDashboardPage() {
               onClick={() => {
                 if (actionBusy || reviewBusy) return
                 setActiveTab('reviews')
+                setSearchParams(
+                  (prev) => {
+                    const next = new URLSearchParams(prev)
+                    next.set('tab', 'reviews')
+                    return next
+                  },
+                  { replace: true }
+                )
               }}
             >
               复核任务
@@ -765,6 +795,11 @@ export default function LawyerDashboardPage() {
                             <Badge variant={reviewStatusToBadgeVariant(status)} size="sm">
                               {reviewStatusToLabel(status)}
                             </Badge>
+                            {t.is_overdue ? (
+                              <Badge variant="danger" size="sm">
+                                已超时
+                              </Badge>
+                            ) : null}
                           </div>
 
                           <div className="mt-2 space-y-1 text-sm text-slate-600 dark:text-white/60">
@@ -772,6 +807,11 @@ export default function LawyerDashboardPage() {
                             <div>用户ID：{t.user_id}</div>
                             <div>订单号：{t.order_no}</div>
                             {t.submitted_at ? <div>提交时间：{new Date(t.submitted_at).toLocaleString()}</div> : null}
+                            {t.due_at ? (
+                              <div className={t.is_overdue ? 'text-rose-700 dark:text-rose-300' : ''}>
+                                到期时间：{new Date(t.due_at).toLocaleString()}
+                              </div>
+                            ) : null}
                           </div>
                         </div>
 
