@@ -72,12 +72,15 @@ docker compose up -d --build
 ## 文档入口（建议先看）
 
 - `docs/PRD.md`：产品需求文档（本项目口径版）
+- `docs/ROLES.md`：项目角色划分（RACI/职责/交付物/质量门禁/Workflows 入口）
+- `docs/PLAN_FRONTEND_2026-01-13.md`：前端问题发现与布局优化计划（含修复清单与门禁）
 - `docs/TECH_SPEC.md`：技术规范（本项目技术栈/结构/环境变量）
 - `docs/API_DESIGN.md`：API 设计（模块划分 + 关键接口汇总）
 - `docs/DATABASE.md`：数据库设计（以 SQLAlchemy models 为准）
 - `docs/CHANGELOG.md`：变更记录（对外可感知的交付节点）
 - `CLAUDE.md`：AI 编程助手规则（本仓库约束）
-- `TASKS.md`：任务追踪（建议的迭代路线）
+- `TASKS.md`：任务追踪入口（当前迭代见 `TASKS_NEXT.md`）
+- `.windsurf/workflows/*.md`：Windsurf Cascade 工作流（在对话框输入 `/project-roles`、`/feature-delivery`、`/hotfix-incident`、`/role-backend` 等调用）
 - `docs/_archive/PROJECT_REPORT.md`：项目报告（历史交付材料归档）
 - `docs/_archive/TECHNICAL_INTEGRATION_REPORT.md`：技术对接报告（历史交付材料归档）
 - `docs/_archive/`：历史文档归档（仅供追溯）

@@ -6,6 +6,7 @@ import api from "../api/client";
 import PageHeader from "../components/PageHeader";
 import { Button, Card, EmptyState, Input } from "../components/ui";
 import { useTheme } from "../contexts/ThemeContext";
+import { useLanguage } from "../contexts/LanguageContext";
 import { useAppMutation, useToast } from "../hooks";
 
 export default function ResetPasswordPage() {
@@ -13,6 +14,7 @@ export default function ResetPasswordPage() {
   const toast = useToast();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const { t } = useLanguage();
 
   const token = useMemo(() => {
     const raw = String(searchParams.get("token") ?? "").trim();
@@ -35,10 +37,10 @@ export default function ResetPasswordPage() {
       const res = await api.post("/user/password-reset/confirm", payload);
       return res.data as { message?: string };
     },
-    errorMessageFallback: "重置失败，请稍后重试",
+    errorMessageFallback: t("passwordReset.resetErrorFallback"),
     onSuccess: (data) => {
       setDone(true);
-      toast.success(String(data?.message || "密码重置成功"));
+      toast.success(String(data?.message || t("passwordReset.resetSuccessToastFallback")));
       setTimeout(() => {
         navigate("/login", { replace: true });
       }, 300);
@@ -54,22 +56,22 @@ export default function ResetPasswordPage() {
 
     if (!p.trim()) {
       passwordRef.current?.focus();
-      toast.error("请输入新密码");
+      toast.error(t("passwordReset.newPasswordRequired"));
       return;
     }
     if (p.length < 6) {
       passwordRef.current?.focus();
-      toast.error("新密码长度至少6位");
+      toast.error(t("passwordReset.newPasswordTooShort"));
       return;
     }
     if (!c.trim()) {
       confirmRef.current?.focus();
-      toast.error("请再次输入新密码");
+      toast.error(t("passwordReset.confirmNewPasswordRequired"));
       return;
     }
     if (p !== c) {
       confirmRef.current?.focus();
-      toast.error("两次输入的新密码不一致");
+      toast.error(t("passwordReset.passwordNotMatch"));
       return;
     }
 
@@ -81,25 +83,25 @@ export default function ResetPasswordPage() {
     return (
       <div className="space-y-10">
         <PageHeader
-          eyebrow="账户"
-          title="重置密码"
-          description="请通过邮件链接打开该页面"
+          eyebrow={t("passwordReset.eyebrow")}
+          title={t("passwordReset.resetTitle")}
+          description={t("passwordReset.openFromEmailDescription")}
           layout="mdStart"
           tone={actualTheme}
         />
         <Card variant="surface" padding="lg">
           <EmptyState
             icon={AlertCircle}
-            title="缺少重置参数"
-            description="请从重置邮件中打开链接，或重新发起找回密码。"
+            title={t("passwordReset.missingTokenTitle")}
+            description={t("passwordReset.missingTokenDescription")}
             tone={actualTheme}
             action={
               <div className="flex flex-wrap items-center gap-2">
                 <Link to="/forgot-password">
-                  <Button>去找回密码</Button>
+                  <Button>{t("passwordReset.goForgotPassword")}</Button>
                 </Link>
                 <Link to="/login">
-                  <Button variant="outline">返回登录</Button>
+                  <Button variant="outline">{t("passwordReset.backToLogin")}</Button>
                 </Link>
               </div>
             }
@@ -112,9 +114,9 @@ export default function ResetPasswordPage() {
   return (
     <div className="space-y-10">
       <PageHeader
-        eyebrow="账户"
-        title="重置密码"
-        description="设置一个新的登录密码"
+        eyebrow={t("passwordReset.eyebrow")}
+        title={t("passwordReset.resetTitle")}
+        description={t("passwordReset.resetDescription")}
         layout="mdStart"
         tone={actualTheme}
       />
@@ -123,24 +125,24 @@ export default function ResetPasswordPage() {
         {done ? (
           <EmptyState
             icon={CheckCircle}
-            title="已重置"
-            description="密码已重置成功，即将跳转到登录页"
+            title={t("passwordReset.doneTitle")}
+            description={t("passwordReset.doneDescription")}
             tone={actualTheme}
             action={
               <Link to="/login">
-                <Button>去登录</Button>
+                <Button>{t("passwordReset.goLogin")}</Button>
               </Link>
             }
           />
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
             <Input
-              label="新密码"
+              label={t("passwordReset.newPasswordLabel")}
               icon={Lock}
               type={showPassword ? "text" : "password"}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="请输入新密码（至少6位）"
+              placeholder={t("auth.passwordPlaceholderMin6")}
               autoComplete="new-password"
               ref={passwordRef}
               disabled={confirmMutation.isPending}
@@ -149,7 +151,7 @@ export default function ResetPasswordPage() {
                   type="button"
                   onClick={() => setShowPassword((v) => !v)}
                   className="p-2 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-900/5 transition disabled:opacity-60 disabled:cursor-not-allowed dark:text-white/40 dark:hover:text-white/70 dark:hover:bg-white/5"
-                  aria-label={showPassword ? "隐藏密码" : "显示密码"}
+                  aria-label={showPassword ? t("auth.hidePassword") : t("auth.showPassword")}
                   disabled={confirmMutation.isPending}
                 >
                   {showPassword ? (
@@ -162,12 +164,12 @@ export default function ResetPasswordPage() {
             />
 
             <Input
-              label="确认新密码"
+              label={t("passwordReset.confirmNewPasswordLabel")}
               icon={Lock}
               type={showPassword ? "text" : "password"}
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
-              placeholder="请再次输入新密码"
+              placeholder={t("passwordReset.confirmNewPasswordPlaceholder")}
               autoComplete="new-password"
               ref={confirmRef}
               disabled={confirmMutation.isPending}
@@ -177,14 +179,14 @@ export default function ResetPasswordPage() {
               <Button
                 type="submit"
                 isLoading={confirmMutation.isPending}
-                loadingText="提交中..."
+                loadingText={t("passwordReset.submitting")}
                 disabled={confirmMutation.isPending}
               >
-                确认重置
+                {t("passwordReset.confirmReset")}
               </Button>
               <Link to="/login">
                 <Button variant="outline" disabled={confirmMutation.isPending}>
-                  返回登录
+                  {t("passwordReset.backToLogin")}
                 </Button>
               </Link>
             </div>

@@ -63,6 +63,84 @@
   - 前端为 SPA，通过 `/api` 与后端通信
 - **API 组织**：FastAPI 统一前缀 `/api`，模块化路由聚合（`backend/app/routers/__init__.py`）
 
+## 2.1 架构总览图（Overview Diagram）
+
+> 目标：用一张图让专家快速理解组件边界、流量入口、生产依赖与关键门禁。
+
+```mermaid
+flowchart TB
+  subgraph Client["Client"]
+    U["User Browser"]
+  end
+
+  subgraph FE["Frontend (React SPA)"]
+    FEApp["React + TS + React Router\n(Vite dev / Nginx prod)"]
+  end
+
+  subgraph Edge["Edge / Reverse Proxy"]
+    Proxy["Ingress or Nginx or Vite Proxy\n- / -> frontend\n- /api -> backend"]
+  end
+
+  subgraph BE["Backend (FastAPI)"]
+    API["FastAPI (Uvicorn)\n/api/*"]
+    MW["Middlewares\n- RequestId\n- Envelope (X-Api-Envelope)\n- Metrics\n- RateLimit\n- Logging/Sentry ctx"]
+    Routers["Routers (by domain)\nuser/news/forum/payment/... "]
+    Services["Services\nbusiness logic + tx + cache"]
+  end
+
+  subgraph Data["Data & Infra"]
+    DB["Database\nSQLite (dev default)\nPostgreSQL (prod recommended)"]
+    Redis["Redis (prod required when DEBUG=false)\n- rate limit counters\n- distributed locks\n- cache"]
+  end
+
+  subgraph Ext["External Services"]
+    LLM["OpenAI-compatible API\n(OPENAI_API_KEY)"]
+    Pay["Payment Providers\nAlipay / Ikunpay / WeChatPay callbacks"]
+  end
+
+  subgraph Obs["Observability"]
+    Metrics["/metrics (Prometheus)\n(optional token)"]
+  end
+
+  subgraph Jobs["Periodic Jobs (lifespan)"]
+    Runner["PeriodicLockedRunner\n(Redis lock; memory fallback only for dev)"]
+    Job1["scheduled_news"]
+    Job2["rss_ingest"]
+    Job3["news_ai_pipeline"]
+    Job4["settlement"]
+    Job5["wechatpay_platform_certs_refresh"]
+  end
+
+  U --> FEApp --> Proxy --> API
+  API --> MW --> Routers --> Services
+  Services --> DB
+  Services <--> Redis
+  Services --> LLM
+  API <--> Pay
+  API --> Metrics
+  Runner --> Job1
+  Runner --> Job2
+  Runner --> Job3
+  Runner --> Job4
+  Runner --> Job5
+  Runner --> DB
+  Runner <--> Redis
+```
+
+关键不变量（面向生产/交付）：
+
+- **API 入口**：后端统一挂载在 `/api`（`backend/app/main.py`）。
+- **生产门禁**：当 `DEBUG=false`：
+  - Redis 必须可用（不可用启动失败）。
+  - 默认启用 Alembic head 门禁（schema 不在 head 启动失败）。
+- **Secrets 红线**：`OPENAI_API_KEY`、`JWT_SECRET_KEY/SECRET_KEY`、`PAYMENT_WEBHOOK_SECRET` 等必须走环境变量/Secret Manager 注入；禁止写入 SystemConfig。
+- **周期任务**：周期任务通过 `PeriodicLockedRunner` + 分布式锁运行，生产多副本必须依赖 Redis 锁避免重复执行。
+
+进一步阅读（工程侧权威入口）：
+
+- `../TECH_SPEC.md`：环境变量、门禁与运行模式矩阵。
+- `../DATABASE.md`：迁移规范与 DB 运维 Runbook。
+
 ---
 
 ## 3. 后端分层与职责划分

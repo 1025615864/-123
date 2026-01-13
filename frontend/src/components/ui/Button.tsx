@@ -20,7 +20,7 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       icon: Icon,
       iconPosition = 'left',
       isLoading = false,
-      loadingText = '加载中...',
+      loadingText = 'Loading...',
       fullWidth = false,
       className = '',
       disabled,
@@ -65,6 +65,12 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     }
     
     const widthStyles = fullWidth ? 'w-full' : ''
+
+    const iconSizeStyles = {
+      sm: 'h-4 w-4',
+      md: 'h-5 w-5',
+      lg: 'h-5 w-5',
+    } as const
     
     const combinedClassName = `${baseStyles} relative overflow-hidden ${variantStyles[variant]} ${sizeStyles[size]} ${widthStyles} ${className}`
     
@@ -95,9 +101,9 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
             </>
           ) : (
             <>
-              {Icon && iconPosition === 'left' && <Icon className="h-5 w-5" />}
+              {Icon && iconPosition === 'left' && <Icon className={iconSizeStyles[size]} />}
               {children}
-              {Icon && iconPosition === 'right' && <Icon className="h-5 w-5" />}
+              {Icon && iconPosition === 'right' && <Icon className={iconSizeStyles[size]} />}
             </>
           )}
         </span>

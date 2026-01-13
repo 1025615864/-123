@@ -1,0 +1,8 @@
+.env
+.env.*
+node_modules/
+dist/
+playwright-report/
+test-results/
+.DS_Store
+Thumbs.db

@@ -151,6 +151,29 @@ SQL_ECHO=
     - `STORAGE_S3_BUCKET` 必须配置
     - `STORAGE_PUBLIC_BASE_URL` 必须配置（用于生成/重定向可访问的文件 URL）
 
+## 四点五、运行模式与门禁矩阵（非常重要）
+
+> 目标：用一张表讲清楚 `DEBUG` / Redis / `DB_ALLOW_RUNTIME_DDL` 对启动、迁移、限流、周期任务的影响，避免误配。
+
+| 场景                                   | Redis 连接       | DB 迁移门禁（Alembic head） | 是否允许运行时 DDL（create_all/补列补索引） | 周期任务/分布式锁                        | 备注               |
+| -------------------------------------- | ---------------- | --------------------------- | ------------------------------------------- | ---------------------------------------- | ------------------ |
+| `DEBUG=true`（开发/测试口径）          | 可选（不要求）   | 默认不强制（允许绕过）      | 允许（用于本地开箱即用）                    | 允许跑；锁可能退化为进程内（仅适合开发） | 开发体验优先       |
+| `DEBUG=false`（生产口径）且 Redis 可用 | 必须可用         | 强制：不在 head 启动失败    | 默认不允许（除非 `DB_ALLOW_RUNTIME_DDL=1`） | 生产正确：Redis 分布式锁避免多副本重复跑 | 生产推荐           |
+| `DEBUG=false` 且 Redis 不可用          | 不可用           | 无意义（启动直接失败）      | 无意义                                      | 无意义                                   | 启动失败是设计行为 |
+| `DB_ALLOW_RUNTIME_DDL=1`（应急）       | 建议仍提供 Redis | 可绕过 head 门禁            | 允许（应急/兼容）                           | 取决于 Redis                             | 不建议长期使用     |
+
+补充说明：
+
+- `init_db()` 的行为：
+  - 当 `DEBUG=false` 且未设置 `DB_ALLOW_RUNTIME_DDL=1`：只做 Alembic head 检查（`backend/app/database.py::_assert_alembic_head`）。
+  - 当 `DEBUG=true` 或 `DB_ALLOW_RUNTIME_DDL=1`：会执行 `Base.metadata.create_all()`，并可能做少量 SQLite/PG 兜底 DDL。
+- 生产最佳实践：Alembic only + Redis 锁 + PostgreSQL。
+
+进一步阅读：
+
+- `核心文档清单/02_TECH_STACK_ARCHITECTURE.md`：架构总览图（Mermaid）与关键不变量。
+- `DATABASE.md`：迁移规范与 DB 运维 Runbook（备份/恢复/演练/回滚）。
+
 ### 生产环境变量清单（建议）
 
 > 完整字段以 `backend/app/config.py` 为准；以下为生产部署建议最小集/常用集。

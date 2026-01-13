@@ -32,6 +32,7 @@ import PaymentMethodPicker, { type PaymentMethod } from '../components/PaymentMe
 import MarkdownContent from '../components/MarkdownContent'
 import { useAuth } from '../contexts/AuthContext'
 import { useTheme } from '../contexts/ThemeContext'
+import { useLanguage } from '../contexts/LanguageContext'
 import { getApiErrorMessage } from '../utils'
 import { queryKeys } from '../queryKeys'
 import { useAiConsultationsQuery, type ConsultationItem } from '../queries/aiConsultations'
@@ -143,6 +144,7 @@ type ConsultationReviewTaskDetailResponse = {
 export default function ChatHistoryPage() {
   const toast = useToast()
   const { actualTheme } = useTheme()
+  const { t, language } = useLanguage()
   const { isAuthenticated } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
@@ -317,20 +319,20 @@ export default function ChatHistoryPage() {
       const createRes = await api.post('/payment/orders', {
         order_type: 'light_consult_review',
         amount: 0.01,
-        title: 'AI咨询律师复核',
-        description: 'AI咨询律师复核',
+        title: t('chatHistoryPage.reviewOrderTitle'),
+        description: t('chatHistoryPage.reviewOrderDescription'),
         related_id: consultation_id,
         related_type: 'ai_consultation',
       })
       const orderNo = String(createRes.data?.order_no || '').trim()
-      if (!orderNo) throw new Error('未获取到订单号')
+      if (!orderNo) throw new Error(t('chatHistoryPage.orderNoMissing'))
 
       const payRes = await api.post(`/payment/orders/${encodeURIComponent(orderNo)}/pay`, {
         payment_method,
       })
       return { order_no: orderNo, ...(payRes.data || {}) } as { order_no: string; pay_url?: string }
     },
-    errorMessageFallback: '购买失败，请稍后重试',
+    errorMessageFallback: t('chatHistoryPage.buyFailedRetry'),
     disableErrorToast: true,
   })
 
@@ -343,7 +345,7 @@ export default function ChatHistoryPage() {
       const res = await api.get(`/ai/consultations/${consultation.session_id}/export`)
       setPreviewData(res.data as ExportData)
     } catch (e) {
-      toast.error(getApiErrorMessage(e, '加载摘要失败，请稍后重试'))
+      toast.error(getApiErrorMessage(e, t('chatHistoryPage.loadSummaryFailedRetry')))
     } finally {
       setPreviewLoading(false)
     }
@@ -382,25 +384,34 @@ export default function ChatHistoryPage() {
   }, [previewData])
 
   const copyPreview = async () => {
-    const title = String(previewTarget?.title || previewData?.title || '法律咨询').trim() || '法律咨询'
+    const title =
+      String(previewTarget?.title || previewData?.title || t('chatHistoryPage.consultTitleFallback')).trim() ||
+      t('chatHistoryPage.consultTitleFallback')
     const sid = String(previewTarget?.session_id || previewData?.session_id || '').trim()
+    const locale = language === 'en' ? 'en-US' : 'zh-CN'
     const createdAt = previewTarget?.created_at
-      ? new Date(previewTarget.created_at).toLocaleString()
+      ? new Date(previewTarget.created_at).toLocaleString(locale)
       : previewData?.created_at
-      ? new Date(previewData.created_at).toLocaleString()
+      ? new Date(previewData.created_at).toLocaleString(locale)
       : ''
 
-    const userPart = previewSummary?.firstUser ? `用户首问：\n${previewSummary.firstUser}` : ''
-    const aiPart = previewSummary?.firstAssistant ? `AI首答：\n${previewSummary.firstAssistant}` : ''
+    const userPart = previewSummary?.firstUser
+      ? `${t('chatHistoryPage.firstUser')}：\n${previewSummary.firstUser}`
+      : ''
+    const aiPart = previewSummary?.firstAssistant
+      ? `${t('chatHistoryPage.firstAssistant')}：\n${previewSummary.firstAssistant}`
+      : ''
     const lawsPart =
       previewSummary && previewSummary.laws.length > 0
-        ? `引用法条：\n${previewSummary.laws.map((l: { title: string }) => `- ${l.title}`).join('\n')}`
+        ? `${t('chatHistoryPage.referencedLaws')}：\n${previewSummary.laws
+            .map((l: { title: string }) => `- ${l.title}`)
+            .join('\n')}`
         : ''
 
     const parts = [
-      `标题：${title}`,
-      sid ? `咨询编号：${sid}` : '',
-      createdAt ? `时间：${createdAt}` : '',
+      `${t('chatHistoryPage.copyTitlePrefix')}${title}`,
+      sid ? `${t('chatHistoryPage.copySessionIdPrefix')}${sid}` : '',
+      createdAt ? `${t('chatHistoryPage.copyTimePrefix')}${createdAt}` : '',
       '',
       userPart,
       '',
@@ -412,9 +423,9 @@ export default function ChatHistoryPage() {
     const text = parts.join('\n')
     try {
       await navigator.clipboard.writeText(text)
-      toast.success('已复制摘要')
+      toast.success(t('chatHistoryPage.summaryCopied'))
     } catch {
-      window.prompt('复制摘要', text)
+      window.prompt(t('chatHistoryPage.copySummaryPromptTitle'), text)
     }
   }
 
@@ -422,8 +433,8 @@ export default function ChatHistoryPage() {
     mutationFn: async (sid: string) => {
       await api.delete(`/ai/consultations/${sid}`)
     },
-    successMessage: '删除成功',
-    errorMessageFallback: '删除失败，请稍后重试',
+    successMessage: t('chatHistoryPage.deleteSuccess'),
+    errorMessageFallback: t('chatHistoryPage.deleteFailed'),
     invalidateQueryKeys: [queryKeys.aiConsultationsBase()],
     onMutate: async (sid) => {
       setActiveDeleteId(sid)
@@ -440,7 +451,7 @@ export default function ChatHistoryPage() {
       })
       return res.data as ShareLinkResponse
     },
-    errorMessageFallback: '生成分享链接失败，请稍后重试',
+    errorMessageFallback: t('chatHistoryPage.shareFailed'),
     onMutate: async (sid) => {
       setActiveShareId(sid)
     },
@@ -452,7 +463,7 @@ export default function ChatHistoryPage() {
   const actionBusy = shareMutation.isPending || deleteMutation.isPending || exportingId != null
 
   const handleDelete = async (sessionId: string) => {
-    if (!confirm('确定要删除这条咨询记录吗？')) return
+    if (!confirm(t('chatHistoryPage.deleteConfirm'))) return
     if (actionBusy) return
     deleteMutation.mutate(sessionId)
   }
@@ -468,9 +479,9 @@ export default function ChatHistoryPage() {
 
         try {
           await navigator.clipboard.writeText(url)
-          toast.success('已复制分享链接')
+          toast.success(t('chatHistoryPage.shareCopied'))
         } catch {
-          window.prompt('复制分享链接', url)
+          window.prompt(t('chatHistoryPage.copySharePromptTitle'), url)
         }
       },
     })
@@ -489,7 +500,7 @@ export default function ChatHistoryPage() {
          (res as any)?.headers?.['Content-Disposition'] ??
          (res as any)?.headers?.['CONTENT-DISPOSITION']
        const serverFilename = parseContentDispositionFilename(disposition)
-       const defaultFilename = `法律咨询报告_${consultation.session_id}.pdf`
+       const defaultFilename = `${t('chatHistoryPage.reportFilenamePrefix')}${consultation.session_id}.pdf`
        const downloadFilename = sanitizeDownloadFilename(serverFilename || defaultFilename) || defaultFilename
 
       const blob = new Blob([res.data], { type: 'application/pdf' })
@@ -500,7 +511,7 @@ export default function ChatHistoryPage() {
       a.click()
       URL.revokeObjectURL(url)
 
-      toast.success('导出成功')
+      toast.success(t('chatHistoryPage.exportSuccess'))
     } catch {
       try {
         const res = await api.get(`/ai/consultations/${consultation.session_id}/export`)
@@ -516,10 +527,10 @@ export default function ChatHistoryPage() {
           const url = URL.createObjectURL(blob)
           const a = document.createElement('a')
           a.href = url
-          a.download = `咨询记录_${consultation.session_id}.html`
+          a.download = `${t('chatHistoryPage.exportFilenamePrefix')}${consultation.session_id}.html`
           a.click()
           URL.revokeObjectURL(url)
-          toast.success('已下载HTML报告，可打开后打印为PDF')
+          toast.success(t('chatHistoryPage.downloadedHtmlHint'))
           return
         }
 
@@ -529,18 +540,19 @@ export default function ChatHistoryPage() {
           printWindow.print()
         }
 
-        toast.success('已打开打印预览，可保存为PDF')
+        toast.success(t('chatHistoryPage.openedPrintPreviewHint'))
       } catch {
         // 降级为简单文本导出
-        const content = `咨询记录导出\n\n标题: ${consultation.title}\n时间: ${new Date(consultation.created_at).toLocaleString()}\n消息数: ${consultation.message_count}\n\n（完整对话内容需在详情页查看）`
+        const locale = language === 'en' ? 'en-US' : 'zh-CN'
+        const content = `${t('chatHistoryPage.exportTextHeader')}\n\n${t('chatHistoryPage.exportTextTitlePrefix')}${consultation.title}\n${t('chatHistoryPage.exportTextTimePrefix')}${new Date(consultation.created_at).toLocaleString(locale)}\n${t('chatHistoryPage.exportTextMessageCountPrefix')}${consultation.message_count}\n\n${t('chatHistoryPage.exportTextViewDetailHint')}`
         const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
         a.href = url
-        a.download = `咨询记录_${consultation.session_id}.txt`
+        a.download = `${t('chatHistoryPage.exportFilenamePrefix')}${consultation.session_id}.txt`
         a.click()
         URL.revokeObjectURL(url)
-        toast.error('导出失败，请稍后重试')
+        toast.error(t('chatHistoryPage.exportFailedRetry'))
       }
     } finally {
       setExportingId((prev) => (prev === consultation.session_id ? null : prev))
@@ -548,16 +560,19 @@ export default function ChatHistoryPage() {
   }
 
   const generateExportHTML = (data: ExportData): string => {
+    const locale = language === 'en' ? 'en-US' : 'zh-CN'
     const messagesHTML = data.messages.map(msg => {
-      const roleLabel = msg.role === 'user' ? '👤 用户' : '🤖 AI助手'
+      const roleLabel = msg.role === 'user'
+        ? t('chatHistoryPage.exportRoleUser')
+        : t('chatHistoryPage.exportRoleAi')
       const roleColor = msg.role === 'user' ? '#3b82f6' : '#f59e0b'
-      const time = msg.created_at ? new Date(msg.created_at).toLocaleString() : ''
+      const time = msg.created_at ? new Date(msg.created_at).toLocaleString(locale) : ''
       
       let refsHTML = ''
       if (msg.references && msg.references.length > 0) {
         refsHTML = `
           <div style="margin-top: 12px; padding: 12px; background: #f8fafc; border-radius: 8px; border-left: 3px solid #f59e0b;">
-            <p style="font-weight: 600; margin-bottom: 8px; color: #64748b;">📚 相关法条：</p>
+            <p style="font-weight: 600; margin-bottom: 8px; color: #64748b;">${t('chatHistoryPage.exportRelatedLaws')}</p>
             ${msg.references
               .map(
                 (ref) => `
@@ -589,7 +604,7 @@ export default function ChatHistoryPage() {
       <html>
       <head>
         <meta charset="utf-8">
-        <title>法律咨询记录 - ${data.title}</title>
+        <title>${t('chatHistoryPage.exportHtmlTitlePrefix')}${data.title}</title>
         <style>
           @media print {
             body { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
@@ -599,9 +614,9 @@ export default function ChatHistoryPage() {
       </head>
       <body>
         <div style="text-align: center; margin-bottom: 40px; padding-bottom: 20px; border-bottom: 2px solid #e2e8f0;">
-          <h1 style="color: #1e293b; margin-bottom: 8px;">⚖️ 法律咨询记录</h1>
+          <h1 style="color: #1e293b; margin-bottom: 8px;">${t('chatHistoryPage.exportHtmlH1')}</h1>
           <p style="color: #64748b; margin: 0;">${data.title}</p>
-          <p style="color: #94a3b8; font-size: 14px; margin-top: 8px;">咨询时间：${new Date(data.created_at).toLocaleString()}</p>
+          <p style="color: #94a3b8; font-size: 14px; margin-top: 8px;">${t('chatHistoryPage.exportConsultTimePrefix')}${new Date(data.created_at).toLocaleString(locale)}</p>
         </div>
         
         <div style="margin-bottom: 40px;">
@@ -609,8 +624,8 @@ export default function ChatHistoryPage() {
         </div>
         
         <div style="text-align: center; padding-top: 20px; border-top: 1px solid #e2e8f0; color: #94a3b8; font-size: 12px;">
-          <p>本记录由「百姓法律助手」生成</p>
-          <p>仅供参考，不构成正式法律意见</p>
+          <p>${t('chatHistoryPage.exportGeneratedBy')}</p>
+          <p>${t('chatHistoryPage.exportDisclaimer')}</p>
         </div>
       </body>
       </html>
@@ -628,9 +643,9 @@ export default function ChatHistoryPage() {
   return (
     <div className="space-y-12">
       <PageHeader
-        eyebrow="咨询记录"
-        title="历史咨询"
-        description="查看您的AI法律咨询历史记录"
+        eyebrow={t('chatHistoryPage.eyebrow')}
+        title={t('chatHistoryPage.title')}
+        description={t('chatHistoryPage.description')}
         tone={actualTheme}
         right={
           <div className="flex items-center gap-2">
@@ -638,7 +653,7 @@ export default function ChatHistoryPage() {
               variant="outline"
               icon={RotateCcw}
               isLoading={consultationsQuery.isFetching}
-              loadingText="刷新中..."
+              loadingText={t('chatHistoryPage.refreshing')}
               onClick={() => {
                 if (actionBusy) return
                 consultationsQuery.refetch()
@@ -646,11 +661,11 @@ export default function ChatHistoryPage() {
               className="px-4"
               disabled={consultationsQuery.isFetching || actionBusy}
             >
-              刷新
+              {t('chatHistoryPage.refresh')}
             </Button>
             <Link to="/chat">
               <Button icon={MessageSquare} className="px-6 bg-emerald-600 hover:bg-emerald-700 text-white focus-visible:ring-emerald-500/25">
-                新建咨询
+                {t('chatHistoryPage.newConsultation')}
               </Button>
             </Link>
           </div>
@@ -667,7 +682,7 @@ export default function ChatHistoryPage() {
                 if (actionBusy) return
                 setQ(e.target.value)
               }}
-              placeholder="搜索咨询记录（标题/内容）..."
+              placeholder={t('chatHistoryPage.searchPlaceholder')}
               disabled={actionBusy}
               right={
                 qTrimmed ? (
@@ -678,7 +693,7 @@ export default function ChatHistoryPage() {
                       setQ('')
                     }}
                     className="p-1 rounded-md text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors dark:text-white/60 dark:hover:text-white dark:hover:bg-slate-800 disabled:opacity-60 disabled:cursor-not-allowed"
-                    aria-label="清空搜索"
+                    aria-label={t('chatHistoryPage.clearSearchAria')}
                     disabled={actionBusy}
                   >
                     <X className="h-4 w-4" />
@@ -701,7 +716,7 @@ export default function ChatHistoryPage() {
                 }}
                 disabled={actionBusy}
               >
-                全部
+                {t('common.all')}
               </Button>
               <Button
                 variant={rangeDays === 7 ? 'primary' : 'outline'}
@@ -714,7 +729,7 @@ export default function ChatHistoryPage() {
                 }}
                 disabled={actionBusy}
               >
-                近7天
+                {t('chatHistoryPage.last7Days')}
               </Button>
               <Button
                 variant={rangeDays === 30 ? 'primary' : 'outline'}
@@ -727,14 +742,14 @@ export default function ChatHistoryPage() {
                 }}
                 disabled={actionBusy}
               >
-                近30天
+                {t('chatHistoryPage.last30Days')}
               </Button>
             </div>
 
             <div className="text-sm text-slate-600 dark:text-white/60">
-              {showFetching ? '更新中…' : null}
+              {showFetching ? t('chatHistoryPage.updating') : null}
               <span className={showFetching ? 'ml-2' : ''}>
-                {visibleConsultations.length} 条
+                {visibleConsultations.length} {t('chatHistoryPage.items')}
               </span>
             </div>
           </div>
@@ -742,7 +757,7 @@ export default function ChatHistoryPage() {
           <div className="flex flex-wrap items-end gap-3">
             <div className="w-full sm:w-48">
               <Input
-                label="开始日期"
+                label={t('chatHistoryPage.startDate')}
                 type="date"
                 value={fromDate}
                 onChange={(e) => {
@@ -755,7 +770,7 @@ export default function ChatHistoryPage() {
             </div>
             <div className="w-full sm:w-48">
               <Input
-                label="结束日期"
+                label={t('chatHistoryPage.endDate')}
                 type="date"
                 value={toDate}
                 onChange={(e) => {
@@ -776,7 +791,7 @@ export default function ChatHistoryPage() {
                 }}
                 disabled={actionBusy}
               >
-                最新
+                {t('chatHistoryPage.latest')}
               </Button>
               <Button
                 variant={sortOrder === 'asc' ? 'primary' : 'outline'}
@@ -787,7 +802,7 @@ export default function ChatHistoryPage() {
                 }}
                 disabled={actionBusy}
               >
-                最早
+                {t('chatHistoryPage.earliest')}
               </Button>
               <Button
                 variant="outline"
@@ -798,7 +813,7 @@ export default function ChatHistoryPage() {
                 }}
                 disabled={actionBusy}
               >
-                清空筛选
+                {t('chatHistoryPage.clearFilters')}
               </Button>
             </div>
           </div>
@@ -814,15 +829,15 @@ export default function ChatHistoryPage() {
           icon={MessageSquare}
           title={
             qTrimmed
-              ? '未找到匹配记录'
+              ? t('chatHistoryPage.noMatchTitle')
               : !hasTimeFilter
-              ? '暂无咨询记录'
-              : '该时间范围内暂无记录'
+              ? t('chatHistoryPage.emptyTitle')
+              : t('chatHistoryPage.emptyRangeTitle')
           }
           description={
             hasAnyFilter
-              ? '请尝试调整筛选条件或清空筛选'
-              : '开始一次新的AI法律咨询，您的对话将被保存在这里'
+              ? t('chatHistoryPage.emptyWithFilterDescription')
+              : t('chatHistoryPage.emptyDescription')
           }
           tone={actualTheme}
           action={
@@ -832,11 +847,11 @@ export default function ChatHistoryPage() {
                 className="bg-slate-900 hover:bg-slate-950 text-white focus-visible:ring-slate-900/25"
                 onClick={clearAllFilters}
               >
-                清空筛选
+                {t('chatHistoryPage.clearFilters')}
               </Button>
             ) : (
               <Link to="/chat" className="mt-6 inline-block">
-                <Button icon={ArrowRight} className="bg-emerald-600 hover:bg-emerald-700 text-white focus-visible:ring-emerald-500/25">开始咨询</Button>
+                <Button icon={ArrowRight} className="bg-emerald-600 hover:bg-emerald-700 text-white focus-visible:ring-emerald-500/25">{t('chatHistoryPage.startConsultation')}</Button>
               </Link>
             )
           }
@@ -859,11 +874,11 @@ export default function ChatHistoryPage() {
                   <div className="flex items-center gap-4 mt-2 text-sm text-slate-600 dark:text-white/60">
                     <span className="flex items-center gap-1.5">
                       <Clock className="h-4 w-4" />
-                      {new Date(item.created_at).toLocaleString()}
+                      {new Date(item.created_at).toLocaleString(language === 'en' ? 'en-US' : 'zh-CN')}
                     </span>
                     <span className="flex items-center gap-1.5">
                       <MessageSquare className="h-4 w-4" />
-                      {item.message_count} 条消息
+                      {item.message_count} {t('chatHistoryPage.messages')}
                     </span>
                   </div>
                 </div>
@@ -883,7 +898,7 @@ export default function ChatHistoryPage() {
                     type="button"
                     onClick={() => openPreview(item)}
                     className="p-2 hover:text-slate-900 dark:hover:text-white"
-                    aria-label="查看摘要"
+                    aria-label={t('chatHistoryPage.viewSummaryAria')}
                   >
                     <FileText className="h-4 w-4" />
                   </Button>
@@ -893,10 +908,10 @@ export default function ChatHistoryPage() {
                     type="button"
                     onClick={() => handleExport(item)}
                     isLoading={exportLoading}
-                    loadingText="导出中..."
+                    loadingText={t('chatHistoryPage.exporting')}
                     disabled={actionBusy && !exportLoading}
                     className={`hover:text-slate-900 dark:hover:text-white ${exportLoading ? 'px-3 py-2' : 'p-2'}`}
-                    aria-label="导出报告"
+                    aria-label={t('chatHistoryPage.exportReportAria')}
                   >
                     <Download className="h-4 w-4" />
                   </Button>
@@ -906,10 +921,10 @@ export default function ChatHistoryPage() {
                     type="button"
                     onClick={() => handleShare(item.session_id)}
                     isLoading={shareLoading}
-                    loadingText="生成中..."
+                    loadingText={t('chatHistoryPage.generating')}
                     disabled={actionBusy && !shareLoading}
                     className={`hover:text-slate-900 dark:hover:text-white ${shareLoading ? 'px-3 py-2' : 'p-2'}`}
-                    aria-label="分享链接"
+                    aria-label={t('chatHistoryPage.shareLinkAria')}
                   >
                     <Share2 className="h-4 w-4" />
                   </Button>
@@ -919,7 +934,7 @@ export default function ChatHistoryPage() {
                     type="button"
                     onClick={() => handleDelete(item.session_id)}
                     isLoading={deleteLoading}
-                    loadingText="删除中..."
+                    loadingText={t('chatHistoryPage.deleting')}
                     disabled={actionBusy && !deleteLoading}
                     className={`hover:text-red-600 dark:hover:text-red-400 ${deleteLoading ? 'px-3 py-2' : 'p-2'}`}
                   >
@@ -931,7 +946,7 @@ export default function ChatHistoryPage() {
                       size="sm"
                       className="px-4"
                     >
-                      查看详情
+                      {t('chatHistoryPage.viewDetails')}
                     </Button>
                   </Link>
                       </>
@@ -950,12 +965,12 @@ export default function ChatHistoryPage() {
           if (previewLoading) return
           closePreview()
         }}
-        title={String(previewTarget?.title || previewData?.title || '咨询摘要')}
+        title={String(previewTarget?.title || previewData?.title || t('chatHistoryPage.summaryTitle'))}
         description={
           previewTarget?.created_at
-            ? `咨询时间：${new Date(previewTarget.created_at).toLocaleString()}`
+            ? `${t('chatHistoryPage.consultTimePrefix')}${new Date(previewTarget.created_at).toLocaleString(language === 'en' ? 'en-US' : 'zh-CN')}`
             : previewData?.created_at
-            ? `咨询时间：${new Date(previewData.created_at).toLocaleString()}`
+            ? `${t('chatHistoryPage.consultTimePrefix')}${new Date(previewData.created_at).toLocaleString(language === 'en' ? 'en-US' : 'zh-CN')}`
             : undefined
         }
         size="lg"
@@ -965,21 +980,21 @@ export default function ChatHistoryPage() {
         ) : previewData && previewSummary ? (
           <div className="space-y-6">
             <div>
-              <div className="text-sm font-semibold text-slate-900 dark:text-white">用户首问</div>
+              <div className="text-sm font-semibold text-slate-900 dark:text-white">{t('chatHistoryPage.firstUser')}</div>
               <div className="mt-2 whitespace-pre-wrap break-words text-sm text-slate-700 dark:text-white/70">
-                {previewSummary.firstUser || '（无）'}
+                {previewSummary.firstUser || t('chatHistoryPage.noneParen')}
               </div>
             </div>
             <div>
-              <div className="text-sm font-semibold text-slate-900 dark:text-white">AI首答</div>
+              <div className="text-sm font-semibold text-slate-900 dark:text-white">{t('chatHistoryPage.firstAssistant')}</div>
               <div className="mt-2 whitespace-pre-wrap break-words text-sm text-slate-700 dark:text-white/70">
-                {previewSummary.firstAssistant || '（无）'}
+                {previewSummary.firstAssistant || t('chatHistoryPage.noneParen')}
               </div>
             </div>
             <div>
-              <div className="text-sm font-semibold text-slate-900 dark:text-white">引用法条</div>
+              <div className="text-sm font-semibold text-slate-900 dark:text-white">{t('chatHistoryPage.referencedLaws')}</div>
               {previewSummary.laws.length === 0 ? (
-                <div className="mt-2 text-sm text-slate-600 dark:text-white/60">（无）</div>
+                <div className="mt-2 text-sm text-slate-600 dark:text-white/60">{t('chatHistoryPage.noneParen')}</div>
               ) : (
                 <div className="mt-2 space-y-3">
                   {previewSummary.laws.map((l) => (
@@ -998,7 +1013,7 @@ export default function ChatHistoryPage() {
 
             <div>
               <div className="flex items-center justify-between gap-3">
-                <div className="text-sm font-semibold text-slate-900 dark:text-white">律师复核</div>
+                <div className="text-sm font-semibold text-slate-900 dark:text-white">{t('chatHistoryPage.lawyerReview')}</div>
                 <Button
                   variant="outline"
                   size="sm"
@@ -1007,21 +1022,21 @@ export default function ChatHistoryPage() {
                     reviewTaskQuery.refetch()
                   }}
                 >
-                  刷新
+                  {t('chatHistoryPage.refresh')}
                 </Button>
               </div>
 
               {reviewTaskQuery.isLoading ? (
-                <div className="mt-3 text-sm text-slate-600 dark:text-white/60">加载中…</div>
+                <div className="mt-3 text-sm text-slate-600 dark:text-white/60">{t('chatHistoryPage.loading')}</div>
               ) : reviewTaskQuery.isError ? (
-                <div className="mt-3 text-sm text-slate-600 dark:text-white/60">加载失败</div>
+                <div className="mt-3 text-sm text-slate-600 dark:text-white/60">{t('chatHistoryPage.loadFailed')}</div>
               ) : (() => {
                 const task = reviewTaskQuery.data?.task ?? null
                 const reviewPrice = Number(pricingQuery.data?.services?.light_consult_review?.price || 19.9)
                 if (!task) {
                   return (
                     <div className="mt-3 rounded-xl border border-slate-200/70 p-4 dark:border-white/10">
-                      <div className="text-sm text-slate-700 dark:text-white/70">暂无律师复核记录</div>
+                      <div className="text-sm text-slate-700 dark:text-white/70">{t('chatHistoryPage.noReviewRecord')}</div>
                       <div className="mt-3">
                         <Button
                           onClick={() => {
@@ -1029,7 +1044,7 @@ export default function ChatHistoryPage() {
                             openReviewPurchase(previewTarget)
                           }}
                         >
-                          购买律师复核（¥{reviewPrice.toFixed(2)}）
+                          {`${t('chatHistoryPage.buyLawyerReviewPrefix')}${reviewPrice.toFixed(2)}${t('chatHistoryPage.buyLawyerReviewSuffix')}`}
                         </Button>
                       </div>
                     </div>
@@ -1039,7 +1054,13 @@ export default function ChatHistoryPage() {
                 const status = String(task.status || '')
                 const s = status.toLowerCase()
                 const statusLabel =
-                  s === 'pending' ? '待领取' : s === 'claimed' ? '处理中' : s === 'submitted' ? '已复核' : status
+                  s === 'pending'
+                    ? t('chatHistoryPage.statusPending')
+                    : s === 'claimed'
+                    ? t('chatHistoryPage.statusClaimed')
+                    : s === 'submitted'
+                    ? t('chatHistoryPage.statusSubmitted')
+                    : status
                 const statusVariant: 'success' | 'info' | 'warning' | 'default' =
                   s === 'submitted' ? 'success' : s === 'claimed' ? 'info' : s === 'pending' ? 'warning' : 'default'
 
@@ -1049,7 +1070,7 @@ export default function ChatHistoryPage() {
                       <Badge variant={statusVariant} size="sm">
                         {statusLabel}
                       </Badge>
-                      <div className="text-xs text-slate-500 dark:text-white/45">订单号：{task.order_no}</div>
+                      <div className="text-xs text-slate-500 dark:text-white/45">{t('chatHistoryPage.orderNoPrefix')}{task.order_no}</div>
                     </div>
 
                     {s === 'submitted' && task.result_markdown ? (
@@ -1057,7 +1078,7 @@ export default function ChatHistoryPage() {
                         <MarkdownContent content={String(task.result_markdown)} className="text-sm" />
                       </div>
                     ) : (
-                      <div className="text-sm text-slate-600 dark:text-white/60">复核结果生成后会在此展示</div>
+                      <div className="text-sm text-slate-600 dark:text-white/60">{t('chatHistoryPage.reviewResultHint')}</div>
                     )}
                   </div>
                 )
@@ -1066,19 +1087,19 @@ export default function ChatHistoryPage() {
 
             <ModalActions>
               <Button variant="outline" onClick={closePreview}>
-                关闭
+                {t('chatHistoryPage.close')}
               </Button>
               <Button icon={Copy} onClick={copyPreview}>
-                复制摘要
+                {t('chatHistoryPage.copySummary')}
               </Button>
             </ModalActions>
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="text-sm text-slate-600 dark:text-white/60">暂无可展示的摘要内容</div>
+            <div className="text-sm text-slate-600 dark:text-white/60">{t('chatHistoryPage.previewNoContent')}</div>
             <ModalActions>
               <Button variant="outline" onClick={closePreview}>
-                关闭
+                {t('chatHistoryPage.close')}
               </Button>
             </ModalActions>
           </div>
@@ -1091,14 +1112,14 @@ export default function ChatHistoryPage() {
           if (buyReviewMutation.isPending) return
           closeReviewPurchase()
         }}
-        leftTitle="律师复核"
-        leftDescription="为本次 AI 咨询购买律师复核服务"
+        leftTitle={t('chatHistoryPage.lawyerReview')}
+        leftDescription={t('chatHistoryPage.reviewPurchaseDescription')}
         left={
           <div className="space-y-4">
             <div className="rounded-xl border border-slate-200/70 bg-slate-900/5 px-4 py-3 text-sm text-slate-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-white/70">
-              <div>咨询：{String(reviewPurchaseTarget?.title || '').trim() || 'AI咨询'}</div>
+              <div>{t('chatHistoryPage.consultLabelPrefix')}{String(reviewPurchaseTarget?.title || '').trim() || t('chatHistoryPage.defaultConsultationTitle')}</div>
               <div className="mt-1">
-                价格：¥
+                {t('chatHistoryPage.priceLabel')}
                 {Number(pricingQuery.data?.services?.light_consult_review?.price || 19.9).toFixed(2)}
               </div>
             </div>
@@ -1111,7 +1132,7 @@ export default function ChatHistoryPage() {
                 setShowReviewPaymentPanel(true)
               }}
             >
-              去支付
+              {t('chatHistoryPage.goPay')}
             </Button>
 
             <Button
@@ -1123,14 +1144,14 @@ export default function ChatHistoryPage() {
                 closeReviewPurchase()
               }}
             >
-              取消
+              {t('common.cancel')}
             </Button>
           </div>
         }
-        rightTitle={showReviewPaymentPanel ? '选择支付方式' : undefined}
+        rightTitle={showReviewPaymentPanel ? t('chatHistoryPage.selectPaymentMethod') : undefined}
         rightDescription={
           showReviewPaymentPanel
-            ? `支付 ¥${Number(pricingQuery.data?.services?.light_consult_review?.price || 19.9).toFixed(2)}`
+            ? `${t('chatHistoryPage.payAmountPrefix')}${Number(pricingQuery.data?.services?.light_consult_review?.price || 19.9).toFixed(2)}`
             : undefined
         }
         right={
@@ -1141,26 +1162,28 @@ export default function ChatHistoryPage() {
                 const loadingChannels = !channelStatusQuery.data && channelStatusQuery.isLoading
                 const canAlipay = channelStatusQuery.data?.alipay_configured === true
                 const canIkunpay = channelStatusQuery.data?.ikunpay_configured === true
-                const thirdPartyDisabledReason = loadingChannels ? '加载中' : '未配置'
+                const thirdPartyDisabledReason = loadingChannels
+                  ? t('chatHistoryPage.thirdPartyLoading')
+                  : t('chatHistoryPage.thirdPartyNotConfigured')
 
                 return [
                   {
                     method: 'balance' as PaymentMethod,
-                    label: '余额支付',
-                    description: '即时生效',
+                    label: t('chatHistoryPage.balancePay'),
+                    description: t('chatHistoryPage.balancePayDesc'),
                     enabled: true,
                   },
                   {
                     method: 'alipay' as PaymentMethod,
-                    label: '支付宝',
-                    description: '跳转到支付宝完成支付',
+                    label: t('chatHistoryPage.alipay'),
+                    description: t('chatHistoryPage.alipayDesc'),
                     enabled: canAlipay,
                     disabledReason: thirdPartyDisabledReason,
                   },
                   {
                     method: 'ikunpay' as PaymentMethod,
-                    label: '爱坤支付',
-                    description: '跳转到爱坤支付完成支付',
+                    label: t('chatHistoryPage.ikunpay'),
+                    description: t('chatHistoryPage.ikunpayDesc'),
                     enabled: canIkunpay,
                     disabledReason: thirdPartyDisabledReason,
                   },
@@ -1186,7 +1209,7 @@ export default function ChatHistoryPage() {
                     onSuccess: async (data) => {
                       const orderNo = String((data as any)?.order_no || '').trim()
                       if (!orderNo) {
-                        toast.success('下单成功')
+                        toast.success(t('chatHistoryPage.orderCreated'))
                         return
                       }
 
@@ -1194,23 +1217,23 @@ export default function ChatHistoryPage() {
                         const url = String((data as any)?.pay_url || '').trim()
                         if (url) {
                           window.open(url, '_blank', 'noopener,noreferrer')
-                          toast.success('已打开支付页面')
+                          toast.success(t('chatHistoryPage.paymentPageOpened'))
                           openPaymentGuide(orderNo, target.id)
                         } else {
-                          toast.error('未获取到支付链接')
+                          toast.error(t('chatHistoryPage.payUrlMissing'))
                         }
                         return
                       }
 
-                      toast.success('购买成功')
+                      toast.success(t('chatHistoryPage.purchaseSuccess'))
                       queryClient.invalidateQueries({
                         queryKey: queryKeys.consultationReviewTask(target.id) as any,
                       })
                     },
                     onError: (err) => {
-                      const msg = getApiErrorMessage(err, '购买失败')
+                      const msg = getApiErrorMessage(err, t('chatHistoryPage.buyFailed'))
                       if (String(msg).includes('余额不足')) {
-                        toast.warning('余额不足，请先充值')
+                        toast.warning(t('chatHistoryPage.balanceInsufficient'))
                         navigate('/profile?recharge=1')
                         return
                       }
@@ -1232,15 +1255,15 @@ export default function ChatHistoryPage() {
       <Modal
         isOpen={paymentGuideOpen}
         onClose={() => setPaymentGuideOpen(false)}
-        title="支付提示"
-        description="支付完成后请返回本站刷新复核状态"
+        title={t('chatHistoryPage.payModalTitle')}
+        description={t('chatHistoryPage.payModalDescription')}
         size="sm"
         zIndexClass="z-[90]"
       >
         <div className="space-y-4">
           <div className="rounded-xl border border-slate-200/70 bg-slate-900/5 px-4 py-3 text-sm text-slate-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-white/70">
-            <div>1) 在新打开的支付页面完成支付</div>
-            <div className="mt-1">2) 回到本页点击“我已支付，刷新状态”</div>
+            <div>{t('chatHistoryPage.payStep1')}</div>
+            <div className="mt-1">{t('chatHistoryPage.payStep2')}</div>
           </div>
 
           <Button
@@ -1253,10 +1276,10 @@ export default function ChatHistoryPage() {
                   queryKey: queryKeys.consultationReviewTask(cid) as any,
                 })
               }
-              toast.success('已刷新状态')
+              toast.success(t('chatHistoryPage.refreshedStatus'))
             }}
           >
-            我已支付，刷新状态
+            {t('chatHistoryPage.paidAndRefresh')}
           </Button>
 
           {paymentGuideOrderNo ? (
@@ -1265,13 +1288,13 @@ export default function ChatHistoryPage() {
               className="block"
             >
               <Button variant="outline" fullWidth>
-                去支付结果页查看状态
+                {t('chatHistoryPage.gotoPaymentReturn')}
               </Button>
             </Link>
           ) : null}
 
           {paymentGuideOrderNo ? (
-            <div className="text-xs text-slate-500 dark:text-white/45">订单号：{paymentGuideOrderNo}</div>
+            <div className="text-xs text-slate-500 dark:text-white/45">{t('chatHistoryPage.orderNoPrefix')}{paymentGuideOrderNo}</div>
           ) : null}
         </div>
       </Modal>

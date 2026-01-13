@@ -28,6 +28,7 @@ import api from "../api/client";
 import { useToast } from "../hooks";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
+import { useLanguage } from "../contexts/LanguageContext";
 import { getApiErrorMessage } from "../utils";
 import { queryKeys } from "../queryKeys";
 import MarkdownContent from "../components/MarkdownContent";
@@ -196,6 +197,7 @@ export default function NewsDetailPage() {
   const { isAuthenticated, user } = useAuth();
   const { actualTheme } = useTheme();
   const toast = useToast();
+  const { t } = useLanguage();
 
   const queryClient = useQueryClient();
 
@@ -233,12 +235,12 @@ export default function NewsDetailPage() {
           : "default";
   const riskLabel =
     risk === "safe"
-      ? "安全"
+      ? t("newsPage.riskSafe")
       : risk === "danger"
-        ? "敏感"
+        ? t("newsPage.riskDanger")
         : risk === "warning"
-          ? "注意"
-          : "未知";
+          ? t("newsPage.riskWarning")
+          : t("newsPage.riskUnknown");
 
   const aiHighlights = Array.isArray(ai?.highlights) ? ai!.highlights! : [];
   const aiKeywords = Array.isArray(ai?.keywords) ? ai!.keywords! : [];
@@ -316,7 +318,9 @@ export default function NewsDetailPage() {
         (user as any)?.nickname ||
         (user as any)?.username ||
         (user as any)?.email ||
-        (user ? `用户${user.id}` : "匿名用户");
+        (user
+          ? `${t("newsDetailPage.userPrefix")}${user.id}`
+          : t("newsDetailPage.anonymousUser"));
 
       const temp: NewsComment = {
         id: -Math.trunc(Date.now()),
@@ -357,7 +361,11 @@ export default function NewsDetailPage() {
         queryKey: queryKeys.newsCommentsRoot(newsId),
       });
       const status = String(created?.review_status ?? "").toLowerCase();
-      toast.success(status === "pending" ? "评论已提交，等待审核" : "评论已发布");
+      toast.success(
+        status === "pending"
+          ? t("newsDetailPage.commentSubmittedPending")
+          : t("newsDetailPage.commentPublished")
+      );
     },
     onError: (err, _vars, ctx) => {
       if (ctx && typeof ctx === "object") {
@@ -366,7 +374,7 @@ export default function NewsDetailPage() {
           queryClient.setQueryData(anyCtx.key, anyCtx.previous);
         }
       }
-      toast.error(getApiErrorMessage(err, "评论失败"));
+      toast.error(getApiErrorMessage(err, t("newsDetailPage.commentFailed")));
     },
   });
 
@@ -395,7 +403,7 @@ export default function NewsDetailPage() {
       await queryClient.invalidateQueries({
         queryKey: queryKeys.newsCommentsRoot(newsId),
       });
-      toast.success("已删除");
+      toast.success(t("newsDetailPage.deleted"));
     },
     onError: (err, _vars, ctx) => {
       setPendingDeleteCommentIds((prev) => {
@@ -409,7 +417,7 @@ export default function NewsDetailPage() {
           queryClient.setQueryData(anyCtx.key, anyCtx.previous);
         }
       }
-      toast.error(getApiErrorMessage(err, "删除失败"));
+      toast.error(getApiErrorMessage(err, t("newsDetailPage.deleteFailed")));
     },
     onSettled: (_data, _err, commentId) => {
       setPendingDeleteCommentIds((prev) => {
@@ -440,7 +448,7 @@ export default function NewsDetailPage() {
       typeof (news as any).summary === "string" ? (news as any).summary : "";
     const safeContent = typeof news.content === "string" ? news.content : "";
 
-    document.title = safeTitle ? `${safeTitle} - 法律资讯` : prevTitle;
+    document.title = safeTitle ? `${safeTitle} - ${t("nav.news")}` : prevTitle;
 
     const url = window.location.href;
     const description = (
@@ -505,7 +513,7 @@ export default function NewsDetailPage() {
           name:
             typeof (news as any).source === "string" && (news as any).source
               ? (news as any).source
-              : "法律资讯",
+              : t("nav.news"),
         },
       };
       for (const k of Object.keys(jsonLd)) {
@@ -532,6 +540,7 @@ export default function NewsDetailPage() {
     (news as any)?.published_at,
     (news as any)?.created_at,
     (news as any)?.updated_at,
+    t,
   ]);
 
   const bookmarkMutation = useMutation({
@@ -575,11 +584,13 @@ export default function NewsDetailPage() {
         };
       });
 
-      const msg = res?.message || (res?.favorited ? "收藏成功" : "取消收藏");
+      const msg =
+        res?.message ||
+        (res?.favorited ? t("newsPage.favoriteSuccess") : t("newsPage.favoriteCancel"));
       toast.showToast("success", msg, {
         durationMs: 7000,
         action: {
-          label: "撤销",
+          label: t("newsPage.undo"),
           onClick: () => {
             bookmarkMutation.mutate();
           },
@@ -589,7 +600,7 @@ export default function NewsDetailPage() {
     onError: (err, _vars, ctx) => {
       if (newsId && ctx?.previous)
         queryClient.setQueryData(newsDetailQueryKey, ctx.previous);
-      toast.error(getApiErrorMessage(err, "操作失败"));
+      toast.error(getApiErrorMessage(err, t("newsPage.actionFailed")));
     },
   });
 
@@ -601,14 +612,14 @@ export default function NewsDetailPage() {
       });
     } else {
       navigator.clipboard.writeText(window.location.href);
-      toast.success("链接已复制到剪贴板");
+      toast.success(t("newsDetailPage.linkCopied"));
     }
   };
 
   const handleBookmark = async () => {
     if (!newsId) return;
     if (!isAuthenticated) {
-      toast.error("请先登录后再收藏");
+      toast.error(t("newsDetailPage.loginToFavorite"));
       return;
     }
     if (bookmarkMutation.isPending) return;
@@ -676,20 +687,22 @@ export default function NewsDetailPage() {
 
   if (!news) {
     const err = newsQuery.isError
-      ? getApiErrorMessage(newsQuery.error, "新闻信息加载失败，请稍后重试")
+      ? getApiErrorMessage(newsQuery.error, t("newsDetailPage.loadFailedFallback"))
       : null;
     return (
       <EmptyState
         icon={UserIcon}
-        title={err ? "加载失败" : "新闻不存在或已被删除"}
-        description={err || "请返回新闻列表重新选择，或稍后再试"}
+        title={
+          err ? t("newsDetailPage.loadFailedTitle") : t("newsDetailPage.notFoundTitle")
+        }
+        description={err || t("newsDetailPage.notFoundDescription")}
         tone={actualTheme}
         action={
           <div className="flex flex-col sm:flex-row gap-3">
             <Link to="/news">
-              <Button variant="outline">返回新闻列表</Button>
+              <Button variant="outline">{t("newsDetailPage.backToNewsList")}</Button>
             </Link>
-            {err ? <Button onClick={handleRefreshAll}>重试</Button> : null}
+            {err ? <Button onClick={handleRefreshAll}>{t("newsDetailPage.retry")}</Button> : null}
           </div>
         }
       />
@@ -709,7 +722,7 @@ export default function NewsDetailPage() {
           className="inline-flex items-center gap-2 text-slate-600 hover:text-slate-900 transition-colors dark:text-white/60 dark:hover:text-white"
         >
           <ArrowLeft className="h-4 w-4" />
-          返回新闻列表
+          {t("newsDetailPage.backToNewsList")}
         </Link>
 
         <Button
@@ -717,11 +730,11 @@ export default function NewsDetailPage() {
           size="sm"
           icon={RefreshCw}
           isLoading={refreshingAll}
-          loadingText="刷新中..."
+          loadingText={t("newsPage.refreshing")}
           onClick={handleRefreshAll}
           disabled={refreshingAll}
         >
-          刷新
+          {t("newsPage.refresh")}
         </Button>
       </div>
 
@@ -763,11 +776,11 @@ export default function NewsDetailPage() {
             </span>
             <span className="flex items-center gap-1.5">
               <Eye className="h-4 w-4" />
-              {news.view_count} 次阅读
+              {news.view_count} {t("newsDetailPage.reads")}
             </span>
             <span className="flex items-center gap-1.5">
               <Bookmark className="h-4 w-4" />
-              {favoriteCount} 收藏
+              {favoriteCount} {t("newsDetailPage.favorites")}
             </span>
           </div>
         </header>
@@ -784,7 +797,7 @@ export default function NewsDetailPage() {
         <Card variant="surface" padding="md" className="mb-8">
           <div className="flex items-center justify-between gap-3 mb-3">
             <h2 className="text-base font-semibold text-slate-900 dark:text-white">
-              AI 标注
+              {t("newsDetailPage.aiAnnotation")}
             </h2>
             <Badge variant={riskVariant} size="sm">
               {riskLabel}
@@ -794,7 +807,7 @@ export default function NewsDetailPage() {
           {aiPending ? (
             <div className="space-y-3">
               <p className="text-sm text-slate-600 dark:text-white/55">
-                AI 标注生成中，稍后会自动更新。你也可以手动刷新。
+                {t("newsDetailPage.aiPendingHint")}
               </p>
               <div>
                 <Button
@@ -803,7 +816,9 @@ export default function NewsDetailPage() {
                   onClick={() => newsQuery.refetch()}
                   disabled={newsQuery.isFetching}
                 >
-                  {newsQuery.isFetching ? "刷新中..." : "刷新 AI 标注"}
+                  {newsQuery.isFetching
+                    ? t("newsPage.refreshing")
+                    : t("newsDetailPage.refreshAiAnnotation")}
                 </Button>
               </div>
             </div>
@@ -817,7 +832,7 @@ export default function NewsDetailPage() {
 
               <div className="mt-3">
                 <div className="text-sm font-medium text-slate-700 dark:text-white/70 mb-2">
-                  要点
+                  {t("newsDetailPage.highlights")}
                 </div>
                 {aiHighlights.length > 0 ? (
                   <ul className="list-disc pl-5 space-y-1 text-sm text-slate-700 dark:text-white/70">
@@ -827,14 +842,14 @@ export default function NewsDetailPage() {
                   </ul>
                 ) : (
                   <p className="text-sm text-slate-600 dark:text-white/55">
-                    暂无要点
+                    {t("newsDetailPage.noHighlights")}
                   </p>
                 )}
               </div>
 
               <div className="mt-3">
                 <div className="text-sm font-medium text-slate-700 dark:text-white/70 mb-2">
-                  关键词
+                  {t("newsDetailPage.keywords")}
                 </div>
                 {aiKeywords.length > 0 ? (
                   <div className="flex flex-wrap gap-2">
@@ -846,7 +861,7 @@ export default function NewsDetailPage() {
                   </div>
                 ) : (
                   <p className="text-sm text-slate-600 dark:text-white/55">
-                    暂无关键词
+                    {t("newsDetailPage.noKeywords")}
                   </p>
                 )}
               </div>
@@ -854,7 +869,7 @@ export default function NewsDetailPage() {
               <div className="mt-3 space-y-2 text-sm text-slate-600 dark:text-white/50">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-medium text-slate-700 dark:text-white/70">
-                    敏感词
+                    {t("newsDetailPage.sensitiveWords")}
                   </span>
                   {aiSensitive.length > 0 ? (
                     <div className="flex flex-wrap gap-2">
@@ -865,20 +880,20 @@ export default function NewsDetailPage() {
                       ))}
                     </div>
                   ) : (
-                    <span>无</span>
+                    <span>{t("newsDetailPage.none")}</span>
                   )}
                 </div>
 
                 {ai?.duplicate_of_news_id != null ? (
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-medium text-slate-700 dark:text-white/70">
-                      疑似重复
+                      {t("newsDetailPage.duplicate")}
                     </span>
                     <Link
                       to={`/news/${ai.duplicate_of_news_id}`}
                       className="text-amber-600 hover:underline dark:text-amber-400"
                     >
-                      查看 #{ai.duplicate_of_news_id}
+                      {t("newsDetailPage.view")} #{ai.duplicate_of_news_id}
                     </Link>
                   </div>
                 ) : null}
@@ -886,7 +901,7 @@ export default function NewsDetailPage() {
                 {ai?.processed_at ? (
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-medium text-slate-700 dark:text-white/70">
-                      处理时间
+                      {t("newsDetailPage.processedAt")}
                     </span>
                     <span>{new Date(ai.processed_at).toLocaleString()}</span>
                   </div>
@@ -906,10 +921,14 @@ export default function NewsDetailPage() {
             onClick={handleBookmark}
             icon={Bookmark}
             isLoading={bookmarkMutation.isPending}
-            loadingText={bookmarked ? "收藏中..." : "取消中..."}
+            loadingText={
+              bookmarked
+                ? t("newsDetailPage.unfavoriting")
+                : t("newsDetailPage.favoriting")
+            }
             className="flex-1 sm:flex-none"
           >
-            {bookmarked ? "已收藏" : "收藏"}
+            {bookmarked ? t("newsPage.favorited") : t("newsPage.favorite")}
           </Button>
           <Button
             variant="outline"
@@ -917,7 +936,7 @@ export default function NewsDetailPage() {
             icon={Share2}
             className="flex-1 sm:flex-none"
           >
-            分享
+            {t("newsDetailPage.share")}
           </Button>
         </div>
       </article>
@@ -927,7 +946,7 @@ export default function NewsDetailPage() {
           <div className="flex items-center justify-between gap-3 mb-4">
             <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2 dark:text-white">
               <MessageSquare className="h-5 w-5 text-amber-600 dark:text-amber-400" />
-              评论
+              {t("newsDetailPage.comments")}
               <span className="text-sm font-normal text-slate-500 dark:text-white/40">
                 ({commentsTotal})
               </span>
@@ -938,11 +957,11 @@ export default function NewsDetailPage() {
               size="sm"
               icon={RefreshCw}
               isLoading={commentsQuery.isFetching}
-              loadingText="刷新中..."
+              loadingText={t("newsPage.refreshing")}
               onClick={() => commentsQuery.refetch()}
               disabled={commentsQuery.isFetching}
             >
-              刷新
+              {t("newsPage.refresh")}
             </Button>
           </div>
 
@@ -951,7 +970,9 @@ export default function NewsDetailPage() {
               value={commentDraft}
               onChange={(e) => setCommentDraft(e.target.value)}
               placeholder={
-                isAuthenticated ? "写下你的看法..." : "登录后可发表评论"
+                isAuthenticated
+                  ? t("newsDetailPage.commentPlaceholder")
+                  : t("newsDetailPage.loginToComment")
               }
               rows={4}
               disabled={!isAuthenticated}
@@ -962,11 +983,11 @@ export default function NewsDetailPage() {
                 onClick={() => {
                   const content = commentDraft.trim();
                   if (!isAuthenticated) {
-                    toast.error("请先登录后再评论");
+                    toast.error(t("newsDetailPage.loginToCommentToast"));
                     return;
                   }
                   if (!content) {
-                    toast.error("请输入评论内容");
+                    toast.error(t("newsDetailPage.commentRequired"));
                     return;
                   }
                   if (submitCommentMutation.isPending) return;
@@ -974,9 +995,9 @@ export default function NewsDetailPage() {
                 }}
                 disabled={!isAuthenticated || submitCommentMutation.isPending}
                 isLoading={submitCommentMutation.isPending}
-                loadingText="发布中..."
+                loadingText={t("newsDetailPage.publishing")}
               >
-                发布评论
+                {t("newsDetailPage.publishComment")}
               </Button>
             </div>
           </div>
@@ -986,7 +1007,7 @@ export default function NewsDetailPage() {
               <ListSkeleton count={3} />
             ) : comments.length === 0 ? (
               <p className="text-sm text-slate-600 dark:text-white/50">
-                暂无评论
+                {t("newsDetailPage.noComments")}
               </p>
             ) : (
               <div className="space-y-4">
@@ -994,7 +1015,7 @@ export default function NewsDetailPage() {
                   const name =
                     (c.author?.nickname ?? "").trim() ||
                     (c.author?.username ?? "").trim() ||
-                    `用户${c.user_id}`;
+                    `${t("newsDetailPage.userPrefix")}${c.user_id}`;
                   const reviewStatus = String(c.review_status ?? "").toLowerCase();
                   const canDelete = canDeleteComment(c) && Number(c.id) > 0;
                   const deleting = Boolean(pendingDeleteCommentIds[c.id]);
@@ -1012,7 +1033,7 @@ export default function NewsDetailPage() {
                             </span>
                             {reviewStatus === "pending" ? (
                               <Badge variant="warning" size="sm">
-                                审核中
+                                {t("newsDetailPage.reviewPending")}
                               </Badge>
                             ) : null}
                             {reviewStatus === "rejected" ? (
@@ -1021,7 +1042,7 @@ export default function NewsDetailPage() {
                                 size="sm"
                                 title={c.review_reason || undefined}
                               >
-                                已驳回
+                                {t("newsDetailPage.reviewRejected")}
                               </Badge>
                             ) : null}
                             <span className="text-slate-400 dark:text-white/30">
@@ -1046,9 +1067,9 @@ export default function NewsDetailPage() {
                               if (deleting) return;
                               deleteCommentMutation.mutate(c.id);
                             }}
-                            title="删除"
+                            title={t("common.delete")}
                             isLoading={deleting}
-                            loadingText="删除中..."
+                            loadingText={t("newsDetailPage.deleting")}
                             disabled={deleting}
                           />
                         ) : null}
@@ -1074,13 +1095,13 @@ export default function NewsDetailPage() {
           <Card variant="surface" padding="md">
             <div className="flex items-center justify-between gap-3 mb-4">
               <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
-                相关推荐
+                {t("newsDetailPage.related")}
               </h2>
               <Link
                 to="/news"
                 className="text-sm text-amber-600 hover:underline dark:text-amber-400"
               >
-                更多
+                {t("common.more")}
               </Link>
             </div>
 
@@ -1088,7 +1109,7 @@ export default function NewsDetailPage() {
               <ListSkeleton count={3} />
             ) : relatedItems.length === 0 ? (
               <p className="text-sm text-slate-600 dark:text-white/50">
-                暂无相关推荐
+                {t("newsDetailPage.noRelated")}
               </p>
             ) : (
               <div className="space-y-3">
@@ -1117,7 +1138,7 @@ export default function NewsDetailPage() {
                           </Badge>
                           {item.is_top ? (
                             <Badge variant="warning" size="sm">
-                              置顶
+                              {t("newsPage.pinned")}
                             </Badge>
                           ) : null}
                         </div>

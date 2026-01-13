@@ -6,6 +6,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { RequireAuth, RequireLawyer } from "./components/RouteGuards";
 import { AuthProvider } from "./contexts/AuthContext";
 import { ToastProvider } from "./hooks";
+import { useTranslation } from "./contexts/LanguageContext";
 
 // 懒加载前台页面
 const HomePage = lazy(() => import("./pages/HomePage"));
@@ -82,11 +83,12 @@ const SettlementStatsPage = lazy(() => import("./pages/admin/SettlementStatsPage
 
 // 加载中组件
 function PageLoading() {
+  const { t } = useTranslation();
   return (
     <div className="min-h-[50vh] flex items-center justify-center">
       <div className="flex flex-col items-center gap-4">
         <div className="w-10 h-10 border-4 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
-        <p className="text-slate-600 dark:text-white/50 text-sm">加载中...</p>
+        <p className="text-slate-600 dark:text-white/50 text-sm">{t('common.loading')}</p>
       </div>
     </div>
   );

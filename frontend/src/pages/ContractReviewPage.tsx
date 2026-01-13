@@ -8,6 +8,7 @@ import MarkdownContent from '../components/MarkdownContent'
 import { Badge, Button, Card, Modal } from '../components/ui'
 import { useAuth } from '../contexts/AuthContext'
 import { useTheme } from '../contexts/ThemeContext'
+import { useLanguage } from '../contexts/LanguageContext'
 import { useToast, useAppMutation } from '../hooks'
 import { getApiErrorMessage } from '../utils'
 import { queryKeys } from '../queryKeys'
@@ -50,6 +51,7 @@ function riskBadgeVariant(level: string): 'default' | 'warning' | 'danger' | 'su
 export default function ContractReviewPage() {
   const { isAuthenticated } = useAuth()
   const { actualTheme } = useTheme()
+  const { t } = useLanguage()
   const toast = useToast()
 
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -84,7 +86,7 @@ export default function ContractReviewPage() {
 
   const UNLIMITED_THRESHOLD = 1_000_000
   const formatQuotaNumber = (n: unknown) =>
-    typeof n === 'number' ? (n >= UNLIMITED_THRESHOLD ? '不限' : n) : '-'
+    typeof n === 'number' ? (n >= UNLIMITED_THRESHOLD ? t('common.unlimited') : n) : '-'
   const totalDocumentRemaining =
     (typeof documentRemaining === 'number' ? documentRemaining : 0) +
     (typeof documentPackRemaining === 'number' ? documentPackRemaining : 0)
@@ -96,9 +98,11 @@ export default function ContractReviewPage() {
   }, [result?.report_markdown])
 
   const normalizedTitle = useMemo(() => {
-    const base = contractType ? `合同审查报告-${contractType}` : '合同审查报告'
+    const base = contractType
+      ? `${t('contractReviewPage.reportTitle')}-${contractType}`
+      : t('contractReviewPage.reportTitle')
     return base.replace(/[\\/:*?"<>|]/g, '_')
-  }, [contractType])
+  }, [contractType, t])
 
   const reviewMutation = useAppMutation<ContractReviewResponse, { file: File }>(
     {
@@ -110,10 +114,10 @@ export default function ContractReviewPage() {
         })
         return res.data as ContractReviewResponse
       },
-      errorMessageFallback: '合同审查失败，请稍后重试',
+      errorMessageFallback: t('contractReviewPage.reviewFailedRetry'),
       onSuccess: (data) => {
         setResult(data)
-        toast.success('审查完成')
+        toast.success(t('contractReviewPage.reviewCompleted'))
         if (isAuthenticated) {
           void quotasQuery.refetch()
         }
@@ -131,7 +135,7 @@ export default function ContractReviewPage() {
     try {
       if (navigator?.clipboard?.writeText) {
         await navigator.clipboard.writeText(text)
-        toast.success('已复制到剪贴板')
+        toast.success(t('contractReviewPage.copiedToClipboard'))
         return
       }
 
@@ -145,10 +149,10 @@ export default function ContractReviewPage() {
       textarea.select()
       const ok = document.execCommand('copy')
       document.body.removeChild(textarea)
-      if (ok) toast.success('已复制到剪贴板')
-      else toast.error('复制失败')
+      if (ok) toast.success(t('contractReviewPage.copiedToClipboard'))
+      else toast.error(t('contractReviewPage.copyFailed'))
     } catch {
-      toast.error('复制失败')
+      toast.error(t('contractReviewPage.copyFailed'))
     }
   }
 
@@ -193,7 +197,7 @@ export default function ContractReviewPage() {
       const blob = await fetchPdfBlobByContent(normalizedTitle, markdown || safeText(result.text_preview))
       openPdfPreviewWithBlob(blob, normalizedTitle)
     } catch (err) {
-      toast.error(getApiErrorMessage(err, 'PDF 预览失败'))
+      toast.error(getApiErrorMessage(err, t('contractReviewPage.pdfPreviewFailed')))
     } finally {
       setPdfPreviewBusy(false)
     }
@@ -206,9 +210,9 @@ export default function ContractReviewPage() {
       setPdfPreviewBusy(true)
       const blob = await fetchPdfBlobByContent(normalizedTitle, markdown || safeText(result.text_preview))
       downloadBlobAsFile(blob, `${normalizedTitle}.pdf`)
-      toast.success('PDF 已下载')
+      toast.success(t('contractReviewPage.pdfDownloaded'))
     } catch (err) {
-      toast.error(getApiErrorMessage(err, 'PDF 导出失败'))
+      toast.error(getApiErrorMessage(err, t('contractReviewPage.pdfExportFailed')))
     } finally {
       setPdfPreviewBusy(false)
     }
@@ -225,11 +229,11 @@ export default function ContractReviewPage() {
 
   const handleStartReview = () => {
     if (!file) {
-      toast.error('请先选择合同文件')
+      toast.error(t('contractReviewPage.pleaseChooseFile'))
       return
     }
     if (isDocQuotaExhausted) {
-      toast.info('今日合同审查次数已用完，可前往个人中心开通 VIP 或购买次数包')
+      toast.info(t('contractReviewPage.quotaExhaustedHint'))
       return
     }
     if (reviewMutation.isPending) return
@@ -246,9 +250,9 @@ export default function ContractReviewPage() {
   return (
     <div className="space-y-10">
       <PageHeader
-        eyebrow="AI 合同审查"
-        title="合同风险体检"
-        description="上传合同后系统将自动提取文本并生成风险体检报告（结构化 + 可渲染 Markdown）。为保护隐私，身份证/手机号/邮箱等信息会默认脱敏处理后再发送给 AI。"
+        eyebrow={t('contractReviewPage.eyebrow')}
+        title={t('contractReviewPage.title')}
+        description={t('contractReviewPage.description')}
         tone={actualTheme}
       />
 
@@ -257,11 +261,11 @@ export default function ContractReviewPage() {
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div className="flex items-center gap-2 text-sm text-slate-700 dark:text-white/80">
               <FileText className="h-4 w-4" />
-              <span className="font-medium">选择合同文件</span>
-              <span className="text-slate-400 dark:text-white/40">（PDF/DOCX/TXT/MD）</span>
+              <span className="font-medium">{t('contractReviewPage.selectFile')}</span>
+              <span className="text-slate-400 dark:text-white/40">{t('contractReviewPage.supportedTypes')}</span>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <input
                 ref={fileInputRef}
                 type="file"
@@ -275,20 +279,20 @@ export default function ContractReviewPage() {
                 }}
               />
               <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
-                选择文件
+                {t('contractReviewPage.chooseFile')}
               </Button>
               <Button
                 variant="primary"
                 size="sm"
                 onClick={handleStartReview}
                 isLoading={reviewMutation.isPending}
-                loadingText="审查中..."
+                loadingText={t('contractReviewPage.reviewing')}
                 disabled={reviewMutation.isPending || (isAuthenticated && isDocQuotaExhausted)}
               >
-                开始审查
+                {t('contractReviewPage.startReview')}
               </Button>
               <Button variant="outline" size="sm" icon={RefreshCcw} onClick={handleReset}>
-                重置
+                {t('contractReviewPage.reset')}
               </Button>
             </div>
           </div>
@@ -301,7 +305,7 @@ export default function ContractReviewPage() {
                 <span>{Math.max(1, Math.round((file.size || 0) / 1024))} KB</span>
               </div>
             ) : (
-              <span>尚未选择文件</span>
+              <span>{t('contractReviewPage.noFileSelected')}</span>
             )}
           </div>
 
@@ -309,17 +313,17 @@ export default function ContractReviewPage() {
             <div className="flex flex-col items-start gap-3">
               <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600 dark:text-white/70">
                 <Badge variant={isVipActive ? 'success' : 'default'} size="sm">
-                  {isVipActive ? 'VIP' : '非VIP'}
+                  {isVipActive ? t('common.vip') : t('common.nonVip')}
                 </Badge>
                 <span>
-                  今日可用次数{' '}
+                  {t('contractReviewPage.todayAvailablePrefix')}{' '}
                   <span className="font-semibold text-slate-900 dark:text-white">
                     {formatQuotaNumber(documentRemaining)}
                   </span>{' '}
                   / {formatQuotaNumber(documentLimit)}
                   {typeof documentPackRemaining === 'number' && documentPackRemaining > 0 && (
                     <>
-                      <span className="text-slate-500 dark:text-white/50">（次数包 {documentPackRemaining}）</span>
+                      <span className="text-slate-500 dark:text-white/50">{t('contractReviewPage.packPrefix')}{documentPackRemaining}{t('contractReviewPage.packSuffix')}</span>
                     </>
                   )}
                 </span>
@@ -328,7 +332,7 @@ export default function ContractReviewPage() {
                     to="/vip"
                     className="font-medium text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200"
                   >
-                    开通 VIP
+                    {t('contractReviewPage.openVip')}
                   </Link>
                 )}
                 {isDocQuotaExhausted && (
@@ -336,7 +340,7 @@ export default function ContractReviewPage() {
                     to="/profile?buyPack=document_generate"
                     className="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200"
                   >
-                    购买次数包
+                    {t('contractReviewPage.buyPack')}
                   </Link>
                 )}
               </div>
@@ -347,26 +351,26 @@ export default function ContractReviewPage() {
                 icon={RefreshCcw}
                 disabled={quotasQuery.isFetching}
                 isLoading={quotasQuery.isFetching}
-                loadingText="刷新中..."
+                loadingText={t('common.refreshing')}
                 onClick={() => quotasQuery.refetch()}
               >
-                刷新配额
+                {t('contractReviewPage.refreshQuota')}
               </Button>
             </div>
           ) : (
             <div className="flex flex-col items-start gap-3">
               <div className="text-xs text-slate-500 dark:text-white/50">
-                登录后可购买次数包或开通 VIP，获取更充足的使用额度
+                {t('contractReviewPage.guestHint')}
               </div>
               <div className="flex items-center gap-2">
                 <Link to="/login">
                   <Button variant="outline" size="sm">
-                    去登录
+                    {t('contractReviewPage.goLogin')}
                   </Button>
                 </Link>
                 <Link to="/vip">
                   <Button variant="outline" size="sm">
-                    查看 VIP
+                    {t('contractReviewPage.viewVip')}
                   </Button>
                 </Link>
               </div>
@@ -375,7 +379,7 @@ export default function ContractReviewPage() {
 
           {reviewMutation.error ? (
             <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900 dark:border-rose-900/40 dark:bg-rose-900/20 dark:text-rose-100">
-              {getApiErrorMessage(reviewMutation.error, '合同审查失败')}
+              {getApiErrorMessage(reviewMutation.error, t('contractReviewPage.reviewFailed'))}
             </div>
           ) : null}
         </div>
@@ -387,10 +391,10 @@ export default function ContractReviewPage() {
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div className="space-y-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <div className="text-base font-semibold text-slate-900 dark:text-white">审查结果</div>
+                  <div className="text-base font-semibold text-slate-900 dark:text-white">{t('contractReviewPage.resultTitle')}</div>
                   {riskLevel ? (
                     <Badge variant={riskBadgeVariant(riskLevel)} size="sm">
-                      风险：{riskLevel}
+                      {t('contractReviewPage.riskPrefix')}{riskLevel}
                     </Badge>
                   ) : null}
                   {contractType ? (
@@ -401,7 +405,7 @@ export default function ContractReviewPage() {
                 </div>
                 <div className="text-xs text-slate-500 dark:text-white/40">
                   {safeText(result?.filename)}
-                  {result?.request_id ? ` · 请求ID: ${result.request_id}` : ''}
+                  {result?.request_id ? ` · ${t('contractReviewPage.requestIdPrefix')}${result.request_id}` : ''}
                 </div>
               </div>
 
@@ -412,7 +416,7 @@ export default function ContractReviewPage() {
                   icon={Copy}
                   onClick={() => copyTextToClipboard(markdown || JSON.stringify(reportJson, null, 2))}
                 >
-                  复制报告
+                  {t('contractReviewPage.copyReport')}
                 </Button>
                 <Button
                   variant="outline"
@@ -423,10 +427,10 @@ export default function ContractReviewPage() {
                       type: 'text/markdown;charset=utf-8',
                     })
                     downloadBlobAsFile(blob, `${normalizedTitle}.md`)
-                    toast.success('Markdown 已下载')
+                    toast.success(t('contractReviewPage.mdDownloaded'))
                   }}
                 >
-                  下载MD
+                  {t('contractReviewPage.downloadMd')}
                 </Button>
                 <Button
                   variant="outline"
@@ -435,7 +439,7 @@ export default function ContractReviewPage() {
                   disabled={pdfPreviewBusy}
                   onClick={handlePreviewPdf}
                 >
-                  预览PDF
+                  {t('contractReviewPage.previewPdf')}
                 </Button>
                 <Button
                   variant="outline"
@@ -444,7 +448,7 @@ export default function ContractReviewPage() {
                   disabled={pdfPreviewBusy}
                   onClick={handleDownloadPdf}
                 >
-                  下载PDF
+                  {t('contractReviewPage.downloadPdf')}
                 </Button>
               </div>
             </div>
@@ -468,7 +472,11 @@ export default function ContractReviewPage() {
           if (pdfPreviewBusy) return
           setPdfPreviewOpen(false)
         }}
-        title={pdfPreviewTitle ? `PDF 预览：${pdfPreviewTitle}` : 'PDF 预览'}
+        title={
+          pdfPreviewTitle
+            ? `${t('contractReviewPage.pdfPreviewTitlePrefix')}${pdfPreviewTitle}`
+            : t('contractReviewPage.pdfPreviewTitle')
+        }
         size="xl"
       >
         {pdfPreviewUrl ? (
@@ -480,7 +488,7 @@ export default function ContractReviewPage() {
             />
           </div>
         ) : (
-          <div className="text-sm text-slate-500 dark:text-white/50">PDF 加载中...</div>
+          <div className="text-sm text-slate-500 dark:text-white/50">{t('contractReviewPage.pdfLoading')}</div>
         )}
       </Modal>
     </div>

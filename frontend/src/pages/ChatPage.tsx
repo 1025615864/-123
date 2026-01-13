@@ -40,6 +40,7 @@ import MessageActionsBar from "../components/chat/MessageActionsBar";
 import TemplateSelector from "../components/TemplateSelector";
 import { useTheme } from "../contexts/ThemeContext";
 import { useAuth } from "../contexts/AuthContext";
+import { useLanguage } from "../contexts/LanguageContext";
 import { queryKeys } from "../queryKeys";
 
 interface LawReference {
@@ -117,6 +118,20 @@ export default function ChatPage() {
   const { actualTheme } = useTheme();
   const location = useLocation();
   const { isAuthenticated } = useAuth();
+  const { t } = useLanguage();
+
+  const publicAiStatusQuery = useQuery({
+    queryKey: queryKeys.publicAiStatus(),
+    queryFn: async () => {
+      const res = await api.get("/system/public/ai/status");
+      return res.data as { voice_transcribe_enabled: boolean; reason?: string | null };
+    },
+    retry: 1,
+    refetchOnWindowFocus: false,
+    staleTime: 60_000,
+  });
+
+  const voiceTranscribeEnabled = publicAiStatusQuery.data?.voice_transcribe_enabled;
   const [guestResetAt, setGuestResetAt] = useState<number | null>(() => {
     const raw = localStorage.getItem(GUEST_AI_RESET_AT_KEY);
     const n = raw == null ? NaN : Number(raw);
@@ -229,6 +244,25 @@ export default function ChatPage() {
     el.style.height = `${next}px`;
   }, []);
 
+  const getSupportedAudioMimeType = useCallback((): string | null => {
+    const MR: any = (window as any)?.MediaRecorder;
+    const isTypeSupported = typeof MR?.isTypeSupported === "function" ? MR.isTypeSupported.bind(MR) : null;
+    if (!isTypeSupported) return null;
+
+    const candidates = [
+      "audio/webm;codecs=opus",
+      "audio/webm",
+      "audio/ogg;codecs=opus",
+      "audio/ogg",
+    ];
+    for (const c of candidates) {
+      try {
+        if (isTypeSupported(c)) return c;
+      } catch {}
+    }
+    return null;
+  }, []);
+
   const stopRecordingTracks = useCallback(() => {
     const stream = recordingStreamRef.current;
     if (!stream) return;
@@ -263,20 +297,32 @@ export default function ChatPage() {
   const toggleRecording = useCallback(async () => {
     if (recording) {
       try {
-        recorderRef.current?.stop();
+        const r: any = recorderRef.current;
+        try {
+          r?.requestData?.();
+        } catch {}
+        r?.stop?.();
       } catch {}
       setRecording(false);
       return;
     }
 
-    if (loading || streaming || transcribing) return;
+    if (loading || streaming || transcribing) {
+      toast.error(t("chat.voiceBusy"));
+      return;
+    }
+
+    if (voiceTranscribeEnabled === false) {
+      toast.error(t("chat.aiNotConfigured"));
+      return;
+    }
 
     if (!(navigator as any)?.mediaDevices?.getUserMedia) {
-      toast.error("当前浏览器不支持语音输入");
+      toast.error(t("chat.voiceUnsupported"));
       return;
     }
     if (!(window as any)?.MediaRecorder) {
-      toast.error("当前浏览器不支持语音输入");
+      toast.error(t("chat.voiceUnsupported"));
       return;
     }
 
@@ -284,7 +330,10 @@ export default function ChatPage() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       recordingStreamRef.current = stream;
 
-      const recorder = new MediaRecorder(stream);
+      const mimeType = getSupportedAudioMimeType();
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
       recorderRef.current = recorder;
       recordingChunksRef.current = [];
 
@@ -306,7 +355,7 @@ export default function ChatPage() {
 
         const blob = new Blob(chunks, { type: mimeType || "audio/webm" });
         if (!blob || blob.size <= 0) {
-          toast.error("录音失败，请重试");
+          toast.error(t("chat.recordFailed"));
           return;
         }
 
@@ -325,7 +374,7 @@ export default function ChatPage() {
             });
             const text = String(res?.data?.text ?? "").trim();
             if (!text) {
-              toast.error("语音转写失败，请重试");
+              toast.error(t("chat.transcribeEmpty"));
               return;
             }
             setInput((prev) => {
@@ -334,22 +383,28 @@ export default function ChatPage() {
             });
             requestAnimationFrame(() => inputRef.current?.focus());
           } catch (e) {
-            toast.error(getApiErrorMessage(e, "语音转写失败，请稍后再试"));
+            toast.error(getApiErrorMessage(e, t("chat.transcribeFailed")));
           } finally {
             setTranscribing(false);
           }
         })();
       };
 
-      recorder.start();
+      recorder.start(250);
       setRecording(true);
     } catch (e) {
       stopRecordingTracks();
       recorderRef.current = null;
       setRecording(false);
-      toast.error(getApiErrorMessage(e, "无法开始录音"));
+      const anyErr: any = e as any;
+      const name = String(anyErr?.name ?? "");
+      if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+        toast.error(t("chat.micPermissionDenied"));
+      } else {
+        toast.error(getApiErrorMessage(e, t("chat.cannotStartRecord")));
+      }
     }
-  }, [loading, recording, stopRecordingTracks, streaming, toast, transcribing]);
+  }, [getSupportedAudioMimeType, loading, recording, stopRecordingTracks, streaming, t, toast, transcribing, voiceTranscribeEnabled]);
 
   useEffect(() => {
     return () => {
@@ -1698,7 +1753,7 @@ export default function ChatPage() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyPress}
-                placeholder="输入您的法律问题..."
+                placeholder={t("consultation.placeholder")}
                 rows={1}
                 disabled={loading || streaming}
                 className="w-full px-5 py-4 pr-40 rounded-3xl bg-transparent text-slate-900 dark:text-white placeholder:text-slate-400 outline-none resize-none max-h-48 text-sm leading-relaxed"
@@ -1735,16 +1790,16 @@ export default function ChatPage() {
                 </Button>
                 <Button
                   onClick={toggleRecording}
-                  disabled={loading || streaming || transcribing}
+                  disabled={loading || streaming || transcribing || voiceTranscribeEnabled === false}
                   isLoading={transcribing}
-                  loadingText="识别中..."
+                  loadingText={t("chat.voiceRecognizing")}
                   size="sm"
                   aria-label={
                     transcribing
-                      ? "识别中"
+                      ? t("chat.voiceRecognizing")
                       : recording
-                        ? "停止录音"
-                        : "语音输入"
+                        ? t("chat.voiceStop")
+                        : t("chat.voiceInput")
                   }
                   className={`h-10 rounded-full transition-all ${
                     transcribing ? "px-4 w-auto" : "w-10 p-0"
@@ -1793,7 +1848,7 @@ export default function ChatPage() {
               </div>
             </div>
             <div className="text-center text-[10px] text-slate-400 dark:text-slate-500">
-              AI 可能会犯错。请核查重要信息。
+              {t("chat.aiMistakesTip")}
             </div>
           </div>
         </div>

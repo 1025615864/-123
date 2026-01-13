@@ -24,6 +24,7 @@ import api from "../api/client";
 import { useToast, useAppMutation } from "../hooks";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
+import { useLanguage } from "../contexts/LanguageContext";
 import { getApiErrorMessage } from "../utils";
 import { queryKeys } from "../queryKeys";
 import { toolNavItems } from "../navigation";
@@ -83,6 +84,7 @@ export default function SearchPage() {
   const { actualTheme } = useTheme();
   const toast = useToast();
   const queryClient = useQueryClient();
+  const { t } = useLanguage();
 
   const [q, setQ] = useState("");
   const [submittedQuery, setSubmittedQuery] = useState("");
@@ -199,25 +201,25 @@ export default function SearchPage() {
     mutationFn: async (_: void) => {
       await api.delete("/search/history");
     },
-    successMessage: "已清空搜索历史",
-    errorMessageFallback: "操作失败，请稍后重试",
+    successMessage: t("searchPage.historyClearedToast"),
+    errorMessageFallback: t("searchPage.actionFailed"),
     invalidateQueryKeys: [queryKeys.searchHistoryRoot()],
   });
 
   const clearHistory = useCallback(async () => {
     if (!isAuthenticated) {
-      toast.error("请先登录");
+      toast.error(t("searchPage.loginRequired"));
       return;
     }
     if (clearHistoryMutation.isPending) return;
     clearHistoryMutation.mutate();
-  }, [clearHistoryMutation, isAuthenticated, toast]);
+  }, [clearHistoryMutation, isAuthenticated, t, toast]);
 
   const performSearch = useCallback(
     async (keyword?: string) => {
       const query = (keyword ?? q).trim();
       if (query.length < 2) {
-        toast.error("请输入至少 2 个字符");
+        toast.error(t("searchPage.minCharsError"));
         return;
       }
 
@@ -235,7 +237,7 @@ export default function SearchPage() {
         });
       }
     },
-    [isAuthenticated, q, queryClient, toast, setUrlParams]
+    [isAuthenticated, q, queryClient, t, toast, setUrlParams]
   );
 
   const suggestions = suggestionsQuery.data ?? [];
@@ -302,9 +304,9 @@ export default function SearchPage() {
   return (
     <div className="space-y-10">
       <PageHeader
-        eyebrow="全局搜索"
-        title="搜索"
-        description="搜索新闻、论坛帖子、律所、律师与知识库内容"
+        eyebrow={t("searchPage.eyebrow")}
+        title={t("searchPage.title")}
+        description={t("searchPage.description")}
         layout="mdStart"
         tone={actualTheme}
       />
@@ -318,7 +320,7 @@ export default function SearchPage() {
               setSuggestionsEnabled(true);
               setQ(e.target.value);
             }}
-            placeholder="请输入关键词..."
+            placeholder={t("searchPage.placeholder")}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
@@ -347,16 +349,16 @@ export default function SearchPage() {
               onClick={() => performSearch()}
               disabled={searching}
               isLoading={searching}
-              loadingText="搜索中..."
+              loadingText={t("searchPage.searching")}
             >
-              搜索
+              {t("common.search")}
             </Button>
             <Button
               variant="outline"
               onClick={clearAllConditions}
               disabled={searching && submittedQuery.trim().length > 0}
             >
-              清空条件
+              {t("searchPage.clearConditions")}
             </Button>
             {isAuthenticated && (
               <Button
@@ -364,10 +366,10 @@ export default function SearchPage() {
                 icon={Trash2}
                 onClick={clearHistory}
                 isLoading={clearHistoryMutation.isPending}
-                loadingText="清空中..."
+                loadingText={t("searchPage.clearing")}
                 disabled={searching || clearHistoryMutation.isPending}
               >
-                清空历史
+                {t("searchPage.clearHistory")}
               </Button>
             )}
           </div>
@@ -379,12 +381,12 @@ export default function SearchPage() {
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold text-slate-900 flex items-center gap-2 dark:text-white">
               <TrendingUp className="h-5 w-5 text-amber-600 dark:text-amber-400" />
-              热门搜索
+              {t("searchPage.hotSearch")}
             </h3>
           </div>
           {hotKeywords.length === 0 ? (
             <div className="text-slate-500 text-sm dark:text-white/40">
-              暂无数据
+              {t("common.noData")}
             </div>
           ) : (
             <div className="flex flex-wrap gap-2">
@@ -409,24 +411,24 @@ export default function SearchPage() {
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold text-slate-900 flex items-center gap-2 dark:text-white">
               <History className="h-5 w-5 text-blue-600 dark:text-blue-400" />
-              搜索历史
+              {t("searchPage.historyTitle")}
             </h3>
           </div>
 
           {!isAuthenticated ? (
             <div className="text-slate-500 text-sm dark:text-white/40">
-              请先{" "}
+              {t("searchPage.loginToViewHistoryPrefix")}{" "}
               <Link
                 to="/login"
                 className="text-amber-600 hover:underline dark:text-amber-400"
               >
-                登录
+                {t("common.login")}
               </Link>{" "}
-              后查看搜索历史
+              {t("searchPage.loginToViewHistorySuffix")}
             </div>
           ) : history.length === 0 ? (
             <div className="text-slate-500 text-sm dark:text-white/40">
-              暂无历史
+              {t("searchPage.noHistory")}
             </div>
           ) : (
             <div className="flex flex-wrap gap-2">
@@ -448,21 +450,21 @@ export default function SearchPage() {
       <Card variant="surface" padding="lg">
         <div className="flex items-center justify-between gap-3 mb-6">
           <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
-            搜索结果
+            {t("searchPage.resultsTitle")}
           </h3>
           <Button
             variant="outline"
             size="sm"
             icon={RefreshCw}
             isLoading={searching}
-            loadingText="搜索中..."
+            loadingText={t("searchPage.searching")}
             onClick={() => {
               if (submittedQuery.trim().length < 2) return;
               void searchQuery.refetch();
             }}
             disabled={searching || submittedQuery.trim().length < 2}
           >
-            刷新
+            {t("searchPage.refresh")}
           </Button>
         </div>
 
@@ -471,8 +473,8 @@ export default function SearchPage() {
         ) : !results ? (
           <EmptyState
             icon={Search}
-            title="请输入关键词开始搜索"
-            description="你可以从热门词或历史记录开始"
+            title={t("searchPage.emptyInputTitle")}
+            description={t("searchPage.emptyInputDescription")}
             tone={actualTheme}
             action={
               <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
@@ -485,14 +487,14 @@ export default function SearchPage() {
                     });
                   }}
                 >
-                  看看热门搜索
+                  {t("searchPage.seeHotSearch")}
                   <ArrowRight className="h-4 w-4" />
                 </Button>
                 <Link
                   to="/chat"
                   className="inline-flex items-center justify-center gap-2 rounded-lg font-semibold transition-all outline-none focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 active:scale-[0.99] px-5 py-3 text-sm btn-primary text-white"
                 >
-                  去 AI 咨询
+                  {t("searchPage.goAiConsult")}
                   <Sparkles className="h-4 w-4" />
                 </Link>
               </div>
@@ -501,51 +503,51 @@ export default function SearchPage() {
         ) : !hasAnyResults ? (
           <EmptyState
             icon={Search}
-            title="没有找到相关内容"
-            description="试试换个关键词、减少限制，或直接进入 AI 咨询获得建议"
+            title={t("searchPage.noResultsTitle")}
+            description={t("searchPage.noResultsDescription")}
             tone={actualTheme}
             action={
               <div className="space-y-6">
                 <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
                   <Button variant="outline" onClick={clearAllConditions}>
-                    清空条件
+                    {t("searchPage.clearConditions")}
                   </Button>
                   <Link
                     to={`/chat?draft=${encodeURIComponent(submittedQuery.trim())}`}
                     className="inline-flex items-center justify-center gap-2 rounded-lg font-semibold transition-all outline-none focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 active:scale-[0.99] px-5 py-3 text-sm btn-primary text-white"
                   >
-                    让 AI 帮我分析
+                    {t("searchPage.askAiToAnalyze")}
                     <Sparkles className="h-4 w-4" />
                   </Link>
                   <Link
                     to="/lawfirm"
                     className="inline-flex items-center justify-center gap-2 rounded-lg font-semibold transition-all outline-none focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 active:scale-[0.99] px-5 py-3 text-sm btn-outline"
                   >
-                    找律师
+                    {t("searchPage.findLawyer")}
                     <ArrowRight className="h-4 w-4" />
                   </Link>
                 </div>
 
                 <div className="text-left max-w-3xl mx-auto">
                   <div className="text-sm font-medium text-slate-900 mb-3 dark:text-white">
-                    你可以尝试：
+                    {t("searchPage.tryTipsTitle")}
                   </div>
                   <div className="grid md:grid-cols-3 gap-3">
                     <div className="p-4 rounded-xl bg-slate-900/5 border border-slate-200/70 text-sm text-slate-700 dark:bg-white/5 dark:border-white/10 dark:text-white/70">
-                      换同义词（如“辞退/解除/补偿”）
+                      {t("searchPage.tryTip1")}
                     </div>
                     <div className="p-4 rounded-xl bg-slate-900/5 border border-slate-200/70 text-sm text-slate-700 dark:bg-white/5 dark:border-white/10 dark:text-white/70">
-                      增加关键事实（时间、金额、地区）
+                      {t("searchPage.tryTip2")}
                     </div>
                     <div className="p-4 rounded-xl bg-slate-900/5 border border-slate-200/70 text-sm text-slate-700 dark:bg-white/5 dark:border-white/10 dark:text-white/70">
-                      先用工具自查，再去咨询
+                      {t("searchPage.tryTip3")}
                     </div>
                   </div>
                 </div>
 
                 <div className="max-w-3xl mx-auto text-left">
                   <div className="text-sm font-medium text-slate-900 mb-3 dark:text-white">
-                    热门工具推荐
+                    {t("searchPage.recommendedTools")}
                   </div>
                   <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
                     {toolNavItems.map(({ path, label, icon: Icon }) => (
@@ -560,10 +562,10 @@ export default function SearchPage() {
                           </div>
                           <div className="min-w-0">
                             <div className="text-sm font-medium text-slate-900 dark:text-white">
-                              {label}
+                              {t(label)}
                             </div>
                             <div className="text-xs text-slate-500 dark:text-white/40">
-                              立即使用
+                              {t("home.toolAction")}
                             </div>
                           </div>
                         </div>
@@ -579,23 +581,25 @@ export default function SearchPage() {
             {searching ? (
               <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-white/45">
                 <div className="h-4 w-4 rounded-full border-2 border-slate-400 border-t-transparent animate-spin dark:border-white/30" />
-                <span>搜索中…</span>
+                <span>{t("searchPage.searching")}</span>
               </div>
             ) : null}
             {categoryCounts && (
               <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="info">共 {categoryCounts.total} 条</Badge>
-                <Badge variant="default">新闻 {categoryCounts.news}</Badge>
-                <Badge variant="default">帖子 {categoryCounts.posts}</Badge>
-                <Badge variant="default">律所 {categoryCounts.lawfirms}</Badge>
-                <Badge variant="default">律师 {categoryCounts.lawyers}</Badge>
-                <Badge variant="default">知识库 {categoryCounts.knowledge}</Badge>
+                <Badge variant="info">
+                  {t("searchPage.totalPrefix")} {categoryCounts.total} {t("searchPage.totalSuffix")}
+                </Badge>
+                <Badge variant="default">{t("searchPage.countNews")} {categoryCounts.news}</Badge>
+                <Badge variant="default">{t("searchPage.countPosts")} {categoryCounts.posts}</Badge>
+                <Badge variant="default">{t("searchPage.countLawFirms")} {categoryCounts.lawfirms}</Badge>
+                <Badge variant="default">{t("searchPage.countLawyers")} {categoryCounts.lawyers}</Badge>
+                <Badge variant="default">{t("searchPage.countKnowledge")} {categoryCounts.knowledge}</Badge>
               </div>
             )}
             {results.news.length > 0 && (
               <div>
                 <h4 className="text-slate-700 font-medium mb-3 dark:text-white/80">
-                  新闻
+                  {t("searchPage.sectionNews")}
                 </h4>
                 <VirtualWindowList
                   items={results.news}
@@ -625,7 +629,7 @@ export default function SearchPage() {
             {results.posts.length > 0 && (
               <div>
                 <h4 className="text-slate-700 font-medium mb-3 dark:text-white/80">
-                  论坛帖子
+                  {t("searchPage.sectionPosts")}
                 </h4>
                 <VirtualWindowList
                   items={results.posts}
@@ -655,7 +659,7 @@ export default function SearchPage() {
             {results.lawfirms.length > 0 && (
               <div>
                 <h4 className="text-slate-700 font-medium mb-3 dark:text-white/80">
-                  律所
+                  {t("searchPage.sectionLawFirms")}
                 </h4>
                 <VirtualWindowList
                   items={results.lawfirms}
@@ -685,7 +689,7 @@ export default function SearchPage() {
             {results.lawyers.length > 0 && (
               <div>
                 <h4 className="text-slate-700 font-medium mb-3 dark:text-white/80">
-                  律师
+                  {t("searchPage.sectionLawyers")}
                 </h4>
                 <div className="grid md:grid-cols-2 gap-3">
                   {results.lawyers.map((l) => (
@@ -710,7 +714,7 @@ export default function SearchPage() {
             {results.knowledge.length > 0 && (
               <div>
                 <h4 className="text-slate-700 font-medium mb-3 dark:text-white/80">
-                  知识库
+                  {t("searchPage.sectionKnowledge")}
                 </h4>
                 <div className="grid md:grid-cols-2 gap-3">
                   {results.knowledge.map((k) => (

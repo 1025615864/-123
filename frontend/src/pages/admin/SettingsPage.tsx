@@ -142,6 +142,8 @@ export default function SettingsPage() {
     newsReviewPolicyEnabled: false,
     newsReviewPolicyJson:
       '{\n  "safe": "approved",\n  "warning": "pending",\n  "danger": "pending",\n  "unknown": "pending"\n}',
+    contractReviewRulesJson:
+      '{\n  "required_clauses": [\n    {\n      "name": "争议解决",\n      "patterns": ["争议解决", "仲裁", "诉讼"]\n    },\n    {\n      "name": "违约责任",\n      "patterns": ["违约责任", "违约金"]\n    }\n  ],\n  "risk_keywords": [\n    {\n      "keyword": "不可撤销",\n      "title": "存在不可撤销条款，请重点确认",\n      "severity": "medium",\n      "problem": "合同中出现不可撤销等强约束表述，可能导致单方权利受限。",\n      "suggestion": "核对是否符合交易习惯，必要时补充撤销/解除条件或例外情形。"\n    }\n  ]\n}',
     vipDefaultDays: "30",
     vipDefaultPrice: "29",
     aiChatPackOptionsJson: '{\n  "10": 12,\n  "50": 49,\n  "100": 79\n}',
@@ -299,6 +301,10 @@ export default function SettingsPage() {
           typeof configMap["NEWS_REVIEW_POLICY_JSON"] === "string"
             ? configMap["NEWS_REVIEW_POLICY_JSON"]
             : prev.newsReviewPolicyJson,
+        contractReviewRulesJson:
+          typeof configMap["CONTRACT_REVIEW_RULES_JSON"] === "string"
+            ? configMap["CONTRACT_REVIEW_RULES_JSON"]
+            : prev.contractReviewRulesJson,
         vipDefaultDays: configMap["VIP_DEFAULT_DAYS"] || prev.vipDefaultDays,
         vipDefaultPrice: configMap["VIP_DEFAULT_PRICE"] || prev.vipDefaultPrice,
         aiChatPackOptionsJson:
@@ -398,6 +404,11 @@ export default function SettingsPage() {
           category: "news_review",
         },
         {
+          key: "CONTRACT_REVIEW_RULES_JSON",
+          value: settings.contractReviewRulesJson,
+          category: "ai",
+        },
+        {
           key: "VIP_DEFAULT_DAYS",
           value: String(settings.vipDefaultDays || "").trim(),
           category: "commercial",
@@ -484,6 +495,45 @@ export default function SettingsPage() {
             toast.error("NEWS_REVIEW_POLICY_JSON 必须是合法 JSON");
             return;
           }
+        }
+      }
+
+      if (String(settings.contractReviewRulesJson || "").trim()) {
+        try {
+          const parsed: unknown = JSON.parse(String(settings.contractReviewRulesJson || ""));
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            toast.error("CONTRACT_REVIEW_RULES_JSON 必须是 JSON 对象");
+            return;
+          }
+          const obj = parsed as Record<string, unknown>;
+
+          const required = obj["required_clauses"];
+          if (required !== undefined && !Array.isArray(required)) {
+            toast.error("CONTRACT_REVIEW_RULES_JSON.required_clauses 必须是数组");
+            return;
+          }
+
+          const riskKeywords = obj["risk_keywords"];
+          if (riskKeywords !== undefined && !Array.isArray(riskKeywords)) {
+            toast.error("CONTRACT_REVIEW_RULES_JSON.risk_keywords 必须是数组");
+            return;
+          }
+
+          if (Array.isArray(riskKeywords)) {
+            const allowed = new Set(["low", "medium", "high", ""]);
+            for (const it of riskKeywords) {
+              if (!it || typeof it !== "object" || Array.isArray(it)) continue;
+              const anyIt = it as any;
+              const sev = String(anyIt?.severity ?? "").trim().toLowerCase();
+              if (!allowed.has(sev)) {
+                toast.error(`CONTRACT_REVIEW_RULES_JSON.risk_keywords.severity 无效：${sev}`);
+                return;
+              }
+            }
+          }
+        } catch {
+          toast.error("CONTRACT_REVIEW_RULES_JSON 必须是合法 JSON");
+          return;
         }
       }
 
@@ -1464,6 +1514,15 @@ export default function SettingsPage() {
                 />
               </button>
             </div>
+
+            <Textarea
+              label="CONTRACT_REVIEW_RULES_JSON"
+              placeholder='例如：{ "required_clauses":[{"name":"争议解决","patterns":["仲裁","诉讼"]}], "risk_keywords":[{"keyword":"不可撤销","severity":"medium"}] }'
+              value={settings.contractReviewRulesJson}
+              onChange={(e) =>
+                setSettings({ ...settings, contractReviewRulesJson: e.target.value })
+              }
+            />
           </div>
             </Card>
           </>
@@ -1519,6 +1578,16 @@ export default function SettingsPage() {
                 />
               </button>
             </div>
+
+            <Textarea
+              label="CONSULT_REVIEW_SLA_JSON"
+              placeholder='例如：{"pending_sla_minutes":1440,"claimed_sla_minutes":720,"remind_before_minutes":60}'
+              value={(settings as any).consultReviewSlaJson}
+              onChange={(e) =>
+                setSettings({ ...(settings as any), consultReviewSlaJson: e.target.value })
+              }
+              rows={5}
+            />
           </div>
             </Card>
 

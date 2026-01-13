@@ -79,6 +79,174 @@
 
 ---
 
+## 运维 Runbook（DB 备份/恢复/演练/迁移发布/回滚）
+
+> 本 Runbook 复用仓库内脚本：`backend/scripts/db_backup.py`、`db_restore.py`、`db_drill.py`。
+
+### 0) 前置检查
+
+- DB 连接以 `DATABASE_URL` 为准（默认 SQLite：`sqlite+aiosqlite:///./data/app.db`）。
+- PostgreSQL 备份/恢复依赖：
+  - `pg_dump` / `pg_restore` 在 PATH 中可用（脚本会检查）。
+- 建议在 `backend/` 目录执行。
+
+---
+
+### 1) 备份（Backup）
+
+#### 1.1 SQLite 备份
+
+```bash
+cd backend
+py scripts/db_backup.py
+```
+
+默认输出到：
+
+- `backend/backups/sqlite_YYYYMMDD_HHMMSS.db`
+
+#### 1.2 PostgreSQL 备份（建议带连通性校验）
+
+```bash
+cd backend
+set DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/dbname
+py scripts/db_backup.py --verify
+```
+
+默认输出到：
+
+- `backend/backups/postgres_YYYYMMDD_HHMMSS.dump`（pg_dump custom format）
+
+保留策略（可选）：
+
+```bash
+cd backend
+py scripts/db_backup.py --retention-count 20
+py scripts/db_backup.py --retention-days 7
+```
+
+建议默认保留策略（可作为生产基线）：
+
+- 日常备份：`--retention-days 7`（保留最近 7 天）
+- 关键节点（发布前/大迁移前）额外保留：`--retention-count 20`（保留最近 20 份）
+
+恢复演练周期建议（强烈推荐）：
+
+- 至少每月执行 1 次 drill restore（在独立 drill DB/临时 sqlite 文件上），确保备份文件与恢复链路有效。
+- 演练通过后再进行“迁移发布/大版本升级”。
+
+本仓库示例（已执行一次 drill 并归档）：
+
+- `docs/_archive/DB_DRILL_REPORT_2026-01-13.md`
+
+---
+
+### 2) 恢复（Restore）
+
+#### 2.1 SQLite 恢复（覆盖目标 DB）
+
+```bash
+cd backend
+py scripts/db_restore.py backups/sqlite_YYYYMMDD_HHMMSS.db --force
+```
+
+说明：
+
+- 不加 `--force` 时，如果目标 DB 已存在会拒绝覆盖。
+
+#### 2.2 PostgreSQL 恢复（高风险操作：会清理目标库对象）
+
+```bash
+cd backend
+set DATABASE_URL=postgresql+asyncpg://user:pass@host:5432/dbname
+py scripts/db_restore.py backups/postgres_YYYYMMDD_HHMMSS.dump --verify
+```
+
+说明：
+
+- 内部使用 `pg_restore --clean --if-exists`，会清理目标库对象。
+- 强烈建议只对“明确的目标环境库”操作，避免误伤生产主库。
+
+---
+
+### 3) 恢复演练（Drill Restore）
+
+目标：不要在主库上做恢复，通过 drill 验证：
+
+- 备份文件可用
+- 恢复链路可用
+- `init_db()` 能在恢复后的库上正常运行（验证 schema/bootstrap）
+
+#### 3.1 SQLite drill（默认恢复到临时 sqlite 文件）
+
+```bash
+cd backend
+py scripts/db_drill.py
+```
+
+#### 3.2 PostgreSQL drill（必须提供独立 drill DB）
+
+```bash
+cd backend
+set DATABASE_URL=postgresql+asyncpg://prod_user:prod_pass@prod_host:5432/prod_db
+py scripts/db_drill.py --drill-database-url postgresql+asyncpg://drill_user:drill_pass@drill_host:5432/drill_db --verify
+```
+
+---
+
+### 4) 迁移发布（Deploy with migrations）
+
+建议发布流程：
+
+1. 备份（生产必做）
+2. 执行迁移：`alembic upgrade head`
+3. 再滚动发布 backend（K8s/Compose）
+
+命令：
+
+```bash
+cd backend
+py scripts/alembic_cmd.py upgrade head
+```
+
+生产门禁补充：
+
+- `DEBUG=false` 时后端启动会检查 DB 是否在 Alembic `head`：
+  - 不在 head：启动失败并提示 upgrade 命令
+  - 若 DB 结构正确但没有 alembic 版本记录：可 `stamp head`（谨慎）
+
+```bash
+cd backend
+py scripts/alembic_cmd.py stamp head
+```
+
+---
+
+### 5) 回滚策略（Rollback）
+
+优先级（推荐从上到下）：
+
+1. 应用回滚（推荐）
+
+- 回滚到上一版本 tag/镜像
+- DB 不回滚（长期建议迁移尽量向前兼容）
+
+2. 数据回滚（通过备份恢复）
+
+- SQLite：`db_restore.py` + `--force`
+- PostgreSQL：`db_restore.py`（会 clean；务必对准目标库）
+
+3. Schema 回滚（谨慎使用）
+
+```bash
+cd backend
+py scripts/alembic_cmd.py downgrade -1
+```
+
+说明：
+
+- downgrade 未必可逆（尤其涉及数据迁移/字段语义变化），只作为最后手段。
+
 ## ER 图
 
 - 建议后续补充（可由 SQLAlchemy model 自动生成）。

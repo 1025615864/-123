@@ -4,7 +4,7 @@ import logging
 import asyncio
 import os
 import time
-from sqlalchemy import select
+from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
@@ -289,6 +289,42 @@ async def lifespan(app: FastAPI):
             )
         )
 
+    review_sla_enabled_raw = os.getenv("REVIEW_TASK_SLA_JOB_ENABLED", "").strip().lower()
+    review_sla_enabled_flag = review_sla_enabled_raw in {"1", "true", "yes", "on"}
+    review_sla_enabled = bool(review_sla_enabled_flag) or bool(settings.debug)
+    if (not settings.debug) and (not redis_connected):
+        review_sla_enabled = False
+
+    async def _review_task_sla_job_wrapper() -> object:
+        start = time.perf_counter()
+        ok = True
+        try:
+            async with AsyncSessionLocal() as session:
+                from .services.review_task_sla_service import scan_and_notify_review_task_sla
+
+                return await scan_and_notify_review_task_sla(session)
+        except Exception:
+            ok = False
+            raise
+        finally:
+            prometheus_metrics.record_job(
+                name="review_task_sla",
+                ok=bool(ok),
+                duration_seconds=max(0.0, float(time.perf_counter() - start)),
+            )
+
+    review_sla_task: asyncio.Task[None] | None = None
+    if review_sla_enabled:
+        interval_seconds = float(os.getenv("REVIEW_TASK_SLA_SCAN_INTERVAL_SECONDS", "60").strip() or "60")
+        review_sla_task = asyncio.create_task(
+            runner.run(
+                lock_key="locks:review_task_sla",
+                lock_ttl_seconds=60,
+                interval_seconds=interval_seconds,
+                job=_review_task_sla_job_wrapper,
+            )
+        )
+
     logger.info("数据库初始化完成")
     if ai is not None:
         logger.info("AI助手模块已启用")
@@ -298,7 +334,7 @@ async def lifespan(app: FastAPI):
     yield
 
     stop_event.set()
-    for t in (scheduled_task, rss_task, news_ai_task, wechatpay_task, settlement_task):
+    for t in (scheduled_task, rss_task, news_ai_task, wechatpay_task, settlement_task, review_sla_task):
         if t is None:
             continue
         _ = t.cancel()
@@ -467,6 +503,59 @@ async def sitemap_xml():
         "/privacy",
         "/ai-disclaimer",
     ]
+
+    try:
+        from .models.news import News, NewsTopic
+
+        async with AsyncSessionLocal() as session:
+            topics_res = await session.execute(
+                select(NewsTopic.id)
+                .where(NewsTopic.is_active == True)
+                .order_by(desc(NewsTopic.sort_order), desc(NewsTopic.id))
+            )
+            topic_rows = topics_res.all()
+            topic_ids: list[int] = []
+            for (tid,) in topic_rows:
+                try:
+                    if tid is None:
+                        continue
+                    topic_ids.append(int(tid))
+                except Exception:
+                    continue
+            for tid in topic_ids:
+                paths.append(f"/news/topics/{tid}")
+
+            news_limit = 500
+            news_res = await session.execute(
+                select(News.id)
+                .where(News.is_published == True, News.review_status == "approved")
+                .order_by(desc(News.published_at), desc(News.created_at), desc(News.id))
+                .limit(int(news_limit))
+            )
+            news_rows = news_res.all()
+            news_ids: list[int] = []
+            for (nid,) in news_rows:
+                try:
+                    if nid is None:
+                        continue
+                    news_ids.append(int(nid))
+                except Exception:
+                    continue
+            for nid in news_ids:
+                paths.append(f"/news/{nid}")
+    except Exception:
+        logger.exception("failed to build dynamic sitemap urls")
+
+    uniq_paths: list[str] = []
+    seen: set[str] = set()
+    for p in paths:
+        if not isinstance(p, str):
+            continue
+        if p in seen:
+            continue
+        seen.add(p)
+        uniq_paths.append(p)
+    paths = uniq_paths
 
     def _loc(p: str) -> str:
         if not p.startswith("/"):

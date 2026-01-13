@@ -41,7 +41,10 @@ test('documents: 文书生成-保存-导出PDF闭环', async ({ page, request })
   expect((await genPdfResp.body()).byteLength).toBeGreaterThan(500)
 
   await expect(page.getByRole('dialog')).toBeVisible({ timeout: 12_000 })
-  await page.getByRole('button', { name: '关闭' }).click()
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: /^(关闭|Close)$/i })
+    .click()
 
   const saveRespP = page.waitForResponse(
     (r) => r.request().method() === 'POST' && r.url().includes('/api/documents/save'),

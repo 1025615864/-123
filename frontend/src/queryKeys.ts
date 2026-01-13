@@ -207,6 +207,8 @@ export const queryKeys = {
 
   aiOpsStatus: () => ["ai-ops-status"] as const,
 
+  publicAiStatus: () => ["public-ai-status"] as const,
+
   forumPost: (postId: string | undefined) => ["forum-post", postId] as const,
   forumPostComments: (postId: string | undefined) =>
     ["forum-post-comments", postId] as const,

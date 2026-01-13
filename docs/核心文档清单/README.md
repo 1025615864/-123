@@ -213,6 +213,11 @@ docker compose -f docker-compose.prod.yml up -d --build
 - **生产环境密钥强校验**：当 `DEBUG=false` 时，后端会校验 `SECRET_KEY` 长度与安全性、并要求 `PAYMENT_WEBHOOK_SECRET` 必填。
 - **周期任务多副本**：生产多副本部署务必提供 Redis（用于分布式锁），避免重复跑任务（News 定时发布、RSS ingest、News AI pipeline、结算等）。
 
+推荐进一步阅读（工程侧权威入口）：
+
+- `../TECH_SPEC.md`：环境变量、生产门禁、运行模式矩阵。
+- `../DATABASE.md`：迁移规范与 DB 运维 Runbook（备份/恢复/演练/回滚）。
+
 ---
 
 ## 6. 常用命令（建议给专家快速验证）

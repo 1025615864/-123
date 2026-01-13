@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, Link, useLocation, useNavigate } from "react-router-dom";
 import {
   Scale,
@@ -14,6 +14,7 @@ import {
   Newspaper,
   ClipboardList,
 } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
 import { Button, LinkButton, Modal } from "../components/ui";
@@ -21,8 +22,10 @@ import NotificationBell from "./NotificationBell";
 import { MobileNav } from "./MobileNav";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 import { LanguageSwitcher } from "./LanguageSwitcher";
+import useWebSocket from "../hooks/useWebSocket";
 import { useIsMobile } from "../hooks/useMediaQuery";
 import { useTranslation } from "../contexts/LanguageContext";
+import { queryKeys } from "../queryKeys";
 import {
   isRouteActive,
   primaryNavItems,
@@ -88,10 +91,25 @@ export default function Layout() {
   const { isAuthenticated, user, logout } = useAuth();
   const { actualTheme } = useTheme();
   const { t } = useTranslation();
+  const queryClient = useQueryClient();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [toolsMenuOpen, setToolsMenuOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   const isMobile = useIsMobile();
+
+  const { connect: wsConnect, disconnect: wsDisconnect } = useWebSocket({
+    onMessage: (msg) => {
+      if (msg?.type !== "notification") return;
+      queryClient.invalidateQueries({ queryKey: queryKeys.notificationsPreview(10) });
+      queryClient.invalidateQueries({ queryKey: ["notifications"] });
+      queryClient.invalidateQueries({ queryKey: ["notifications-preview"] });
+    },
+  });
+
+  const toolsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const toolsMenuRef = useRef<HTMLDivElement | null>(null);
+  const mobileButtonRef = useRef<HTMLButtonElement | null>(null);
+  const mobileMenuRef = useRef<HTMLDivElement | null>(null);
 
   const mobileMenuId = "layout-mobile-menu";
 
@@ -121,6 +139,17 @@ export default function Layout() {
       setOnboardingOpen(true);
     }
   }, [hideFooter, location.pathname, onboardingStorageKey]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      wsDisconnect();
+      return;
+    }
+    wsConnect();
+    return () => {
+      wsDisconnect();
+    };
+  }, [isAuthenticated, wsConnect, wsDisconnect]);
 
   useEffect(() => {
     const url = window.location.href;
@@ -161,6 +190,52 @@ export default function Layout() {
     setMobileMenuOpen(false);
   }, [location.pathname]);
 
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setToolsMenuOpen(false);
+      setMobileMenuOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    if (!toolsMenuOpen && !mobileMenuOpen) return;
+    const onMouseDown = (e: MouseEvent) => {
+      const target = e.target as Node | null;
+      if (!target) return;
+
+      if (toolsMenuOpen) {
+        const inToolsButton = toolsButtonRef.current?.contains(target) ?? false;
+        const inToolsMenu = toolsMenuRef.current?.contains(target) ?? false;
+        if (!inToolsButton && !inToolsMenu) {
+          setToolsMenuOpen(false);
+        }
+      }
+
+      if (mobileMenuOpen) {
+        const inMobileButton = mobileButtonRef.current?.contains(target) ?? false;
+        const inMobileMenu = mobileMenuRef.current?.contains(target) ?? false;
+        if (!inMobileButton && !inMobileMenu) {
+          setMobileMenuOpen(false);
+        }
+      }
+    };
+
+    document.addEventListener("mousedown", onMouseDown, true);
+    return () => document.removeEventListener("mousedown", onMouseDown, true);
+  }, [mobileMenuOpen, toolsMenuOpen]);
+
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [mobileMenuOpen]);
+
   const closeOnboarding = (nextPath?: string) => {
     try {
       localStorage.setItem(onboardingStorageKey, "1");
@@ -172,6 +247,8 @@ export default function Layout() {
       navigate(nextPath);
     }
   };
+
+  const year = new Date().getFullYear();
 
   return (
     <div
@@ -277,8 +354,8 @@ export default function Layout() {
         </div>
       </Modal>
 
-      <header className="sticky top-0 z-50 backdrop-blur-xl border-b flex justify-center bg-white/80 border-slate-200/60 dark:bg-slate-900/80 dark:border-white/5">
-        <div className="w-full max-w-7xl px-6 sm:px-8 lg:px-12">
+      <header className="sticky top-0 z-50 backdrop-blur-xl border-b shadow-sm shadow-slate-900/5 flex justify-center bg-white/80 border-slate-200/70 dark:bg-slate-900/75 dark:border-white/5 dark:shadow-black/20">
+        <div className="w-full max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between items-center h-[72px]">
             <Link
               to="/"
@@ -321,6 +398,7 @@ export default function Layout() {
                 <div className="relative">
                   <button
                     type="button"
+                    ref={toolsButtonRef}
                     onClick={() => setToolsMenuOpen((v) => !v)}
                     aria-expanded={toolsMenuOpen}
                     className={`text-sm font-medium transition-colors relative py-1 outline-none rounded-md focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900 ${
@@ -336,7 +414,10 @@ export default function Layout() {
                   </button>
 
                   {toolsMenuOpen ? (
-                    <div className="absolute left-1/2 -translate-x-1/2 mt-3 w-56 rounded-2xl border border-slate-200/70 bg-white shadow-xl shadow-slate-900/10 overflow-hidden dark:border-white/10 dark:bg-slate-900">
+                    <div
+                      ref={toolsMenuRef}
+                      className="absolute left-1/2 -translate-x-1/2 mt-3 w-56 rounded-2xl border border-slate-200/70 bg-white shadow-xl shadow-slate-900/10 overflow-hidden dark:border-white/10 dark:bg-slate-900"
+                    >
                       <div className="p-2">
                         {toolNavItems.map(({ path, label, icon: Icon }) => {
                           const active = isRouteActive(location.pathname, path);
@@ -442,6 +523,7 @@ export default function Layout() {
 
               <button
                 type="button"
+                ref={mobileButtonRef}
                 onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
                 aria-label={mobileMenuOpen ? t('layout.closeMenu') : t('layout.openMenu')}
                 aria-expanded={mobileMenuOpen}
@@ -461,7 +543,8 @@ export default function Layout() {
         {mobileMenuOpen && (
           <div
             id={mobileMenuId}
-            className="lg:hidden border-t animate-fade-in border-slate-200 bg-white/95 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-900/95"
+            ref={mobileMenuRef}
+            className="lg:hidden border-t animate-fade-in border-slate-200 bg-white/95 backdrop-blur-xl max-h-[calc(100dvh-72px)] overflow-auto overscroll-contain dark:border-slate-800 dark:bg-slate-900/95"
           >
             <div className="px-6 py-6 space-y-2">
               {mobileMenuItems.map(({ path, label, icon: Icon }) => {
@@ -495,7 +578,7 @@ export default function Layout() {
                     }}
                     className="py-3 justify-center"
                   >
-                    退出登录
+                    {t('common.logout')}
                   </Button>
                 ) : (
                   <div className="space-y-3">
@@ -533,7 +616,7 @@ export default function Layout() {
       >
         <div
           className={`w-full max-w-7xl px-4 sm:px-6 lg:px-8 ${
-            isChatRoute ? "py-4 md:py-6" : "py-8 md:py-12"
+            isChatRoute ? "py-3 md:py-5" : "py-6 md:py-10"
           } flex flex-col min-h-0 animate-fade-in`}
         >
           <Outlet />
@@ -544,8 +627,8 @@ export default function Layout() {
       {showMobileBottomNav && <MobileNav />}
 
       {!hideFooter && (
-        <footer className="mt-auto border-t border-slate-200 bg-slate-50 flex justify-center dark:border-slate-800 dark:bg-slate-900/50">
-          <div className="w-full max-w-7xl px-6 sm:px-10 lg:px-12 py-12">
+        <footer className="mt-auto border-t border-slate-200/70 bg-slate-50 flex justify-center dark:border-slate-800 dark:bg-slate-900/50">
+          <div className="w-full max-w-7xl px-4 sm:px-6 lg:px-8 py-12">
             <div className="grid grid-cols-1 md:grid-cols-4 gap-12">
               <div className="md:col-span-2">
                 <div className="flex items-center space-x-3 mb-6">
@@ -557,7 +640,7 @@ export default function Layout() {
                   </span>
                 </div>
                 <p className="text-slate-500 text-sm leading-relaxed mb-6 max-w-sm dark:text-slate-400">
-                  致力于让每一位公民都能享受到专业、便捷的法律服务。专业律师团队与先进AI技术相结合，为您保驾护航。
+                  {t('layout.footerDescription')}
                 </p>
                 <div className="flex space-x-3">
                   <a
@@ -608,7 +691,7 @@ export default function Layout() {
                   </li>
                   <li className="flex items-center space-x-3">
                     <Building2 className="h-4 w-4 text-blue-500" />
-                    <span>北京市朝阳区法律大厦A座</span>
+                    <span>{t('layout.address')}</span>
                   </li>
                 </ul>
               </div>
@@ -616,7 +699,7 @@ export default function Layout() {
 
             <div className="border-t border-slate-200 mt-12 pt-8 flex flex-col sm:flex-row justify-between items-center dark:border-slate-800">
               <p className="text-slate-400 text-sm">
-                © 2024 百姓法律助手. All rights reserved.
+                © {year} {t('layout.siteName')}. {t('layout.allRightsReserved')}
               </p>
               <div className="flex space-x-6 mt-4 sm:mt-0">
                 <Link

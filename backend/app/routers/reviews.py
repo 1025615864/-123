@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+import json
+import os
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -11,6 +13,7 @@ from ..database import get_db
 from ..models.consultation import Consultation
 from ..models.consultation_review import ConsultationReviewTask, ConsultationReviewVersion
 from ..models.payment import PaymentOrder, PaymentStatus
+from ..models.system import SystemConfig
 from ..models.user import User
 from ..services.settlement_service import settlement_service
 from ..schemas.consultation_review import (
@@ -24,9 +27,81 @@ from ..utils.deps import get_current_user, require_lawyer_verified
 
 router = APIRouter(prefix="/reviews", tags=["律师复核"])
 
+CONSULT_REVIEW_SLA_CONFIG_KEY = "CONSULT_REVIEW_SLA_JSON"
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _parse_int(value: object | None, default: int) -> int:
+    try:
+        if value is None:
+            return int(default)
+        if isinstance(value, bool):
+            return int(default)
+        if isinstance(value, int):
+            return int(value)
+        if isinstance(value, float):
+            return int(value)
+        s = str(value).strip()
+        if not s:
+            return int(default)
+        return int(float(s))
+    except Exception:
+        return int(default)
+
+
+async def _load_review_sla_config(db: AsyncSession) -> dict[str, object]:
+    raw = ""
+    try:
+        res = await db.execute(select(SystemConfig).where(SystemConfig.key == CONSULT_REVIEW_SLA_CONFIG_KEY))
+        cfg = res.scalar_one_or_none()
+        raw = str(getattr(cfg, "value", "") or "").strip() if cfg is not None else ""
+    except Exception:
+        raw = ""
+
+    if not raw:
+        raw = str(os.getenv(CONSULT_REVIEW_SLA_CONFIG_KEY, "") or "").strip()
+
+    if raw:
+        try:
+            obj_raw: object = json.loads(raw)
+            if isinstance(obj_raw, dict):
+                return dict(obj_raw)
+        except Exception:
+            pass
+
+    return {
+        "pending_sla_minutes": 24 * 60,
+        "claimed_sla_minutes": 12 * 60,
+        "remind_before_minutes": 60,
+    }
+
+
+def _compute_review_due_at(task: ConsultationReviewTask, cfg: dict[str, object]) -> datetime | None:
+    status = str(getattr(task, "status", "") or "").strip().lower()
+    if status == "submitted":
+        return None
+
+    created_at = getattr(task, "created_at", None)
+    claimed_at = getattr(task, "claimed_at", None)
+    base: datetime | None = None
+    if status == "claimed" and isinstance(claimed_at, datetime):
+        base = claimed_at
+    elif isinstance(created_at, datetime):
+        base = created_at
+
+    if base is None:
+        return None
+    if base.tzinfo is None:
+        base = base.replace(tzinfo=timezone.utc)
+
+    pending_minutes = _parse_int(cfg.get("pending_sla_minutes"), 24 * 60)
+    claimed_minutes = _parse_int(cfg.get("claimed_sla_minutes"), 12 * 60)
+    minutes = claimed_minutes if status == "claimed" else pending_minutes
+    minutes = max(1, int(minutes))
+    return base + timedelta(minutes=int(minutes))
 
 
 def _as_int(value: object | None) -> int | None:
@@ -104,8 +179,13 @@ async def get_review_task_for_consultation(
     if task is None:
         return ConsultationReviewTaskDetailResponse(task=None)
 
+    cfg = await _load_review_sla_config(db)
+    due_at = _compute_review_due_at(task, cfg)
+    now = _now()
+    is_overdue = bool(due_at is not None and now > due_at)
+
     latest_versions = await _build_latest_versions(db, [int(task.id)])
-    item = ConsultationReviewTaskItem.model_validate(task)
+    item = ConsultationReviewTaskItem.model_validate(task).model_copy(update={"due_at": due_at, "is_overdue": is_overdue})
     latest = latest_versions.get(int(task.id))
     if latest is not None:
         item = item.model_copy(update={"latest_version": latest})
@@ -157,12 +237,17 @@ async def lawyer_list_review_tasks(
     )
     tasks = res.scalars().all()
 
+    cfg = await _load_review_sla_config(db)
+    now = _now()
+
     task_ids = [int(t.id) for t in tasks]
     latest_versions = await _build_latest_versions(db, task_ids)
 
     items: list[ConsultationReviewTaskItem] = []
     for t in tasks:
-        item = ConsultationReviewTaskItem.model_validate(t)
+        due_at = _compute_review_due_at(t, cfg)
+        is_overdue = bool(due_at is not None and now > due_at)
+        item = ConsultationReviewTaskItem.model_validate(t).model_copy(update={"due_at": due_at, "is_overdue": is_overdue})
         latest = latest_versions.get(int(t.id))
         if latest is not None:
             item = item.model_copy(update={"latest_version": latest})
@@ -217,7 +302,10 @@ async def lawyer_claim_review_task(
 
     res2 = await db.execute(select(ConsultationReviewTask).where(ConsultationReviewTask.id == int(task_id)))
     task2 = res2.scalar_one()
-    return ConsultationReviewTaskItem.model_validate(task2)
+    cfg = await _load_review_sla_config(db)
+    due_at = _compute_review_due_at(task2, cfg)
+    is_overdue = bool(due_at is not None and _now() > due_at)
+    return ConsultationReviewTaskItem.model_validate(task2).model_copy(update={"due_at": due_at, "is_overdue": is_overdue})
 
 
 @router.post(
@@ -289,5 +377,10 @@ async def lawyer_submit_review_task(
     out_task = refreshed.scalar_one()
 
     latest = ConsultationReviewVersionItem.model_validate(version)
-    out_item = ConsultationReviewTaskItem.model_validate(out_task).model_copy(update={"latest_version": latest})
+    cfg = await _load_review_sla_config(db)
+    due_at = _compute_review_due_at(out_task, cfg)
+    is_overdue = bool(due_at is not None and _now() > due_at)
+    out_item = ConsultationReviewTaskItem.model_validate(out_task).model_copy(
+        update={"latest_version": latest, "due_at": due_at, "is_overdue": is_overdue}
+    )
     return out_item

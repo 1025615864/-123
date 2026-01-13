@@ -8,6 +8,7 @@ import PageHeader from "../components/PageHeader";
 import { Button, Card, EmptyState } from "../components/ui";
 import { useTheme } from "../contexts/ThemeContext";
 import { useAuth } from "../contexts/AuthContext";
+import { useLanguage } from "../contexts/LanguageContext";
 import { useToast } from "../hooks";
 import { getApiErrorMessage } from "../utils";
 
@@ -17,6 +18,7 @@ export default function VerifyEmailPage() {
   const toast = useToast();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const { t } = useLanguage();
 
   const token = useMemo(() => {
     const raw = String(searchParams.get("token") ?? "").trim();
@@ -38,8 +40,8 @@ export default function VerifyEmailPage() {
 
   useEffect(() => {
     if (!verifyQuery.error) return;
-    toast.error(getApiErrorMessage(verifyQuery.error, "邮箱验证失败"));
-  }, [toast, verifyQuery.error]);
+    toast.error(getApiErrorMessage(verifyQuery.error, t("verifyEmail.toastFailFallback")));
+  }, [t, toast, verifyQuery.error]);
 
   useEffect(() => {
     if (!verifyQuery.data) return;
@@ -51,12 +53,12 @@ export default function VerifyEmailPage() {
       return (
         <EmptyState
           icon={Mail}
-          title="缺少验证参数"
-          description="请从验证邮件中打开链接，或重新请求验证邮件。"
+          title={t("verifyEmail.missingTitle")}
+          description={t("verifyEmail.missingDescription")}
           tone={actualTheme}
           action={
             <Link to="/profile">
-              <Button>返回个人中心</Button>
+              <Button>{t("verifyEmail.backToProfile")}</Button>
             </Link>
           }
         />
@@ -69,7 +71,7 @@ export default function VerifyEmailPage() {
           <div className="w-12 h-12 rounded-full bg-amber-500/10 flex items-center justify-center">
             <Loader2 className="h-6 w-6 text-amber-600 animate-spin dark:text-amber-400" />
           </div>
-          <div className="text-sm text-slate-600 dark:text-white/60">验证中，请稍候...</div>
+          <div className="text-sm text-slate-600 dark:text-white/60">{t("verifyEmail.verifying")}</div>
         </div>
       );
     }
@@ -78,13 +80,13 @@ export default function VerifyEmailPage() {
       return (
         <EmptyState
           icon={AlertCircle}
-          title="邮箱验证失败"
-          description={getApiErrorMessage(verifyQuery.error, "链接无效或已过期")}
+          title={t("verifyEmail.failedTitle")}
+          description={getApiErrorMessage(verifyQuery.error, t("verifyEmail.failedDescriptionFallback"))}
           tone={actualTheme}
           action={
             <div className="flex flex-wrap items-center gap-2">
               <Link to="/profile">
-                <Button>返回个人中心</Button>
+                <Button>{t("verifyEmail.backToProfile")}</Button>
               </Link>
               <Button
                 variant="outline"
@@ -92,7 +94,7 @@ export default function VerifyEmailPage() {
                   navigate("/profile", { replace: true });
                 }}
               >
-                去重新发送
+                {t("verifyEmail.resend")}
               </Button>
             </div>
           }
@@ -103,16 +105,16 @@ export default function VerifyEmailPage() {
     return (
       <EmptyState
         icon={CheckCircle}
-        title="邮箱验证成功"
-        description={String(verifyQuery.data?.message || "你的邮箱已验证成功")}
+        title={t("verifyEmail.successTitle")}
+        description={String(verifyQuery.data?.message || t("verifyEmail.successDescriptionFallback"))}
         tone={actualTheme}
         action={
           <div className="flex flex-wrap items-center gap-2">
             <Link to="/profile">
-              <Button>返回个人中心</Button>
+              <Button>{t("verifyEmail.backToProfile")}</Button>
             </Link>
             <Link to="/login">
-              <Button variant="outline">去登录</Button>
+              <Button variant="outline">{t("verifyEmail.goLogin")}</Button>
             </Link>
           </div>
         }
@@ -123,9 +125,9 @@ export default function VerifyEmailPage() {
   return (
     <div className="space-y-10">
       <PageHeader
-        eyebrow="账户"
-        title="邮箱验证"
-        description="验证邮箱以提升账户安全与可恢复性"
+        eyebrow={t("verifyEmail.eyebrow")}
+        title={t("verifyEmail.title")}
+        description={t("verifyEmail.description")}
         layout="mdStart"
         tone={actualTheme}
       />
