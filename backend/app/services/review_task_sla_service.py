@@ -194,8 +194,11 @@ async def scan_and_notify_review_task_sla(db: AsyncSession) -> dict[str, int]:
     dialect_name = str(getattr(getattr(bind, "dialect", None), "name", "") or "")
 
     if dialect_name == "postgresql":
-        stmt = pg_insert(Notification).values(values).on_conflict_do_nothing(
-            index_elements=["user_id", "type", "dedupe_key"]
+        stmt = (
+            pg_insert(Notification)
+            .values(values)
+            .on_conflict_do_nothing(index_elements=["user_id", "type", "dedupe_key"])
+            .returning(Notification.user_id, Notification.title, Notification.content, Notification.link, Notification.dedupe_key)
         )
     else:
         stmt = sqlite_insert(Notification).values(values).on_conflict_do_nothing(
@@ -205,7 +208,12 @@ async def scan_and_notify_review_task_sla(db: AsyncSession) -> dict[str, int]:
     result = await db.execute(stmt)
     await db.commit()
 
-    inserted = int(getattr(result, "rowcount", 0) or 0)
+    inserted_rows: list[tuple[object, object, object, object, object]] = []
+    if dialect_name == "postgresql":
+        inserted_rows = cast(list[tuple[object, object, object, object, object]], list(result.all()))
+        inserted = int(len(inserted_rows))
+    else:
+        inserted = int(getattr(result, "rowcount", 0) or 0)
 
     logger.info(
         "review_task_sla scan done scanned=%s candidates=%s inserted=%s due_soon=%s overdue=%s",
@@ -215,6 +223,37 @@ async def scan_and_notify_review_task_sla(db: AsyncSession) -> dict[str, int]:
         due_soon,
         overdue,
     )
+
+    if inserted > 0:
+        try:
+            from . import websocket_service
+
+            if inserted_rows:
+                for user_id, title, content, link, dedupe_key in inserted_rows:
+                    uid = _parse_int(user_id, 0)
+                    if uid <= 0:
+                        continue
+                    _ = await websocket_service.notify_user(
+                        uid,
+                        websocket_service.MessageType.NOTIFICATION,
+                        str(title or ""),
+                        str(content or ""),
+                        data={"link": str(link or ""), "dedupe_key": str(dedupe_key or "")},
+                    )
+            else:
+                for v in values:
+                    uid = _parse_int(v.get("user_id"), 0)
+                    if uid <= 0:
+                        continue
+                    _ = await websocket_service.notify_user(
+                        uid,
+                        websocket_service.MessageType.NOTIFICATION,
+                        str(v.get("title") or ""),
+                        str(v.get("content") or ""),
+                        data={"link": str(v.get("link") or ""), "dedupe_key": str(v.get("dedupe_key") or "")},
+                    )
+        except Exception:
+            logger.exception("review_task_sla websocket notify failed")
 
     return {
         "scanned": int(scanned),

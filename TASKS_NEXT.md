@@ -101,6 +101,7 @@
     - 通知跳转：`/lawyer?tab=reviews`
     - env 开关：`REVIEW_TASK_SLA_JOB_ENABLED=1`
     - env 间隔：`REVIEW_TASK_SLA_SCAN_INTERVAL_SECONDS=60`
+    - 实时推送：写库后通过 WebSocket 推送 `notification`（在线用户即时刷新铃铛/列表）
   - [x] 已做：律师工作台支持 `tab=reviews` URL 参数，便于通知直达“复核任务”Tab
 
 ---
