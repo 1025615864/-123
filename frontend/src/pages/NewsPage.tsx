@@ -32,6 +32,7 @@ import api from "../api/client";
 import { useMediaQuery, usePrefetchLimiter, useToast } from "../hooks";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
+import { useLanguage } from "../contexts/LanguageContext";
 import { getApiErrorMessage } from "../utils";
 import { queryKeys } from "../queryKeys";
 
@@ -66,13 +67,14 @@ interface NewsListResponse {
 }
 
 function getRiskBadge(
-  riskLevel: string | null | undefined
+  riskLevel: string | null | undefined,
+  tr: (key: string) => string
 ): { variant: "warning" | "danger"; label: string } | null {
   const r = String(riskLevel ?? "")
     .trim()
     .toLowerCase();
-  if (r === "warning") return { variant: "warning", label: "注意" };
-  if (r === "danger") return { variant: "danger", label: "敏感" };
+  if (r === "warning") return { variant: "warning", label: tr("newsPage.riskWarning") };
+  if (r === "danger") return { variant: "danger", label: tr("newsPage.riskDanger") };
   return null;
 }
 
@@ -82,6 +84,7 @@ export default function NewsPage() {
   const toast = useToast();
   const queryClient = useQueryClient();
   const { prefetch } = usePrefetchLimiter();
+  const { t } = useLanguage();
   const location = useLocation();
   const navigate = useNavigate();
   const lastSyncedSearchRef = useRef<string>("");
@@ -625,7 +628,7 @@ export default function NewsPage() {
 
   const toggleFavorite = async (item: NewsListItem, opts?: { force?: boolean }) => {
     if (!isAuthenticated) {
-      toast.info("登录后可收藏");
+      toast.info(t("newsPage.loginToFavorite"));
       return;
     }
     if (!item || typeof item.id !== "number") return;
@@ -774,11 +777,13 @@ export default function NewsPage() {
         return { ...old, is_favorited: favorited, favorite_count: favoriteCount };
       });
 
-      const msg = payload?.message || (payload?.favorited ? "收藏成功" : "取消收藏");
+      const msg =
+        payload?.message ||
+        (payload?.favorited ? t("newsPage.favoriteSuccess") : t("newsPage.favoriteCancel"));
       toast.showToast("success", msg, {
         durationMs: 7000,
         action: {
-          label: "撤销",
+          label: t("newsPage.undo"),
           onClick: () => {
             void toggleFavorite(item, { force: true });
           },
@@ -789,7 +794,7 @@ export default function NewsPage() {
       const activeKey = isMobile ? infiniteQueryKey : listQueryKey;
       queryClient.setQueryData(activeKey, previousActive);
       queryClient.setQueryData(detailKey, previousDetail);
-      toast.error(getApiErrorMessage(e, "操作失败"));
+      toast.error(getApiErrorMessage(e, t("newsPage.actionFailed")));
     } finally {
       setPendingFavoriteIds((prev) => prev.filter((id) => id !== item.id));
     }
@@ -797,6 +802,7 @@ export default function NewsPage() {
 
   const renderNewsCard = (item: NewsListItem) => {
     const favLoading = pendingFavoriteIds.includes(item.id);
+    const riskBadge = getRiskBadge(item.ai_risk_level, t);
     return (
       <Link
         key={item.id}
@@ -831,14 +837,14 @@ export default function NewsPage() {
               <Badge variant="primary" size="sm" icon={Tag}>
                 {item.category}
               </Badge>
-              {getRiskBadge(item.ai_risk_level) ? (
-                <Badge variant={getRiskBadge(item.ai_risk_level)!.variant} size="sm">
-                  {getRiskBadge(item.ai_risk_level)!.label}
+              {riskBadge ? (
+                <Badge variant={riskBadge.variant} size="sm">
+                  {riskBadge.label}
                 </Badge>
               ) : null}
               {item.is_top ? (
                 <Badge variant="warning" size="sm">
-                  置顶
+                  {t("newsPage.pinned")}
                 </Badge>
               ) : null}
               {Array.isArray(item.ai_keywords) && item.ai_keywords.length > 0
@@ -858,7 +864,7 @@ export default function NewsPage() {
                 if (!riskNorm || riskNorm === "unknown") {
                   return (
                     <Badge variant="default" size="sm">
-                      AI生成中
+                      {t("newsPage.aiGenerating")}
                     </Badge>
                   );
                 }
@@ -888,19 +894,19 @@ export default function NewsPage() {
                       ? "border-amber-300 bg-amber-500/10 text-amber-700 dark:border-amber-500/30 dark:text-amber-300"
                       : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:bg-white/[0.02] dark:text-white/60 dark:hover:bg-white/[0.05]"
                   }`}
-                  title={item.is_favorited ? "取消收藏" : "收藏"}
+                  title={item.is_favorited ? t("newsPage.unfavorite") : t("newsPage.favorite")}
                 >
                   {favLoading ? (
                     <span className="h-3.5 w-3.5 rounded-full border-2 border-current border-t-transparent animate-spin" />
                   ) : (
                     <Bookmark className={`h-4 w-4 ${item.is_favorited ? "fill-amber-400" : ""}`} />
                   )}
-                  <span>{item.is_favorited ? "已收藏" : "收藏"}</span>
+                  <span>{item.is_favorited ? t("newsPage.favorited") : t("newsPage.favorite")}</span>
                   <span className="text-slate-400 dark:text-white/40">{Number(item.favorite_count || 0)}</span>
                 </button>
 
                 <div className="text-xs text-slate-500 dark:text-white/55">
-                  {mode === "favorites" ? "收藏夹" : ""}
+                  {mode === "favorites" ? t("newsPage.favoritesFolder") : ""}
                 </div>
               </div>
 
@@ -911,7 +917,7 @@ export default function NewsPage() {
                 </span>
                 <span className="flex items-center gap-2">
                   <Eye className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                  {item.view_count} 阅读
+                  {item.view_count} {t("newsPage.reads")}
                 </span>
               </div>
             </div>
@@ -925,9 +931,9 @@ export default function NewsPage() {
     <div className="space-y-12">
       <Card variant="surface" padding="md">
         <PageHeader
-          eyebrow="法律资讯"
-          title="法律新闻"
-          description="最新法律资讯、政策解读和案例分析"
+          eyebrow={t("newsPage.eyebrow")}
+          title={t("newsPage.title")}
+          description={t("newsPage.description")}
           layout="mdCenter"
           tone={actualTheme}
           right={
@@ -937,7 +943,7 @@ export default function NewsPage() {
                   icon={Search}
                   value={keyword}
                   onChange={(e) => setKeyword(e.target.value)}
-                  placeholder="搜索标题或摘要"
+                  placeholder={t("newsPage.searchPlaceholder")}
                   className="py-3 rounded-full"
                 />
               </div>
@@ -946,7 +952,7 @@ export default function NewsPage() {
                 className="rounded-full px-6 py-3 text-sm transition-all hover:shadow-sm"
                 icon={RefreshCw}
                 isLoading={listRefreshing}
-                loadingText="刷新中..."
+                loadingText={t("newsPage.refreshing")}
                 disabled={
                   listRefreshing ||
                   (isMobile && newsInfiniteQuery.isFetchingNextPage)
@@ -959,7 +965,7 @@ export default function NewsPage() {
                   void newsQuery.refetch();
                 }}
               >
-                刷新
+                {t("newsPage.refresh")}
               </Button>
               <LinkButton
                 to="/news/topics"
@@ -967,7 +973,7 @@ export default function NewsPage() {
                 className="rounded-full px-6 py-3 text-sm transition-all hover:shadow-sm"
                 icon={Layers}
               >
-                专题
+                {t("newsPage.topics")}
               </LinkButton>
               {isAuthenticated ? (
                 <LinkButton
@@ -976,7 +982,7 @@ export default function NewsPage() {
                   className="rounded-full px-6 py-3 text-sm transition-all hover:shadow-sm"
                   icon={Bell}
                 >
-                  我的订阅
+                  {t("newsPage.mySubscriptions")}
                 </LinkButton>
               ) : null}
             </div>
@@ -992,7 +998,7 @@ export default function NewsPage() {
               setMode((prev) => (prev === "recommended" ? "all" : "recommended"))
             }
           >
-            推荐
+            {t("newsPage.modeRecommended")}
           </Chip>
           {isAuthenticated ? (
             <Chip
@@ -1003,7 +1009,7 @@ export default function NewsPage() {
                 setMode((prev) => (prev === "favorites" ? "all" : "favorites"))
               }
             >
-              我的收藏
+              {t("newsPage.modeFavorites")}
             </Chip>
           ) : null}
           {isAuthenticated ? (
@@ -1015,7 +1021,7 @@ export default function NewsPage() {
                 setMode((prev) => (prev === "history" ? "all" : "history"))
               }
             >
-              最近浏览
+              {t("newsPage.modeHistory")}
             </Chip>
           ) : null}
           {isAuthenticated ? (
@@ -1027,11 +1033,12 @@ export default function NewsPage() {
                 setMode((prev) => (prev === "subscribed" ? "all" : "subscribed"))
               }
             >
-              订阅内容
+              {t("newsPage.modeSubscribed")}
             </Chip>
           ) : null}
           {displayCategories.map((cat) => {
             const active = (cat === "全部" && !category) || cat === category;
+            const displayLabel = cat === "全部" ? t("common.all") : cat;
             return (
               <Chip
                 key={cat}
@@ -1039,7 +1046,7 @@ export default function NewsPage() {
                 active={active}
                 onClick={() => setCategory(cat === "全部" ? null : cat)}
               >
-                {cat}
+                {displayLabel}
               </Chip>
             );
           })}
@@ -1048,34 +1055,34 @@ export default function NewsPage() {
         <div className="mt-6 grid grid-cols-1 md:grid-cols-4 gap-3">
           <div>
             <label className="block text-sm font-medium text-slate-700 dark:text-white/70 mb-2">
-              AI 风险
+              {t("newsPage.aiRisk")}
             </label>
             <select
               value={riskLevel}
               onChange={(e) => setRiskLevel(e.target.value)}
               className="w-full px-4 py-3 rounded-lg border border-slate-200 bg-white text-slate-900 outline-none transition hover:border-slate-300 focus-visible:border-blue-500 focus-visible:ring-2 focus-visible:ring-blue-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:hover:border-slate-600 dark:focus-visible:ring-offset-slate-900"
             >
-              <option value="all">全部</option>
-              <option value="unknown">未知</option>
-              <option value="safe">安全</option>
-              <option value="warning">注意</option>
-              <option value="danger">敏感</option>
+              <option value="all">{t("newsPage.riskAll")}</option>
+              <option value="unknown">{t("newsPage.riskUnknown")}</option>
+              <option value="safe">{t("newsPage.riskSafe")}</option>
+              <option value="warning">{t("newsPage.riskWarning")}</option>
+              <option value="danger">{t("newsPage.riskDanger")}</option>
             </select>
           </div>
           <Input
-            label="来源站点"
+            label={t("newsPage.sourceSite")}
             value={sourceSite}
             onChange={(e) => setSourceSite(e.target.value)}
-            placeholder="例如：court.gov.cn"
+            placeholder={t("newsPage.sourceSitePlaceholder")}
           />
           <Input
-            label="从"
+            label={t("newsPage.from")}
             type="date"
             value={from}
             onChange={(e) => setFrom(e.target.value)}
           />
           <Input
-            label="到"
+            label={t("newsPage.to")}
             type="date"
             value={to}
             onChange={(e) => setTo(e.target.value)}
@@ -1089,14 +1096,14 @@ export default function NewsPage() {
               size="sm"
               onClick={() => applyQuickRange(7)}
             >
-              近 7 天
+              {t("newsPage.last7Days")}
             </Button>
             <Button
               variant={quick30Active ? "secondary" : "outline"}
               size="sm"
               onClick={() => applyQuickRange(30)}
             >
-              近 30 天
+              {t("newsPage.last30Days")}
             </Button>
           </div>
           <Button
@@ -1104,7 +1111,7 @@ export default function NewsPage() {
             disabled={!hasActiveFilters}
             onClick={clearFilters}
           >
-            清空筛选
+            {t("newsPage.clearFilters")}
           </Button>
         </div>
       </Card>
@@ -1115,7 +1122,7 @@ export default function NewsPage() {
             <div className="flex items-center gap-2">
               <TrendingUp className="h-5 w-5 text-amber-600 dark:text-amber-400" />
               <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
-                热门新闻
+                {t("newsPage.hotNews")}
               </h2>
             </div>
 
@@ -1125,14 +1132,14 @@ export default function NewsPage() {
                 active={hotDays === 7}
                 onClick={() => setHotDays(7)}
               >
-                近7天
+                {t("newsPage.hotRange7")}
               </Chip>
               <Chip
                 size="sm"
                 active={hotDays === 30}
                 onClick={() => setHotDays(30)}
               >
-                近30天
+                {t("newsPage.hotRange30")}
               </Chip>
             </div>
           </div>
@@ -1142,7 +1149,7 @@ export default function NewsPage() {
               <ListSkeleton count={4} />
             ) : (hotNewsQuery.data ?? []).length === 0 ? (
               <div className="text-sm text-slate-600 dark:text-white/45">
-                暂无热门新闻
+                {t("newsPage.noHotNews")}
               </div>
             ) : (
               <div className="divide-y divide-slate-200/70 dark:divide-white/10">
@@ -1165,14 +1172,15 @@ export default function NewsPage() {
                         <Badge variant="primary" size="sm" icon={Tag}>
                           {item.category}
                         </Badge>
-                        {getRiskBadge(item.ai_risk_level) ? (
-                          <Badge
-                            variant={getRiskBadge(item.ai_risk_level)!.variant}
-                            size="sm"
-                          >
-                            {getRiskBadge(item.ai_risk_level)!.label}
-                          </Badge>
-                        ) : null}
+                        {(() => {
+                          const rb = getRiskBadge(item.ai_risk_level, t)
+                          if (!rb) return null
+                          return (
+                            <Badge variant={rb.variant} size="sm">
+                              {rb.label}
+                            </Badge>
+                          )
+                        })()}
                         {Array.isArray(item.ai_keywords) && item.ai_keywords.length > 0
                           ? item.ai_keywords.slice(0, 2).map((k, kIdx) => (
                               <Badge key={`${item.id}-hot-kw-${kIdx}`} variant="info" size="sm">
@@ -1190,7 +1198,7 @@ export default function NewsPage() {
                           if (!riskNorm || riskNorm === "unknown") {
                             return (
                               <Badge variant="default" size="sm">
-                                AI生成中
+                                {t("newsPage.aiGenerating")}
                               </Badge>
                             );
                           }
@@ -1219,8 +1227,8 @@ export default function NewsPage() {
       ) : news.length === 0 ? (
         <EmptyState
           icon={Newspaper}
-          title="暂无符合条件的新闻"
-          description="试试切换分类或修改搜索关键词"
+          title={t("newsPage.emptyTitle")}
+          description={t("newsPage.emptyDescription")}
         />
       ) : (
         <VirtualWindowList
@@ -1255,17 +1263,17 @@ export default function NewsPage() {
                 disabled={newsInfiniteQuery.isFetchingNextPage}
                 onClick={() => newsInfiniteQuery.fetchNextPage()}
                 isLoading={newsInfiniteQuery.isFetchingNextPage}
-                loadingText="加载更多中..."
+                loadingText={t("newsPage.loadingMore")}
               >
-                加载更多
+                {t("newsPage.loadMore")}
               </Button>
               <div className="text-xs text-slate-500 dark:text-white/55">
-                已加载 {news.length} / {total}
+                {t("newsPage.loadedPrefix")} {news.length} / {total}
               </div>
             </div>
           ) : (
             <div className="flex justify-center pt-8 text-xs text-slate-500 dark:text-white/55">
-              已加载全部
+              {t("newsPage.loadedAll")}
             </div>
           )}
         </div>

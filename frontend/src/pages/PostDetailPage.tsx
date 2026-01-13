@@ -61,6 +61,7 @@ import RichTextEditor from "../components/RichTextEditor";
 import { getApiErrorMessage } from "../utils";
 import { queryKeys } from "../queryKeys";
 import { useTheme } from "../contexts/ThemeContext";
+import { useLanguage } from "../contexts/LanguageContext";
 
 interface Author {
   id: number;
@@ -264,6 +265,7 @@ export default function PostDetailPage() {
   const { isAuthenticated, user } = useAuth();
   const { actualTheme } = useTheme();
   const toast = useToast();
+  const { t } = useLanguage();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
@@ -344,7 +346,7 @@ export default function PostDetailPage() {
       const res = await api.delete(`/forum/posts/${postId}`);
       return res.data as { message?: string };
     },
-    errorMessageFallback: "删除失败，请稍后重试",
+    errorMessageFallback: t("postDetailPage.deletePostFailedFallback"),
     onSuccess: async () => {
       setConfirmDeletePost(false);
       const id = postId;
@@ -354,10 +356,10 @@ export default function PostDetailPage() {
           queryKey: queryKeys.forumPostComments(id),
         });
       }
-      toast.showToast("success", "已移入回收站", {
+      toast.showToast("success", t("postDetailPage.movedToRecycleBin"), {
         durationMs: 7000,
         action: {
-          label: "撤销",
+          label: t("postDetailPage.undo"),
           onClick: () => {
             if (!id) return;
             void (async () => {
@@ -367,9 +369,9 @@ export default function PostDetailPage() {
                   queryKey: queryKeys.forumPostsRoot(),
                 });
                 navigate(`/forum/post/${id}`);
-                toast.success("已撤销删除");
+                toast.success(t("postDetailPage.undoDeleteSuccess"));
               } catch (e) {
-                toast.error(getApiErrorMessage(e, "撤销失败"));
+                toast.error(getApiErrorMessage(e, t("postDetailPage.undoFailed")));
               }
             })();
           },
@@ -471,7 +473,7 @@ export default function PostDetailPage() {
       const res = await api.post(`/forum/comments/${commentId}/like`);
       return res.data as { liked: boolean; like_count: number };
     },
-    errorMessageFallback: "操作失败，请稍后重试",
+    errorMessageFallback: t("postDetailPage.actionFailedRetry"),
     onMutate: async (commentId) => {
       setPendingCommentLikes((prev) => ({ ...prev, [commentId]: true }));
       const previousCache = queryClient.getQueryData<
@@ -531,11 +533,13 @@ export default function PostDetailPage() {
         }
       );
 
-      const msg = result.liked ? "已点赞" : "已取消点赞";
+      const msg = result.liked
+        ? t("postDetailPage.toastLiked")
+        : t("postDetailPage.toastUnliked");
       toast.showToast("success", msg, {
         durationMs: 5000,
         action: {
-          label: "撤销",
+          label: t("postDetailPage.undo"),
           onClick: () => {
             commentLikeMutation.mutate(commentId);
           },
@@ -574,7 +578,7 @@ export default function PostDetailPage() {
       const res = await api.delete(`/forum/comments/${commentId}`);
       return res.data as { message?: string };
     },
-    errorMessageFallback: "删除失败，请稍后重试",
+    errorMessageFallback: t("postDetailPage.deleteCommentFailedFallback"),
     onMutate: async (commentId) => {
       setPendingCommentDeletes((prev) => ({ ...prev, [commentId]: true }));
       await queryClient.cancelQueries({ queryKey: commentsQueryKey });
@@ -648,10 +652,10 @@ export default function PostDetailPage() {
     },
     onSuccess: async (_data, commentId) => {
       if (!postId) return;
-      toast.showToast("success", "已删除", {
+      toast.showToast("success", t("postDetailPage.deleted"), {
         durationMs: 7000,
         action: {
-          label: "撤销",
+          label: t("postDetailPage.undo"),
           onClick: () => {
             const id = postId;
             void (async () => {
@@ -663,9 +667,9 @@ export default function PostDetailPage() {
                   }),
                   queryClient.invalidateQueries({ queryKey: postQueryKey }),
                 ]);
-                toast.success("已撤销删除");
+                toast.success(t("postDetailPage.undoDeleteSuccess"));
               } catch (e) {
-                toast.error(getApiErrorMessage(e, "撤销失败"));
+                toast.error(getApiErrorMessage(e, t("postDetailPage.undoFailed")));
               }
             })();
           },
@@ -837,7 +841,7 @@ export default function PostDetailPage() {
           const ok2 = scrollToEl(targetDomId);
           if (!ok2 && !commentJumpHintShownRef.current) {
             commentJumpHintShownRef.current = true;
-            toast.info("已打开帖子，但指定评论可能仍在审核、已被驳回或已删除");
+            toast.info(t("postDetailPage.commentJumpHint"));
           }
         }, 500);
       }
@@ -853,7 +857,7 @@ export default function PostDetailPage() {
           const ok2 = scrollToEl(id);
           if (!ok2 && !commentJumpHintShownRef.current) {
             commentJumpHintShownRef.current = true;
-            toast.info("已打开帖子，但指定评论可能仍在审核、已被驳回或已删除");
+            toast.info(t("postDetailPage.commentJumpHint"));
           }
         }, 400);
       }
@@ -875,7 +879,7 @@ export default function PostDetailPage() {
       const res = await api.post(`/forum/posts/${postId}/restore`);
       return res.data as { message?: string };
     },
-    errorMessageFallback: "恢复失败，请稍后重试",
+    errorMessageFallback: t("postDetailPage.restoreFailedFallback"),
     onSuccess: async () => {
       if (!postId) return;
       await Promise.all([
@@ -884,7 +888,7 @@ export default function PostDetailPage() {
           queryKey: queryKeys.forumPost(postId),
         }),
       ]);
-      toast.success("已恢复");
+      toast.success(t("postDetailPage.restored"));
       navigate(`/forum/post/${postId}`);
     },
   });
@@ -894,9 +898,9 @@ export default function PostDetailPage() {
       const res = await api.delete(`/forum/posts/${postId}/purge`);
       return res.data as { message?: string };
     },
-    errorMessageFallback: "永久删除失败，请稍后重试",
+    errorMessageFallback: t("postDetailPage.purgeFailedFallback"),
     onSuccess: async () => {
-      toast.success("已永久删除");
+      toast.success(t("postDetailPage.purged"));
       navigate("/forum/recycle-bin");
     },
   });
@@ -909,7 +913,7 @@ export default function PostDetailPage() {
       const res = await api.post(`/forum/posts/${postId}/like`);
       return res.data as { liked: boolean; like_count: number };
     },
-    errorMessageFallback: "操作失败，请稍后重试",
+    errorMessageFallback: t("postDetailPage.actionFailedRetry"),
     onMutate: async () => {
       const previousState = postDetail;
       const previousCache = postId
@@ -949,11 +953,13 @@ export default function PostDetailPage() {
           : old
       );
 
-      const msg = result.liked ? "已点赞" : "已取消点赞";
+      const msg = result.liked
+        ? t("postDetailPage.toastLiked")
+        : t("postDetailPage.toastUnliked");
       toast.showToast("success", msg, {
         durationMs: 5000,
         action: {
-          label: "撤销",
+          label: t("postDetailPage.undo"),
           onClick: () => {
             likeMutation.mutate();
           },
@@ -983,7 +989,7 @@ export default function PostDetailPage() {
       const res = await api.post(`/forum/posts/${postId}/favorite`);
       return res.data as { favorited: boolean; favorite_count: number };
     },
-    errorMessageFallback: "操作失败，请稍后重试",
+    errorMessageFallback: t("postDetailPage.actionFailedRetry"),
     onMutate: async () => {
       const previousState = postDetail;
       const previousCache = postId
@@ -1044,11 +1050,13 @@ export default function PostDetailPage() {
           : old
       );
 
-      const msg = result.favorited ? "收藏成功" : "已取消收藏";
+      const msg = result.favorited
+        ? t("postDetailPage.toastFavorited")
+        : t("postDetailPage.toastUnfavorited");
       toast.showToast("success", msg, {
         durationMs: 7000,
         action: {
-          label: "撤销",
+          label: t("postDetailPage.undo"),
           onClick: () => {
             favoriteMutation.mutate();
           },
@@ -1078,7 +1086,7 @@ export default function PostDetailPage() {
       const res = await api.post(`/forum/posts/${postId}/reaction`, { emoji });
       return res.data as { reactions: ReactionCount[] };
     },
-    errorMessageFallback: "操作失败，请稍后重试",
+    errorMessageFallback: t("postDetailPage.actionFailedRetry"),
     onSuccess: (result) => {
       setPostDetail((prev) =>
         prev ? { ...prev, reactions: result.reactions } : prev
@@ -1098,7 +1106,7 @@ export default function PostDetailPage() {
       const res = await api.post(`/forum/posts/${postId}/comments`, payload);
       return res.data as { review_status?: string | null };
     },
-    errorMessageFallback: "发表评论失败，请稍后重试",
+    errorMessageFallback: t("postDetailPage.publishCommentFailedFallback"),
     onMutate: async (payload) => {
       if (!postId || !user)
         return {
@@ -1187,7 +1195,7 @@ export default function PostDetailPage() {
       ]);
 
       if (data?.review_status === "pending") {
-        toast.info("评论已提交审核，通过后将展示");
+        toast.info(t("postDetailPage.commentSubmittedPending"));
       }
     },
     onError: (err, _payload, ctx) => {
@@ -1209,7 +1217,7 @@ export default function PostDetailPage() {
 
   const handleLike = async () => {
     if (!isAuthenticated || !postId) {
-      toast.info("登录后可点赞");
+      toast.info(t("postDetailPage.loginToLike"));
       return;
     }
     if (likeMutation.isPending) return;
@@ -1218,7 +1226,7 @@ export default function PostDetailPage() {
 
   const handleFavorite = async () => {
     if (!isAuthenticated || !postId) {
-      toast.info("登录后可收藏");
+      toast.info(t("postDetailPage.loginToFavorite"));
       return;
     }
     if (favoriteMutation.isPending) return;
@@ -1255,7 +1263,7 @@ export default function PostDetailPage() {
     const showCommentGallery =
       !commentMarkdownHasImages && (comment.images?.length ?? 0) > 0;
     const authorName =
-      comment.author?.nickname || comment.author?.username || "匿名用户";
+      comment.author?.nickname || comment.author?.username || t("postDetailPage.anonymousUser");
     const indentClass = depth <= 0 ? "" : depth === 1 ? "ml-8" : "ml-14";
     const commentReviewStatus = comment.review_status || null;
     const canInteractWithComment =
@@ -1303,7 +1311,7 @@ export default function PostDetailPage() {
                   size="sm"
                   title={comment.review_reason || undefined}
                 >
-                  审核中
+                  {t("postDetailPage.reviewPending")}
                 </Badge>
               ) : null}
               {commentReviewStatus === "rejected" ? (
@@ -1312,7 +1320,7 @@ export default function PostDetailPage() {
                   size="sm"
                   title={comment.review_reason || undefined}
                 >
-                  已驳回
+                  {t("postDetailPage.reviewRejected")}
                 </Badge>
               ) : null}
               <span className="text-slate-400 text-xs dark:text-white/30">
@@ -1337,7 +1345,7 @@ export default function PostDetailPage() {
                     className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-900 dark:text-white/40 dark:hover:text-white"
                   >
                     <Reply className="h-3.5 w-3.5" />
-                    回复
+                    {t("postDetailPage.reply")}
                   </button>
                 ) : null}
 
@@ -1373,14 +1381,14 @@ export default function PostDetailPage() {
                     }}
                     disabled={deleteLoading}
                     className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-red-600 dark:text-white/40 dark:hover:text-red-300 disabled:opacity-60 disabled:cursor-not-allowed"
-                    title="删除"
+                    title={t("common.delete")}
                   >
                     {deleteLoading ? (
                       <span className="h-3.5 w-3.5 rounded-full border-2 border-current border-t-transparent animate-spin" />
                     ) : (
                       <Trash2 className="h-3.5 w-3.5" />
                     )}
-                    删除
+                    {t("common.delete")}
                   </button>
                 ) : null}
               </div>
@@ -1457,16 +1465,16 @@ export default function PostDetailPage() {
     return (
       <EmptyState
         icon={Trash2}
-        title="请先登录"
-        description="登录后可查看回收站帖子"
+        title={t("postDetailPage.loginRequiredTitle")}
+        description={t("postDetailPage.loginRequiredDescription")}
         tone={actualTheme}
         action={
           <div className="flex flex-col sm:flex-row gap-3">
             <Link to={`/login?return_to=${encodeURIComponent(redirect)}`}>
-              <Button>去登录</Button>
+              <Button>{t("postDetailPage.goLogin")}</Button>
             </Link>
             <Link to="/forum">
-              <Button variant="outline">返回论坛</Button>
+              <Button variant="outline">{t("postDetailPage.backToForum")}</Button>
             </Link>
           </div>
         }
@@ -1480,13 +1488,17 @@ export default function PostDetailPage() {
     const isForbidden = status === 403;
     const isNotFound = status === 404;
     const hint = isForbidden
-      ? "该内容可能正在审核中或已被驳回，仅作者或管理员可查看"
+      ? t("postDetailPage.hintForbidden")
       : isNotFound
-      ? "帖子不存在，或你暂无权限查看（可能正在审核中/已被驳回/已被删除）"
-      : "帖子不存在或已被删除";
+      ? t("postDetailPage.hintNotFound")
+      : t("postDetailPage.hintDeleted");
 
     const redirect = `${location.pathname}${location.search}`
-    const title = isForbidden ? "暂无权限" : isNotFound ? "帖子不存在" : "加载失败"
+    const title = isForbidden
+      ? t("postDetailPage.noPermissionTitle")
+      : isNotFound
+        ? t("postDetailPage.notFoundTitle")
+        : t("postDetailPage.loadFailedTitle")
     const desc = detail ? `${hint}（${String(detail)}）` : hint
 
     return (
@@ -1499,11 +1511,13 @@ export default function PostDetailPage() {
           <div className="flex flex-col sm:flex-row gap-3">
             {!isAuthenticated ? (
               <Link to={`/login?return_to=${encodeURIComponent(redirect)}`}>
-                <Button>登录后再试</Button>
+                <Button>{t("postDetailPage.loginAndRetry")}</Button>
               </Link>
             ) : null}
             <Link to="/forum">
-              <Button variant={isAuthenticated ? "primary" : "outline"}>返回论坛</Button>
+              <Button variant={isAuthenticated ? "primary" : "outline"}>
+                {t("postDetailPage.backToForum")}
+              </Button>
             </Link>
           </div>
         }
@@ -1539,7 +1553,7 @@ export default function PostDetailPage() {
         className="inline-flex items-center gap-2 text-slate-600 hover:text-slate-900 transition-colors dark:text-white/60 dark:hover:text-white"
       >
         <ArrowLeft className="h-4 w-4" />
-        {isDeletedView ? "返回回收站" : "返回论坛"}
+        {isDeletedView ? t("postDetailPage.backToRecycleBin") : t("postDetailPage.backToForum")}
       </Link>
 
       {/* 帖子内容 */}
@@ -1555,7 +1569,7 @@ export default function PostDetailPage() {
                     size="sm"
                     title={reviewReason || undefined}
                   >
-                    审核中
+                    {t("postDetailPage.reviewPending")}
                   </Badge>
                 ) : null}
                 {canManagePost && reviewStatus === "rejected" ? (
@@ -1564,7 +1578,9 @@ export default function PostDetailPage() {
                     size="sm"
                     title={reviewReason || undefined}
                   >
-                    {postDetail.is_deleted ? "已删除" : "已驳回"}
+                    {postDetail.is_deleted
+                      ? t("postDetailPage.deleted")
+                      : t("postDetailPage.reviewRejected")}
                   </Badge>
                 ) : null}
                 {canManagePost &&
@@ -1576,7 +1592,7 @@ export default function PostDetailPage() {
                     size="sm"
                     title={reviewReason || undefined}
                   >
-                    已通过
+                    {t("postDetailPage.reviewApproved")}
                   </Badge>
                 ) : null}
                 {postDetail.is_pinned && (
@@ -1586,7 +1602,7 @@ export default function PostDetailPage() {
                     className="flex items-center gap-1"
                   >
                     <Pin className="h-3 w-3" />
-                    置顶
+                    {t("newsPage.pinned")}
                   </Badge>
                 )}
                 {postDetail.is_essence && (
@@ -1596,7 +1612,7 @@ export default function PostDetailPage() {
                     className="flex items-center gap-1"
                   >
                     <Award className="h-3 w-3" />
-                    精华
+                    {t("forum.essence")}
                   </Badge>
                 )}
                 {postDetail.is_hot && (
@@ -1606,7 +1622,7 @@ export default function PostDetailPage() {
                     className="flex items-center gap-1"
                   >
                     <Flame className="h-3 w-3" />
-                    热门
+                    {t("forum.hot")}
                   </Badge>
                 )}
                 <Badge variant="primary" size="sm">
@@ -1633,7 +1649,7 @@ export default function PostDetailPage() {
                         icon={RotateCcw}
                         onClick={() => setConfirmRestorePost(true)}
                       >
-                        恢复
+                        {t("postDetailPage.restore")}
                       </Button>
                       <Button
                         variant="danger"
@@ -1641,7 +1657,7 @@ export default function PostDetailPage() {
                         icon={Trash2}
                         onClick={() => setConfirmPurgePost(true)}
                       >
-                        永久删除
+                        {t("postDetailPage.purge")}
                       </Button>
                     </>
                   ) : (
@@ -1654,7 +1670,7 @@ export default function PostDetailPage() {
                           navigate(`/forum/post/${postDetail.id}/edit`)
                         }
                       >
-                        编辑
+                        {t("common.edit")}
                       </Button>
                       <Button
                         variant="danger"
@@ -1662,7 +1678,7 @@ export default function PostDetailPage() {
                         icon={Trash2}
                         onClick={() => setConfirmDeletePost(true)}
                       >
-                        删除
+                        {t("common.delete")}
                       </Button>
                     </>
                   )}
@@ -1689,7 +1705,7 @@ export default function PostDetailPage() {
               <p className="text-slate-900 font-medium dark:text-white">
                 {postDetail.author?.nickname ||
                   postDetail.author?.username ||
-                  "匿名用户"}
+                  t("postDetailPage.anonymousUser")}
               </p>
               <p className="text-slate-500 text-sm flex items-center gap-2 dark:text-white/40">
                 <Clock className="h-3.5 w-3.5" />
@@ -1701,22 +1717,26 @@ export default function PostDetailPage() {
           {/* 帖子正文 */}
           {canManagePost && reviewStatus === "pending" ? (
             <div className="rounded-2xl border border-amber-200/70 bg-amber-50/70 px-4 py-3 text-amber-900 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-200">
-              <p className="text-sm font-semibold">你的帖子正在审核中</p>
-              <p className="text-sm mt-1">审核通过后将会出现在论坛列表中。</p>
+              <p className="text-sm font-semibold">{t("postDetailPage.postPendingTitle")}</p>
+              <p className="text-sm mt-1">{t("postDetailPage.postPendingDescription")}</p>
               {reviewReason ? (
-                <p className="text-sm mt-1">原因：{reviewReason}</p>
+                <p className="text-sm mt-1">
+                  {t("postDetailPage.reasonPrefix")}{reviewReason}
+                </p>
               ) : null}
             </div>
           ) : null}
 
           {canManagePost && reviewStatus === "rejected" ? (
             <div className="rounded-2xl border border-red-200/70 bg-red-50/70 px-4 py-3 text-red-900 dark:border-red-500/20 dark:bg-red-500/10 dark:text-red-200">
-              <p className="text-sm font-semibold">你的帖子未通过审核</p>
+              <p className="text-sm font-semibold">{t("postDetailPage.postRejectedTitle")}</p>
               {reviewReason ? (
-                <p className="text-sm mt-1">原因：{reviewReason}</p>
+                <p className="text-sm mt-1">
+                  {t("postDetailPage.reasonPrefix")}{reviewReason}
+                </p>
               ) : null}
               <p className="text-sm mt-1">
-                你可以根据原因修改内容后再尝试发布。
+                {t("postDetailPage.postRejectedHint")}
               </p>
               {!isDeletedView ? (
                 <button
@@ -1724,7 +1744,7 @@ export default function PostDetailPage() {
                   className="mt-2 inline-flex items-center gap-2 text-sm font-semibold text-red-800 hover:underline dark:text-red-200"
                   onClick={() => navigate(`/forum/post/${postDetail.id}/edit`)}
                 >
-                  去编辑
+                  {t("postDetailPage.goEdit")}
                 </button>
               ) : null}
             </div>
@@ -1732,9 +1752,9 @@ export default function PostDetailPage() {
 
           {canManagePost && postDetail.is_deleted ? (
             <div className="rounded-2xl border border-slate-200/70 bg-slate-50/70 px-4 py-3 text-slate-800 dark:border-white/10 dark:bg-white/5 dark:text-white/80">
-              <p className="text-sm font-semibold">该帖子已删除</p>
+              <p className="text-sm font-semibold">{t("postDetailPage.postDeletedTitle")}</p>
               <p className="text-sm mt-1">
-                当前为回收站视图，只有作者或管理员可见。
+                {t("postDetailPage.postDeletedDescription")}
               </p>
             </div>
           ) : null}
@@ -1748,7 +1768,9 @@ export default function PostDetailPage() {
           {/* 附件 */}
           {postDetail.attachments && postDetail.attachments.length > 0 && (
             <div className="space-y-3">
-              <p className="text-sm text-slate-500 dark:text-white/50">附件</p>
+              <p className="text-sm text-slate-500 dark:text-white/50">
+                {t("postDetailPage.attachments")}
+              </p>
               <div className="grid gap-3 sm:grid-cols-2">
                 {postDetail.attachments.map((att, idx) => {
                   const ext = getAttachmentExt(att);
@@ -1766,7 +1788,7 @@ export default function PostDetailPage() {
                         </div>
                         <div className="min-w-0">
                           <p className="text-sm font-semibold text-slate-900 truncate dark:text-white">
-                            {att.name || "附件"}
+                            {att.name || t("postDetailPage.attachment")}
                           </p>
                           <p className="text-xs text-slate-500 mt-1 dark:text-white/40">
                             {ext ? ext.toUpperCase() : "FILE"}
@@ -1782,7 +1804,7 @@ export default function PostDetailPage() {
                             className="inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold bg-slate-900/5 text-slate-700 hover:bg-slate-900/10 transition dark:bg-white/10 dark:text-white/80 dark:hover:bg-white/15"
                           >
                             <Eye className="h-4 w-4" />
-                            预览
+                            {t("postDetailPage.preview")}
                           </button>
                         ) : null}
 
@@ -1793,7 +1815,7 @@ export default function PostDetailPage() {
                           className="inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold bg-slate-900/5 text-slate-700 hover:bg-slate-900/10 transition dark:bg-white/10 dark:text-white/80 dark:hover:bg-white/15"
                         >
                           <ExternalLink className="h-4 w-4" />
-                          打开
+                          {t("postDetailPage.open")}
                         </a>
 
                         <a
@@ -1802,7 +1824,7 @@ export default function PostDetailPage() {
                           className="inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold bg-slate-900/5 text-slate-700 hover:bg-slate-900/10 transition dark:bg-white/10 dark:text-white/80 dark:hover:bg-white/15"
                         >
                           <Download className="h-4 w-4" />
-                          下载
+                          {t("postDetailPage.download")}
                         </a>
                       </div>
                     </div>
@@ -1815,7 +1837,7 @@ export default function PostDetailPage() {
           <Modal
             isOpen={!!previewAttachment}
             onClose={() => setPreviewAttachment(null)}
-            title={previewAttachment?.name || "附件预览"}
+            title={previewAttachment?.name || t("postDetailPage.attachmentPreview")}
             size={previewType === "pdf" ? "xl" : "lg"}
           >
             {previewAttachment && previewType === "image" ? (
@@ -1835,7 +1857,7 @@ export default function PostDetailPage() {
                     className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold bg-slate-900/5 text-slate-700 hover:bg-slate-900/10 transition dark:bg-white/10 dark:text-white/80 dark:hover:bg-white/15"
                   >
                     <ExternalLink className="h-4 w-4" />
-                    新窗口打开
+                    {t("postDetailPage.openInNewWindow")}
                   </a>
                   <a
                     href={previewAttachment.url}
@@ -1843,7 +1865,7 @@ export default function PostDetailPage() {
                     className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold bg-slate-900/5 text-slate-700 hover:bg-slate-900/10 transition dark:bg-white/10 dark:text-white/80 dark:hover:bg-white/15"
                   >
                     <Download className="h-4 w-4" />
-                    下载
+                    {t("postDetailPage.download")}
                   </a>
                 </div>
               </div>
@@ -1866,7 +1888,7 @@ export default function PostDetailPage() {
                     className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold bg-slate-900/5 text-slate-700 hover:bg-slate-900/10 transition dark:bg-white/10 dark:text-white/80 dark:hover:bg-white/15"
                   >
                     <ExternalLink className="h-4 w-4" />
-                    新窗口打开
+                    {t("postDetailPage.openInNewWindow")}
                   </a>
                   <a
                     href={previewAttachment.url}
@@ -1874,7 +1896,7 @@ export default function PostDetailPage() {
                     className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold bg-slate-900/5 text-slate-700 hover:bg-slate-900/10 transition dark:bg-white/10 dark:text-white/80 dark:hover:bg-white/15"
                   >
                     <Download className="h-4 w-4" />
-                    下载
+                    {t("postDetailPage.download")}
                   </a>
                 </div>
               </div>
@@ -1883,7 +1905,7 @@ export default function PostDetailPage() {
             {previewAttachment && previewType === "none" ? (
               <div className="space-y-4">
                 <p className="text-sm text-slate-600 dark:text-white/60">
-                  该文件暂不支持站内预览。
+                  {t("postDetailPage.previewNotSupported")}
                 </p>
                 <div className="flex justify-end gap-3">
                   <a
@@ -1893,7 +1915,7 @@ export default function PostDetailPage() {
                     className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold bg-slate-900/5 text-slate-700 hover:bg-slate-900/10 transition dark:bg-white/10 dark:text-white/80 dark:hover:bg-white/15"
                   >
                     <ExternalLink className="h-4 w-4" />
-                    新窗口打开
+                    {t("postDetailPage.openInNewWindow")}
                   </a>
                   <a
                     href={previewAttachment.url}
@@ -1901,7 +1923,7 @@ export default function PostDetailPage() {
                     className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold bg-slate-900/5 text-slate-700 hover:bg-slate-900/10 transition dark:bg-white/10 dark:text-white/80 dark:hover:bg-white/15"
                   >
                     <Download className="h-4 w-4" />
-                    下载
+                    {t("postDetailPage.download")}
                   </a>
                 </div>
               </div>
@@ -1914,8 +1936,8 @@ export default function PostDetailPage() {
               if (restorePostMutation.isPending) return;
               setConfirmRestorePost(false);
             }}
-            title="恢复帖子"
-            description="恢复后帖子将重新出现在论坛列表中"
+            title={t("postDetailPage.restoreModalTitle")}
+            description={t("postDetailPage.restoreModalDescription")}
             size="sm"
           >
             <ModalActions>
@@ -1927,7 +1949,7 @@ export default function PostDetailPage() {
                 }}
                 disabled={restorePostMutation.isPending}
               >
-                取消
+                {t("common.cancel")}
               </Button>
               <Button
                 icon={RotateCcw}
@@ -1936,10 +1958,10 @@ export default function PostDetailPage() {
                   restorePostMutation.mutate();
                 }}
                 isLoading={restorePostMutation.isPending}
-                loadingText="恢复中..."
+                loadingText={t("postDetailPage.restoring")}
                 disabled={restorePostMutation.isPending}
               >
-                确认恢复
+                {t("postDetailPage.confirmRestore")}
               </Button>
             </ModalActions>
           </Modal>
@@ -1950,8 +1972,8 @@ export default function PostDetailPage() {
               if (purgePostMutation.isPending) return;
               setConfirmPurgePost(false);
             }}
-            title="永久删除"
-            description="永久删除后将无法恢复，且会清理相关点赞/收藏/评论数据"
+            title={t("postDetailPage.purgeModalTitle")}
+            description={t("postDetailPage.purgeModalDescription")}
             size="sm"
           >
             <ModalActions>
@@ -1963,7 +1985,7 @@ export default function PostDetailPage() {
                 }}
                 disabled={purgePostMutation.isPending}
               >
-                取消
+                {t("common.cancel")}
               </Button>
               <Button
                 variant="danger"
@@ -1973,10 +1995,10 @@ export default function PostDetailPage() {
                   purgePostMutation.mutate();
                 }}
                 isLoading={purgePostMutation.isPending}
-                loadingText="删除中..."
+                loadingText={t("postDetailPage.deleting")}
                 disabled={purgePostMutation.isPending}
               >
-                确认永久删除
+                {t("postDetailPage.confirmPurge")}
               </Button>
             </ModalActions>
           </Modal>
@@ -1987,8 +2009,8 @@ export default function PostDetailPage() {
               if (deletePostMutation.isPending) return;
               setConfirmDeletePost(false);
             }}
-            title="删除帖子"
-            description="删除后会进入回收站，可在回收站恢复或永久删除"
+            title={t("postDetailPage.deleteModalTitle")}
+            description={t("postDetailPage.deleteModalDescription")}
             size="sm"
           >
             <ModalActions>
@@ -2000,7 +2022,7 @@ export default function PostDetailPage() {
                 }}
                 disabled={deletePostMutation.isPending}
               >
-                取消
+                {t("common.cancel")}
               </Button>
               <Button
                 variant="danger"
@@ -2010,10 +2032,10 @@ export default function PostDetailPage() {
                   deletePostMutation.mutate();
                 }}
                 isLoading={deletePostMutation.isPending}
-                loadingText="删除中..."
+                loadingText={t("postDetailPage.deleting")}
                 disabled={deletePostMutation.isPending}
               >
-                确认删除
+                {t("postDetailPage.confirmDelete")}
               </Button>
             </ModalActions>
           </Modal>
@@ -2041,14 +2063,14 @@ export default function PostDetailPage() {
           {!isDeletedView && isAuthenticated && (
             <div className="flex items-center gap-2 pt-2">
               <span className="text-xs text-slate-500 mr-1 dark:text-white/40">
-                添加反应:
+                {t("postDetailPage.addReaction")}
               </span>
               {QUICK_REACTIONS.map((emoji) => (
                 <button
                   key={emoji}
                   onClick={() => handleReaction(emoji)}
                   className="p-1.5 rounded-lg hover:bg-slate-900/10 text-lg transition-colors dark:hover:bg-white/10"
-                  title={`添加 ${emoji} 反应`}
+                  title={`${t("postDetailPage.addReactionPrefix")} ${emoji} ${t("postDetailPage.addReactionSuffix")}`}
                 >
                   {emoji}
                 </button>
@@ -2080,7 +2102,9 @@ export default function PostDetailPage() {
                     }`}
                   />
                 )}
-                <span>{postLikeLoading ? "点赞中..." : postDetail.like_count}</span>
+                <span>
+                  {postLikeLoading ? t("postDetailPage.liking") : postDetail.like_count}
+                </span>
               </button>
 
               <button
@@ -2105,13 +2129,17 @@ export default function PostDetailPage() {
                   />
                 )}
                 <span>
-                  {postFavoriteLoading ? "收藏中..." : postDetail.favorite_count}
+                  {postFavoriteLoading
+                    ? t("postDetailPage.favoriting")
+                    : postDetail.favorite_count}
                 </span>
               </button>
 
               <div className="flex items-center gap-2 text-slate-500 dark:text-white/50">
                 <MessageSquare className="h-4 w-4" />
-                <span>{postDetail.comment_count} 评论</span>
+                <span>
+                  {postDetail.comment_count} {t("postDetailPage.commentSuffix")}
+                </span>
               </div>
             </div>
           ) : null}
@@ -2123,17 +2151,17 @@ export default function PostDetailPage() {
         <Card variant="surface" padding="lg">
           <div className="flex items-center justify-between gap-3 mb-6">
             <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
-              评论 ({comments.length}/{commentsTotal})
+              {t("postDetailPage.comments")} ({comments.length}/{commentsTotal})
             </h3>
             <Button
               variant="outline"
               size="sm"
               icon={RotateCcw}
               isLoading={commentsQuery.isFetching && !commentsQuery.isFetchingNextPage}
-              loadingText="刷新中..."
+              loadingText={t("newsPage.refreshing")}
               onClick={handleRefreshComments}
             >
-              刷新评论
+              {t("postDetailPage.refreshComments")}
             </Button>
           </div>
 
@@ -2143,7 +2171,7 @@ export default function PostDetailPage() {
               {replyTo ? (
                 <div className="mb-3 flex items-center justify-between gap-3 rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 dark:border-amber-500/20 dark:bg-amber-500/10">
                   <div className="text-sm text-amber-900 dark:text-amber-200">
-                    正在回复{" "}
+                    {t("postDetailPage.replyingTo")}{" "}
                     <span className="font-semibold">{replyTo.name}</span>
                   </div>
                   <button
@@ -2160,7 +2188,7 @@ export default function PostDetailPage() {
                 onChange={setNewComment}
                 images={newCommentImages}
                 onImagesChange={setNewCommentImages}
-                placeholder="写下你的评论...（支持 Markdown、图片）"
+                placeholder={t("postDetailPage.commentPlaceholder")}
                 minHeight="140px"
               />
               <div className="mt-3 flex justify-end">
@@ -2168,11 +2196,11 @@ export default function PostDetailPage() {
                   onClick={handleSubmitComment}
                   disabled={!newComment.trim() || commentMutation.isPending}
                   isLoading={commentMutation.isPending}
-                  loadingText="发表中..."
+                  loadingText={t("postDetailPage.publishing")}
                   icon={Send}
                   className="px-6"
                 >
-                  发表评论
+                  {t("postDetailPage.publishComment")}
                 </Button>
               </div>
             </div>
@@ -2183,9 +2211,9 @@ export default function PostDetailPage() {
                   to="/login"
                   className="text-amber-600 hover:underline dark:text-amber-400"
                 >
-                  登录
+                  {t("common.login")}
                 </Link>
-                后即可发表评论
+                {t("postDetailPage.loginToCommentSuffix")}
               </p>
             </div>
           )}
@@ -2196,7 +2224,7 @@ export default function PostDetailPage() {
               <ListSkeleton count={3} />
             ) : comments.length === 0 ? (
               <p className="text-center text-slate-500 py-8 dark:text-white/40">
-                暂无评论，来发表第一条评论吧
+                {t("postDetailPage.noComments")}
               </p>
             ) : (
               comments.map((comment) => renderComment(comment, 0))
@@ -2208,16 +2236,16 @@ export default function PostDetailPage() {
               <Button
                 variant="outline"
                 isLoading={commentsQuery.isFetchingNextPage}
-                loadingText="加载更多中..."
+                loadingText={t("postDetailPage.loadingMore")}
                 disabled={commentsQuery.isFetchingNextPage}
                 onClick={() => commentsQuery.fetchNextPage()}
               >
-                加载更多
+                {t("postDetailPage.loadMore")}
               </Button>
             </div>
           ) : commentsTotal > 0 ? (
             <div className="pt-6 text-center text-xs text-slate-500 dark:text-white/45">
-              已加载全部
+              {t("postDetailPage.loadedAll")}
             </div>
           ) : null}
 

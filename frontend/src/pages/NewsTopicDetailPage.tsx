@@ -15,6 +15,7 @@ import PageHeader from "../components/PageHeader";
 import api from "../api/client";
 import { usePrefetchLimiter, useToast } from "../hooks";
 import { useTheme } from "../contexts/ThemeContext";
+import { useLanguage } from "../contexts/LanguageContext";
 import { getApiErrorMessage } from "../utils";
 import { queryKeys } from "../queryKeys";
 
@@ -43,6 +44,27 @@ function upsertMetaTag(
     } else {
       el.setAttribute("content", prev);
     }
+  };
+}
+
+function upsertJsonLd(id: string, json: unknown): () => void {
+  const selector = `script#${id}[type="application/ld+json"]`;
+  const existing = document.head.querySelector(selector) as HTMLScriptElement | null;
+  const created = !existing;
+  const el = existing ?? document.createElement("script");
+  if (created) {
+    el.id = id;
+    el.type = "application/ld+json";
+    document.head.appendChild(el);
+  }
+  const prev = el.textContent;
+  el.textContent = JSON.stringify(json);
+  return () => {
+    if (created) {
+      el.remove();
+      return;
+    }
+    el.textContent = prev ?? "";
   };
 }
 
@@ -89,13 +111,14 @@ interface NewsListItem {
 }
 
 function getRiskBadge(
-  riskLevel: string | null | undefined
+  riskLevel: string | null | undefined,
+  tr: (key: string) => string
 ): { variant: "warning" | "danger"; label: string } | null {
   const r = String(riskLevel ?? "")
     .trim()
     .toLowerCase();
-  if (r === "warning") return { variant: "warning", label: "注意" };
-  if (r === "danger") return { variant: "danger", label: "敏感" };
+  if (r === "warning") return { variant: "warning", label: tr("newsPage.riskWarning") };
+  if (r === "danger") return { variant: "danger", label: tr("newsPage.riskDanger") };
   return null;
 }
 
@@ -122,6 +145,7 @@ export default function NewsTopicDetailPage() {
   const { actualTheme } = useTheme();
   const toast = useToast();
   const { prefetch } = usePrefetchLimiter();
+  const { t } = useLanguage();
   const { topicId } = useParams<{ topicId: string }>();
 
   const [page, setPage] = useState(1);
@@ -159,31 +183,110 @@ export default function NewsTopicDetailPage() {
   useEffect(() => {
     if (!topic) return;
     const prevTitle = document.title;
-    const safeTitle = typeof topic.title === "string" ? topic.title : "专题";
+    const safeTitle = typeof topic.title === "string" ? topic.title : t("newsTopicDetailPage.topic");
     const safeDesc =
       typeof topic.description === "string" && topic.description.trim()
         ? topic.description.trim()
-        : "法律资讯专题合集";
+        : t("newsTopicDetailPage.seoDescriptionFallback");
     const url = window.location.href;
+    const canonical = url;
+    const heroImageUrl =
+      typeof topic.cover_image === "string" && topic.cover_image
+        ? topic.cover_image
+        : items.find((x) => typeof x.cover_image === "string" && x.cover_image)?.cover_image ?? "";
 
-    document.title = safeTitle ? `${safeTitle} - 专题 - 法律资讯` : prevTitle;
+    document.title = safeTitle
+      ? `${safeTitle} - ${t("newsTopicDetailPage.topic")} - ${t("nav.news")}`
+      : prevTitle;
 
     const cleanups: Array<() => void> = [];
     cleanups.push(upsertMetaTag("name", "description", safeDesc));
     cleanups.push(upsertMetaTag("property", "og:title", safeTitle));
     cleanups.push(upsertMetaTag("property", "og:description", safeDesc));
-    cleanups.push(upsertMetaTag("property", "og:type", "article"));
-    cleanups.push(upsertMetaTag("property", "og:url", url));
-    if (topic.cover_image) {
-      cleanups.push(upsertMetaTag("property", "og:image", topic.cover_image));
+    cleanups.push(upsertMetaTag("property", "og:type", "website"));
+    cleanups.push(upsertMetaTag("property", "og:url", canonical));
+
+    cleanups.push(upsertMetaTag("name", "twitter:title", safeTitle));
+    cleanups.push(upsertMetaTag("name", "twitter:description", safeDesc));
+
+    cleanups.push(upsertLinkRel("canonical", canonical));
+
+    const card = heroImageUrl ? "summary_large_image" : "summary";
+    cleanups.push(upsertMetaTag("name", "twitter:card", card));
+
+    if (heroImageUrl) {
+      cleanups.push(upsertMetaTag("property", "og:image", heroImageUrl));
+      cleanups.push(upsertMetaTag("name", "twitter:image", heroImageUrl));
     }
-    cleanups.push(upsertLinkRel("canonical", url));
+
+    try {
+      const origin = window.location.origin;
+      const topicUrl = `${origin}/news/topics/${topic.id}`;
+      const collectionJsonLd: Record<string, unknown> = {
+        "@context": "https://schema.org",
+        "@type": "CollectionPage",
+        name: safeTitle,
+        description: safeDesc,
+        url: topicUrl,
+        image: heroImageUrl || undefined,
+        mainEntity: {
+          "@type": "ItemList",
+          itemListElement: items.map((item, idx) => ({
+            "@type": "ListItem",
+            position: idx + 1 + (page - 1) * pageSize,
+            item: {
+              "@type": "NewsArticle",
+              headline: item.title,
+              url: `${origin}/news/${item.id}`,
+            },
+          })),
+        },
+      };
+      for (const k of Object.keys(collectionJsonLd)) {
+        if (collectionJsonLd[k] === undefined) delete collectionJsonLd[k];
+      }
+      cleanups.push(upsertJsonLd("news-topic-detail-jsonld", collectionJsonLd));
+
+      const breadcrumbJsonLd: Record<string, unknown> = {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        itemListElement: [
+          {
+            "@type": "ListItem",
+            position: 1,
+            name: t("nav.home"),
+            item: `${origin}/`,
+          },
+          {
+            "@type": "ListItem",
+            position: 2,
+            name: t("nav.news"),
+            item: `${origin}/news`,
+          },
+          {
+            "@type": "ListItem",
+            position: 3,
+            name: t("newsTopicsPage.title"),
+            item: `${origin}/news/topics`,
+          },
+          {
+            "@type": "ListItem",
+            position: 4,
+            name: safeTitle,
+            item: topicUrl,
+          },
+        ],
+      };
+      cleanups.push(upsertJsonLd("news-topic-detail-breadcrumb-jsonld", breadcrumbJsonLd));
+    } catch {
+      // ignore
+    }
 
     return () => {
       document.title = prevTitle;
-      for (const fn of cleanups) fn();
+      for (const fn of cleanups.reverse()) fn();
     };
-  }, [topic]);
+  }, [t, topic, items, page, pageSize]);
 
   const prefetchNewsDetail = (id: number) => {
     const newsId = String(id);
@@ -205,12 +308,12 @@ export default function NewsTopicDetailPage() {
             className="inline-flex items-center gap-2 text-sm text-slate-600 hover:text-slate-900 dark:text-white/60 dark:hover:text-white"
           >
             <ArrowLeft className="h-4 w-4" />
-            返回专题
+            {t("newsTopicDetailPage.backToTopics")}
           </Link>
         </div>
         <PageHeader
-          eyebrow="法律资讯"
-          title={topic?.title ?? "专题"}
+          eyebrow={t("newsPage.eyebrow")}
+          title={topic?.title ?? t("newsTopicDetailPage.topic")}
           description={topic?.description ?? ""}
           layout="mdCenter"
           tone={actualTheme}
@@ -220,11 +323,11 @@ export default function NewsTopicDetailPage() {
               size="sm"
               icon={RefreshCw}
               isLoading={detailQuery.isFetching}
-              loadingText="刷新中..."
+              loadingText={t("newsPage.refreshing")}
               onClick={() => detailQuery.refetch()}
               disabled={detailQuery.isFetching}
             >
-              刷新
+              {t("newsPage.refresh")}
             </Button>
           }
         />
@@ -245,7 +348,7 @@ export default function NewsTopicDetailPage() {
 
       <div className="flex items-center gap-2">
         <Badge variant="primary" size="sm" icon={Layers}>
-          专题合集
+          {t("newsTopicDetailPage.collectionBadge")}
         </Badge>
       </div>
 
@@ -254,8 +357,8 @@ export default function NewsTopicDetailPage() {
       ) : items.length === 0 ? (
         <EmptyState
           icon={Newspaper}
-          title="暂无内容"
-          description="该专题暂未配置新闻内容"
+          title={t("newsTopicDetailPage.emptyTitle")}
+          description={t("newsTopicDetailPage.emptyDescription")}
         />
       ) : (
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
@@ -296,17 +399,18 @@ export default function NewsTopicDetailPage() {
                     <Badge variant="primary" size="sm" icon={Tag}>
                       {item.category}
                     </Badge>
-                    {getRiskBadge(item.ai_risk_level) ? (
-                      <Badge
-                        variant={getRiskBadge(item.ai_risk_level)!.variant}
-                        size="sm"
-                      >
-                        {getRiskBadge(item.ai_risk_level)!.label}
-                      </Badge>
-                    ) : null}
+                    {(() => {
+                      const rb = getRiskBadge(item.ai_risk_level, t)
+                      if (!rb) return null
+                      return (
+                        <Badge variant={rb.variant} size="sm">
+                          {rb.label}
+                        </Badge>
+                      )
+                    })()}
                     {item.is_top ? (
                       <Badge variant="warning" size="sm">
-                        置顶
+                        {t("newsPage.pinned")}
                       </Badge>
                     ) : null}
                     {Array.isArray(item.ai_keywords) && item.ai_keywords.length > 0
@@ -326,7 +430,7 @@ export default function NewsTopicDetailPage() {
                       if (!riskNorm || riskNorm === "unknown") {
                         return (
                           <Badge variant="default" size="sm">
-                            AI生成中
+                            {t("newsPage.aiGenerating")}
                           </Badge>
                         );
                       }
@@ -348,7 +452,7 @@ export default function NewsTopicDetailPage() {
                     </span>
                     <span className="flex items-center gap-2">
                       <Eye className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                      {item.view_count} 阅读
+                      {item.view_count} {t("newsPage.reads")}
                     </span>
                   </div>
                 </div>

@@ -38,6 +38,14 @@ test('前台：Chat 语音输入可转写并回填到输入框（mock）', async
   })
 
   let hitTranscribe = false
+  await page.route('**/api/system/public/ai/status', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ voice_transcribe_enabled: true }),
+    })
+  })
+
   await page.route('**/api/ai/transcribe', async (route) => {
     hitTranscribe = true
     await route.fulfill({

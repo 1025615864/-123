@@ -112,7 +112,7 @@ export default function Modal({
                 ref={closeBtnRef}
                 onClick={onClose}
                 className="p-2 rounded-xl text-slate-500 outline-none transition-all hover:text-slate-900 hover:bg-slate-900/5 active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-blue-500/25 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:text-white/60 dark:hover:text-white dark:hover:bg-white/5 dark:focus-visible:ring-offset-slate-900"
-                aria-label="关闭"
+                aria-label="Close"
               >
                 <X className="h-5 w-5" />
               </button>

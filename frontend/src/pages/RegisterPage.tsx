@@ -3,10 +3,12 @@ import { Link, useNavigate } from "react-router-dom";
 import { Eye, EyeOff, Lock, Mail, ShieldCheck, User } from "lucide-react";
 import { useToast } from "../hooks";
 import { useAuth } from "../contexts/AuthContext";
+import { useLanguage } from "../contexts/LanguageContext";
 import { Button, Input, Modal } from "../components/ui";
 import { getApiErrorMessage } from "../utils";
 
 export default function RegisterPage() {
+  const { t } = useLanguage();
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -45,23 +47,23 @@ export default function RegisterPage() {
 
     const nextErrors: typeof errors = {};
     if (!String(username || "").trim()) {
-      nextErrors.username = "请输入用户名";
+      nextErrors.username = t("register.usernameRequired");
     }
     if (!String(email || "").trim()) {
-      nextErrors.email = "请输入邮箱";
+      nextErrors.email = t("register.emailRequired");
     }
     if (!String(password || "").trim()) {
-      nextErrors.password = "请输入密码";
+      nextErrors.password = t("register.passwordRequired");
     } else if (String(password).length < 6) {
-      nextErrors.password = "密码长度至少6位";
+      nextErrors.password = t("register.passwordTooShort");
     }
     if (!String(confirmPassword || "").trim()) {
-      nextErrors.confirmPassword = "请再次输入密码";
+      nextErrors.confirmPassword = t("register.confirmPasswordRequired");
     } else if (password !== confirmPassword) {
-      nextErrors.confirmPassword = "两次输入的密码不一致";
+      nextErrors.confirmPassword = t("register.passwordNotMatch");
     }
     if (!agreeTerms || !agreePrivacy || !agreeAiDisclaimer) {
-      nextErrors.consent = "请阅读并同意用户协议、隐私政策及AI咨询免责声明";
+      nextErrors.consent = t("register.needConsents");
     }
     if (Object.keys(nextErrors).length > 0) {
       setErrors(nextErrors);
@@ -98,8 +100,8 @@ export default function RegisterPage() {
         agreePrivacy,
         agreeAiDisclaimer
       );
-      const msg = String((res as any)?.message || "注册成功").trim();
-      setPostRegisterMessage(msg || "注册成功");
+      const msg = String((res as any)?.message || t("register.toastRegisterSuccessFallback")).trim();
+      setPostRegisterMessage(msg || t("register.toastRegisterSuccessFallback"));
       setPostRegisterOpen(true);
     } catch (err: any) {
       const message = getApiErrorMessage(err, "注册失败，请稍后重试");
@@ -138,28 +140,28 @@ export default function RegisterPage() {
       <Modal
         isOpen={postRegisterOpen}
         onClose={() => setPostRegisterOpen(false)}
-        title="注册成功"
+        title={t("register.modalTitle")}
         description={
-          postRegisterMessage || "注册成功。请前往邮箱完成验证后再登录。"
+          postRegisterMessage || t("register.modalDescriptionDefault")
         }
         size="sm"
       >
         <div className="space-y-4">
           <div className="rounded-xl border border-slate-200/70 bg-slate-900/5 px-4 py-3 text-sm text-slate-700 dark:border-white/10 dark:bg-white/[0.03] dark:text-white/70">
-            <div>1) 请前往邮箱查收验证邮件（可能在垃圾箱）</div>
-            <div className="mt-1">2) 点击邮件中的链接完成验证</div>
-            <div className="mt-1">3) 回到本站登录，个人中心可重发验证邮件</div>
+            <div>{t("register.modalStep1")}</div>
+            <div className="mt-1">{t("register.modalStep2")}</div>
+            <div className="mt-1">{t("register.modalStep3")}</div>
           </div>
 
           <Button
             fullWidth
             onClick={() => {
               setPostRegisterOpen(false);
-              toast.success("请登录");
+              toast.success(t("register.toastPleaseLogin"));
               navigate("/login");
             }}
           >
-            去登录
+            {t("register.modalGoLogin")}
           </Button>
 
           <Button
@@ -167,7 +169,7 @@ export default function RegisterPage() {
             variant="outline"
             onClick={() => setPostRegisterOpen(false)}
           >
-            稍后再说
+            {t("register.modalLater")}
           </Button>
         </div>
       </Modal>
@@ -182,16 +184,16 @@ export default function RegisterPage() {
           <div className="hidden md:block">
             <div className="space-y-6">
               <p className="text-amber-700 dark:text-amber-400 text-sm font-medium tracking-wider uppercase">
-                创建账户
+                {t("register.heroEyebrow")}
               </p>
               <h1 className="text-4xl font-bold text-slate-900 dark:text-white leading-tight">
-                开始使用
+                {t("register.heroTitleLine1")}
                 <span className="block mt-2 bg-gradient-to-r from-amber-400 via-orange-400 to-amber-500 bg-clip-text text-transparent">
-                  百姓法律助手
+                  {t("register.heroTitleLine2")}
                 </span>
               </h1>
               <p className="text-slate-600 dark:text-white/60 leading-relaxed">
-                注册后即可使用 AI 咨询、法律资讯、论坛交流与律所查询等功能。
+                {t("register.heroDescription")}
               </p>
 
               <div className="space-y-4">
@@ -201,10 +203,10 @@ export default function RegisterPage() {
                   </div>
                   <div>
                     <p className="text-sm font-medium text-slate-900 dark:text-white/80">
-                      安全登录
+                      {t("register.securityTitle")}
                     </p>
                     <p className="text-sm text-slate-600 dark:text-white/50">
-                      Token 鉴权，自动保持登录状态
+                      {t("register.securityDescription")}
                     </p>
                   </div>
                 </div>
@@ -214,10 +216,10 @@ export default function RegisterPage() {
                   </div>
                   <div>
                     <p className="text-sm font-medium text-slate-900 dark:text-white/80">
-                      找回更方便
+                      {t("register.recoverTitle")}
                     </p>
                     <p className="text-sm text-slate-600 dark:text-white/50">
-                      绑定邮箱以便后续服务通知
+                      {t("register.recoverDescription")}
                     </p>
                   </div>
                 </div>
@@ -228,16 +230,16 @@ export default function RegisterPage() {
           <div className="rounded-3xl bg-white border border-slate-200/70 backdrop-blur-xl shadow-2xl shadow-black/10 p-8 md:p-10 dark:bg-white/[0.03] dark:border-white/[0.08] dark:shadow-black/30">
             <div className="text-center mb-8">
               <h2 className="text-3xl font-bold text-slate-900 dark:text-white">
-                创建账户
+                {t("register.panelTitle")}
               </h2>
               <p className="text-slate-600 dark:text-white/50 mt-2">
-                注册并开始使用法律助手
+                {t("register.panelDescription")}
               </p>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-5">
               <Input
-                label="用户名"
+                label={t("auth.username")}
                 icon={User}
                 type="text"
                 value={username}
@@ -249,7 +251,7 @@ export default function RegisterPage() {
                     form: undefined,
                   }));
                 }}
-                placeholder="请输入用户名"
+                placeholder={t("auth.usernamePlaceholder")}
                 autoComplete="username"
                 disabled={loading}
                 required
@@ -259,7 +261,7 @@ export default function RegisterPage() {
               />
 
               <Input
-                label="邮箱"
+                label={t("auth.email")}
                 icon={Mail}
                 type="email"
                 value={email}
@@ -271,7 +273,7 @@ export default function RegisterPage() {
                     form: undefined,
                   }));
                 }}
-                placeholder="请输入邮箱"
+                placeholder={t("auth.emailPlaceholder")}
                 autoComplete="email"
                 disabled={loading}
                 required
@@ -282,7 +284,7 @@ export default function RegisterPage() {
 
               <div>
                 <Input
-                  label="密码"
+                  label={t("auth.password")}
                   icon={Lock}
                   type={showPassword ? "text" : "password"}
                   value={password}
@@ -295,7 +297,7 @@ export default function RegisterPage() {
                       form: undefined,
                     }));
                   }}
-                  placeholder="请输入密码（至少6位）"
+                  placeholder={t("auth.passwordPlaceholderMin6")}
                   autoComplete="new-password"
                   minLength={6}
                   disabled={loading}
@@ -308,7 +310,7 @@ export default function RegisterPage() {
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
                       className="p-2 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-900/5 transition disabled:opacity-60 disabled:cursor-not-allowed dark:text-white/40 dark:hover:text-white/70 dark:hover:bg-white/5"
-                      aria-label={showPassword ? "隐藏密码" : "显示密码"}
+                      aria-label={showPassword ? t("auth.hidePassword") : t("auth.showPassword")}
                       disabled={loading}
                     >
                       {showPassword ? (
@@ -320,12 +322,12 @@ export default function RegisterPage() {
                   }
                 />
                 <p className="mt-2 text-xs text-slate-500 dark:text-white/40">
-                  建议使用字母+数字组合提升安全性
+                  {t("register.passwordHint")}
                 </p>
               </div>
 
               <Input
-                label="确认密码"
+                label={t("auth.confirmPassword")}
                 icon={Lock}
                 type={showPassword ? "text" : "password"}
                 value={confirmPassword}
@@ -337,7 +339,7 @@ export default function RegisterPage() {
                     form: undefined,
                   }));
                 }}
-                placeholder="请再次输入密码"
+                placeholder={t("auth.confirmPasswordPlaceholder")}
                 autoComplete="new-password"
                 minLength={6}
                 disabled={loading}
@@ -371,12 +373,12 @@ export default function RegisterPage() {
                     ref={agreeTermsRef}
                   />
                   <span>
-                    我已阅读并同意
+                    {t("register.agreePrefix")}
                     <Link
                       to="/terms"
                       className="mx-1 text-blue-600 hover:underline dark:text-blue-400"
                     >
-                      《用户协议》
+                      {t("register.termsLink")}
                     </Link>
                   </span>
                 </label>
@@ -397,12 +399,12 @@ export default function RegisterPage() {
                     ref={agreePrivacyRef}
                   />
                   <span>
-                    我已阅读并同意
+                    {t("register.agreePrefix")}
                     <Link
                       to="/privacy"
                       className="mx-1 text-blue-600 hover:underline dark:text-blue-400"
                     >
-                      《隐私政策》
+                      {t("register.privacyLink")}
                     </Link>
                   </span>
                 </label>
@@ -423,12 +425,12 @@ export default function RegisterPage() {
                     ref={agreeAiDisclaimerRef}
                   />
                   <span>
-                    我已阅读并同意
+                    {t("register.agreePrefix")}
                     <Link
                       to="/ai-disclaimer"
                       className="mx-1 text-blue-600 hover:underline dark:text-blue-400"
                     >
-                      《AI 咨询免责声明》
+                      {t("register.aiDisclaimerLink")}
                     </Link>
                   </span>
                 </label>
@@ -446,21 +448,21 @@ export default function RegisterPage() {
                 type="submit"
                 fullWidth
                 isLoading={loading}
-                loadingText="注册中..."
+                loadingText={t("register.loadingText")}
                 disabled={loading}
                 className="py-3.5"
               >
-                注册
+                {t("common.register")}
               </Button>
             </form>
 
             <p className="text-center text-slate-600 dark:text-white/50 mt-8">
-              已有账户？{" "}
+              {t("register.haveAccount")}{" "}
               <Link
                 to="/login"
                 className="text-amber-700 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300"
               >
-                立即登录
+                {t("register.loginNow")}
               </Link>
             </p>
           </div>

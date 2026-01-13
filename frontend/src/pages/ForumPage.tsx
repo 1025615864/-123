@@ -19,6 +19,7 @@ import api from "../api/client";
 import { usePrefetchLimiter, useToast } from "../hooks";
 import { useAuth } from "../contexts/AuthContext";
 import { useTheme } from "../contexts/ThemeContext";
+import { useLanguage } from "../contexts/LanguageContext";
 import type { Post } from "../types";
 import { getApiErrorMessage } from "../utils";
 import { queryKeys } from "../queryKeys";
@@ -39,6 +40,7 @@ export default function ForumPage() {
   const { isAuthenticated, user } = useAuth();
   const { actualTheme } = useTheme();
   const toast = useToast();
+  const { t } = useLanguage();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [pendingFavoriteIds, setPendingFavoriteIds] = useState<number[]>([]);
@@ -48,6 +50,30 @@ export default function ForumPage() {
   const postCategories = useMemo(
     () => ["法律咨询", "经验分享", "案例讨论", "政策解读", "其他"],
     []
+  );
+
+  const categoryLabelKey: Record<string, string> = useMemo(
+    () => ({
+      我的帖子: "forumPage.categories.myPosts",
+      我的收藏: "forumPage.categories.myFavorites",
+      全部: "common.all",
+      精选案例: "forumPage.categories.featuredCases",
+      法律咨询: "forumPage.categories.legalConsultation",
+      经验分享: "forumPage.categories.experienceSharing",
+      案例讨论: "forumPage.categories.caseDiscussion",
+      政策解读: "forumPage.categories.policyInterpretation",
+      其他: "forumPage.categories.other",
+    }),
+    []
+  );
+
+  const getCategoryLabel = useCallback(
+    (cat: string) => {
+      const key = categoryLabelKey[cat];
+      if (!key) return cat;
+      return t(key);
+    },
+    [categoryLabelKey, t]
   );
 
   const categories = useMemo(
@@ -255,11 +281,13 @@ export default function ForumPage() {
         };
       });
 
-      const msg = result?.favorited ? "已收藏" : "已取消收藏";
+      const msg = result?.favorited
+        ? t("forumPage.toastFavorited")
+        : t("forumPage.toastUnfavorited");
       toast.showToast("success", msg, {
         durationMs: 7000,
         action: {
-          label: "撤销",
+          label: t("forumPage.undo"),
           onClick: () => {
             toggleFavoriteMutation.mutate(postId);
           },
@@ -272,13 +300,13 @@ export default function ForumPage() {
   const handleToggleFavorite = useCallback(
     async (postId: number) => {
       if (!isAuthenticated) {
-        toast.info("登录后可收藏");
+        toast.info(t("forumPage.loginToFavorite"));
         return;
       }
       if (pendingFavoriteIds.includes(postId)) return;
       toggleFavoriteMutation.mutate(postId);
     },
-    [isAuthenticated, pendingFavoriteIds, toast, toggleFavoriteMutation]
+    [isAuthenticated, pendingFavoriteIds, t, toast, toggleFavoriteMutation]
   );
 
   const hotLimit = 8;
@@ -324,20 +352,20 @@ export default function ForumPage() {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   const emptyStateTitle = isFavoritesMode
-    ? "暂无收藏帖子"
+    ? t("forumPage.emptyFavoritesTitle")
     : isMyPostsMode
-    ? "你还没有发布帖子"
+    ? t("forumPage.emptyMyPostsTitle")
     : isCasesMode
-    ? "暂无精选案例"
-    : "暂无符合条件的帖子";
+    ? t("forumPage.emptyCasesTitle")
+    : t("forumPage.emptyDefaultTitle");
 
   const emptyStateDescription = isFavoritesMode
-    ? "去论坛逛逛，收藏感兴趣的帖子会显示在这里"
+    ? t("forumPage.emptyFavoritesDescription")
     : isMyPostsMode
-    ? "发布你的第一篇帖子，获取社区帮助"
+    ? t("forumPage.emptyMyPostsDescription")
     : isCasesMode
-    ? "这里会展示管理员加精沉淀的高质量内容"
-    : "试试切换分类或修改搜索关键词";
+    ? t("forumPage.emptyCasesDescription")
+    : t("forumPage.emptyDefaultDescription");
 
   const prefetchPostDetail = (id: number) => {
     const postId = String(id);
@@ -376,9 +404,9 @@ export default function ForumPage() {
   return (
     <div className="w-full space-y-14">
       <PageHeader
-        eyebrow="社区交流"
-        title="法律论坛"
-        description="与律师和法律爱好者交流讨论，分享经验与观点"
+        eyebrow={t("forumPage.eyebrow")}
+        title={t("forumPage.title")}
+        description={t("forumPage.description")}
         layout="lgEnd"
         tone={actualTheme}
         right={
@@ -391,7 +419,7 @@ export default function ForumPage() {
                   setPage(1);
                   setKeyword(e.target.value);
                 }}
-                placeholder="搜索帖子..."
+                placeholder={t("forumPage.searchPlaceholder")}
                 className="py-2.5"
               />
             </div>
@@ -404,7 +432,7 @@ export default function ForumPage() {
                   className="px-5 py-2.5"
                   icon={MessageSquare}
                 >
-                  我的评论
+                  {t("forumPage.myComments")}
                 </LinkButton>
                 <LinkButton
                   to="/forum/drafts"
@@ -413,7 +441,7 @@ export default function ForumPage() {
                   className="px-5 py-2.5"
                   icon={FileText}
                 >
-                  草稿箱
+                  {t("forumPage.drafts")}
                 </LinkButton>
                 <LinkButton
                   to="/forum/recycle-bin"
@@ -422,14 +450,14 @@ export default function ForumPage() {
                   className="px-5 py-2.5"
                   icon={Trash2}
                 >
-                  回收站
+                  {t("forumPage.recycleBin")}
                 </LinkButton>
                 <Button
                   onClick={() => navigate("/forum/new")}
                   icon={Plus}
                   className="py-2.5"
                 >
-                  发布
+                  {t("forumPage.publish")}
                 </Button>
               </>
             ) : (
@@ -439,7 +467,7 @@ export default function ForumPage() {
                 size="md"
                 className="px-5 py-2.5"
               >
-                登录后发帖
+                {t("forumPage.loginToPost")}
               </LinkButton>
             )}
           </div>
@@ -456,7 +484,7 @@ export default function ForumPage() {
               setActiveCategory(cat);
             }}
           >
-            {cat}
+            {getCategoryLabel(cat)}
           </Chip>
         ))}
       </div>
@@ -481,7 +509,7 @@ export default function ForumPage() {
                       }}
                       className="py-2.5"
                     >
-                      去逛逛论坛
+                      {t("forumPage.goBrowse")}
                     </Button>
                   </div>
                 ) : isAuthenticated ? (
@@ -491,7 +519,7 @@ export default function ForumPage() {
                       icon={Plus}
                       className="py-2.5"
                     >
-                      发布第一个帖子
+                      {t("forumPage.publishFirst")}
                     </Button>
                   </div>
                 ) : null
@@ -530,7 +558,7 @@ export default function ForumPage() {
           <Card variant="surface" padding="lg" className="rounded-3xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-base font-semibold text-slate-900 dark:text-white">
-                热度榜
+                {t("forumPage.hotBoard")}
               </h3>
               <button
                 type="button"
@@ -542,7 +570,7 @@ export default function ForumPage() {
                 }}
                 disabled={sidebarRefreshing}
               >
-                {sidebarRefreshing ? "刷新中..." : "刷新"}
+                {sidebarRefreshing ? t("forumPage.refreshing") : t("forumPage.refresh")}
               </button>
             </div>
 
@@ -578,7 +606,7 @@ export default function ForumPage() {
                         {p.title}
                       </p>
                       <p className="text-xs text-slate-500 mt-1 dark:text-white/40">
-                        热度 {(p.heat_score ?? 0).toFixed(0)} · 浏览{" "}
+                        {t("forumPage.hotHeat")} {(p.heat_score ?? 0).toFixed(0)} · {t("forumPage.hotViews")}{" "}
                         {p.view_count ?? 0}
                       </p>
                     </div>
@@ -587,7 +615,7 @@ export default function ForumPage() {
 
                 {(hotQuery.data ?? []).length === 0 ? (
                   <p className="text-sm text-slate-500 dark:text-white/40">
-                    暂无热榜数据
+                    {t("forumPage.noHotData")}
                   </p>
                 ) : null}
               </div>
@@ -596,10 +624,10 @@ export default function ForumPage() {
 
           <Card variant="surface" padding="lg" className="rounded-3xl">
             <h3 className="text-base font-semibold text-slate-900 dark:text-white mb-2">
-              发帖小贴士
+              {t("forumPage.tipsTitle")}
             </h3>
             <p className="text-sm text-slate-600 leading-relaxed dark:text-white/50">
-              贴出关键事实、时间线、合同/聊天截图（可打码），更容易获得高质量回复。
+              {t("forumPage.tipsDescription")}
             </p>
           </Card>
         </aside>

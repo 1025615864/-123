@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Eye, EyeOff, Lock, ShieldCheck, User } from 'lucide-react'
 import { useToast } from '../hooks'
 import { useAuth } from '../contexts/AuthContext'
+import { useLanguage } from '../contexts/LanguageContext'
 import { Button, Input } from '../components/ui'
 import { getApiErrorMessage } from '../utils'
 
@@ -18,15 +19,16 @@ export default function LoginPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const toast = useToast()
+  const { t } = useLanguage()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     const nextErrors: { username?: string; password?: string; form?: string } = {}
     if (!String(username || '').trim()) {
-      nextErrors.username = '请输入用户名'
+      nextErrors.username = t('login.usernameRequired')
     }
     if (!String(password || '').trim()) {
-      nextErrors.password = '请输入密码'
+      nextErrors.password = t('login.passwordRequired')
     }
     if (Object.keys(nextErrors).length > 0) {
       setErrors(nextErrors)
@@ -43,7 +45,7 @@ export default function LoginPage() {
 
     try {
       await login(username, password)
-      toast.success('登录成功！')
+      toast.success(t('login.successToast'))
 
       const rawRedirect = searchParams.get('return_to') || searchParams.get('redirect')
       let redirectTo = '/'
@@ -58,7 +60,7 @@ export default function LoginPage() {
 
       navigate(redirectTo, { replace: true })
     } catch (err: any) {
-      const message = getApiErrorMessage(err, '登录失败，请稍后重试')
+      const message = getApiErrorMessage(err, t('login.errorFallback'))
       setErrors({ form: message })
       toast.error(message)
     } finally {
@@ -78,16 +80,16 @@ export default function LoginPage() {
           <div className="hidden md:block">
             <div className="space-y-6">
               <p className="text-amber-700 dark:text-amber-400 text-sm font-medium tracking-wider uppercase">
-                欢迎回来
+                {t('login.heroEyebrow')}
               </p>
               <h1 className="text-4xl font-bold text-slate-900 dark:text-white leading-tight">
-                继续你的
+                {t('login.heroTitleLine1')}
                 <span className="block mt-2 bg-gradient-to-r from-amber-400 via-orange-400 to-amber-500 bg-clip-text text-transparent">
-                  法律咨询之旅
+                  {t('login.heroTitleLine2')}
                 </span>
               </h1>
               <p className="text-slate-600 dark:text-white/60 leading-relaxed">
-                登录后可使用 AI 咨询、收藏记录与个性化服务。
+                {t('login.heroDescription')}
               </p>
 
               <div className="flex items-center gap-3 text-slate-600 dark:text-white/70">
@@ -95,8 +97,8 @@ export default function LoginPage() {
                   <ShieldCheck className="h-5 w-5 text-amber-400" />
                 </div>
                 <div>
-                  <p className="text-sm font-medium text-slate-900 dark:text-white/80">安全与隐私</p>
-                  <p className="text-sm text-slate-600 dark:text-white/50">你的会话与数据将被安全保护</p>
+                  <p className="text-sm font-medium text-slate-900 dark:text-white/80">{t('login.securityTitle')}</p>
+                  <p className="text-sm text-slate-600 dark:text-white/50">{t('login.securityDescription')}</p>
                 </div>
               </div>
             </div>
@@ -104,13 +106,13 @@ export default function LoginPage() {
 
           <div className="rounded-3xl bg-white border border-slate-200/70 backdrop-blur-xl shadow-2xl shadow-black/10 p-8 md:p-10 dark:bg-white/[0.03] dark:border-white/[0.08] dark:shadow-black/30">
             <div className="text-center mb-8">
-              <h2 className="text-3xl font-bold text-slate-900 dark:text-white">欢迎回来</h2>
-              <p className="text-slate-600 dark:text-white/50 mt-2">登录您的账户继续使用</p>
+              <h2 className="text-3xl font-bold text-slate-900 dark:text-white">{t('login.panelTitle')}</h2>
+              <p className="text-slate-600 dark:text-white/50 mt-2">{t('login.panelDescription')}</p>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-5" noValidate>
               <Input
-                label="用户名"
+                label={t('auth.username')}
                 icon={User}
                 type="text"
                 value={username}
@@ -118,7 +120,7 @@ export default function LoginPage() {
                   setUsername(e.target.value)
                   setErrors((prev) => ({ ...prev, username: undefined, form: undefined }))
                 }}
-                placeholder="请输入用户名"
+                placeholder={t('auth.usernamePlaceholder')}
                 autoComplete="username"
                 disabled={loading}
                 required
@@ -128,7 +130,7 @@ export default function LoginPage() {
               />
 
               <Input
-                label="密码"
+                label={t('auth.password')}
                 icon={Lock}
                 type={showPassword ? 'text' : 'password'}
                 value={password}
@@ -136,7 +138,7 @@ export default function LoginPage() {
                   setPassword(e.target.value)
                   setErrors((prev) => ({ ...prev, password: undefined, form: undefined }))
                 }}
-                placeholder="请输入密码"
+                placeholder={t('auth.passwordPlaceholder')}
                 autoComplete="current-password"
                 disabled={loading}
                 required
@@ -148,7 +150,7 @@ export default function LoginPage() {
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
                     className="p-2 rounded-lg text-slate-500 hover:text-slate-700 hover:bg-slate-900/5 transition disabled:opacity-60 disabled:cursor-not-allowed dark:text-white/40 dark:hover:text-white/70 dark:hover:bg-white/5"
-                    aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                    aria-label={showPassword ? t('auth.hidePassword') : t('auth.showPassword')}
                     disabled={loading}
                   >
                     {showPassword ? (
@@ -168,10 +170,10 @@ export default function LoginPage() {
                 type="submit"
                 fullWidth
                 isLoading={loading}
-                loadingText="登录中..."
+                loadingText={t('login.loadingText')}
                 className="py-3.5"
               >
-                登录
+                {t('common.login')}
               </Button>
             </form>
 
@@ -180,14 +182,14 @@ export default function LoginPage() {
                 to="/forgot-password"
                 className="text-sm text-slate-600 hover:text-slate-800 dark:text-white/50 dark:hover:text-white/70"
               >
-                忘记密码？
+                {t('auth.forgotPassword')}
               </Link>
             </div>
 
             <p className="text-center text-slate-600 dark:text-white/50 mt-8">
-              还没有账户？{' '}
+              {t('login.noAccount')}{' '}
               <Link to="/register" className="text-amber-700 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300">
-                立即注册
+                {t('login.registerNow')}
               </Link>
             </p>
           </div>

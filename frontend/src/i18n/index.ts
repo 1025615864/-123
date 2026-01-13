@@ -26,7 +26,13 @@ export function getNestedValue(obj: any, path: string): string {
 
 // 翻译函数
 export function translate(lang: Language, key: string): string {
-  return getNestedValue(translations[lang], key);
+  const primary = getNestedValue(translations[lang], key);
+  if (primary !== key) return primary;
+  if (lang !== 'zh') {
+    const fallback = getNestedValue(translations.zh, key);
+    if (fallback !== key) return fallback;
+  }
+  return primary;
 }
 
 // 获取所有翻译

@@ -6,10 +6,12 @@ import api from '../api/client'
 import { useAppMutation, useToast } from '../hooks'
 import PageHeader from '../components/PageHeader'
 import { useTheme } from '../contexts/ThemeContext'
+import { useLanguage } from '../contexts/LanguageContext'
 import { Card, Button, Input, Modal, Pagination, EmptyState, Badge, ListSkeleton, Skeleton } from '../components/ui'
 import { getApiErrorMessage } from '../utils'
 import { queryKeys } from '../queryKeys'
 import { useAuth } from '../contexts/AuthContext'
+import { translate } from '../i18n'
 
 interface UserQuotaDailyResponse {
   day: string
@@ -30,16 +32,42 @@ interface DocumentType {
   description: string
 }
 
-const DOCUMENT_TYPES: DocumentType[] = [
-  { type: 'complaint', name: '民事起诉状', description: '向法院提起民事诉讼的文书' },
-  { type: 'defense', name: '民事答辩状', description: '被告针对原告诉讼请求的答辩文书' },
-  { type: 'agreement', name: '和解协议书', description: '双方达成和解的协议文书' },
-  { type: 'letter', name: '律师函', description: '以律师名义发出的法律文书' },
+type DocumentTypeFallback = { type: string; nameKey: string; descriptionKey: string }
+
+const DOCUMENT_TYPE_FALLBACKS: DocumentTypeFallback[] = [
+  {
+    type: 'complaint',
+    nameKey: 'documentGeneratorPage.documentTypes.complaint',
+    descriptionKey: 'documentGeneratorPage.documentTypes.complaintDescription',
+  },
+  {
+    type: 'defense',
+    nameKey: 'documentGeneratorPage.documentTypes.defense',
+    descriptionKey: 'documentGeneratorPage.documentTypes.defenseDescription',
+  },
+  {
+    type: 'agreement',
+    nameKey: 'documentGeneratorPage.documentTypes.agreement',
+    descriptionKey: 'documentGeneratorPage.documentTypes.agreementDescription',
+  },
+  {
+    type: 'letter',
+    nameKey: 'documentGeneratorPage.documentTypes.letter',
+    descriptionKey: 'documentGeneratorPage.documentTypes.letterDescription',
+  },
 ]
 
-const CASE_TYPES = [
-  '劳动纠纷', '合同纠纷', '婚姻家庭', '房产纠纷', 
-  '消费维权', '交通事故', '借贷纠纷', '其他'
+type CaseTypeOption = { key: string; labelKey: string }
+
+const CASE_TYPE_OPTIONS: CaseTypeOption[] = [
+  { key: 'laborDispute', labelKey: 'documentGeneratorPage.caseTypes.laborDispute' },
+  { key: 'contractDispute', labelKey: 'documentGeneratorPage.caseTypes.contractDispute' },
+  { key: 'marriageFamily', labelKey: 'documentGeneratorPage.caseTypes.marriageFamily' },
+  { key: 'propertyDispute', labelKey: 'documentGeneratorPage.caseTypes.propertyDispute' },
+  { key: 'consumerRights', labelKey: 'documentGeneratorPage.caseTypes.consumerRights' },
+  { key: 'trafficAccident', labelKey: 'documentGeneratorPage.caseTypes.trafficAccident' },
+  { key: 'loanDispute', labelKey: 'documentGeneratorPage.caseTypes.loanDispute' },
+  { key: 'other', labelKey: 'documentGeneratorPage.caseTypes.other' },
 ]
 
 export default function DocumentGeneratorPage() {
@@ -61,6 +89,8 @@ export default function DocumentGeneratorPage() {
   const toast = useToast()
   const queryClient = useQueryClient()
   const { actualTheme } = useTheme()
+  const { t, language } = useLanguage()
+  const locale = language === 'en' ? 'en-US' : 'zh-CN'
 
   const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false)
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState<string | null>(null)
@@ -89,7 +119,7 @@ export default function DocumentGeneratorPage() {
 
   const UNLIMITED_THRESHOLD = 1_000_000
   const formatQuotaNumber = (n: unknown) =>
-    typeof n === 'number' ? (n >= UNLIMITED_THRESHOLD ? '不限' : n) : '-'
+    typeof n === 'number' ? (n >= UNLIMITED_THRESHOLD ? t('common.unlimited') : n) : '-'
   const totalDocumentRemaining =
     (typeof documentRemaining === 'number' ? documentRemaining : 0) +
     (typeof documentPackRemaining === 'number' ? documentPackRemaining : 0)
@@ -131,7 +161,25 @@ export default function DocumentGeneratorPage() {
     toast.error(getApiErrorMessage(typesQuery.error))
   }, [typesQuery.error, toast])
 
-  const documentTypes = Array.isArray(typesQuery.data) && typesQuery.data.length > 0 ? typesQuery.data : DOCUMENT_TYPES
+  const fallbackDocumentTypes = useMemo(() => {
+    return DOCUMENT_TYPE_FALLBACKS.map((it) => ({
+      type: it.type,
+      name: t(it.nameKey),
+      description: t(it.descriptionKey),
+    }))
+  }, [t])
+
+  const documentTypes =
+    Array.isArray(typesQuery.data) && typesQuery.data.length > 0
+      ? typesQuery.data
+      : fallbackDocumentTypes
+
+  const caseTypeOptions = useMemo(() => {
+    return CASE_TYPE_OPTIONS.map((opt) => {
+      const value = translate('zh', opt.labelKey)
+      return { value, label: t(opt.labelKey) }
+    })
+  }, [t])
 
   const myDocsQueryKey = useMemo(
     () => queryKeys.myDocuments(historyPage, historyPageSize),
@@ -167,12 +215,12 @@ export default function DocumentGeneratorPage() {
 
   useEffect(() => {
     if (!myDocsQuery.error) return
-    toast.error(getApiErrorMessage(myDocsQuery.error, '文书历史加载失败'))
+    toast.error(getApiErrorMessage(myDocsQuery.error, t('documentGeneratorPage.historyLoadFailed')))
   }, [myDocsQuery.error, toast])
 
   useEffect(() => {
     if (!myDocDetailQuery.error) return
-    toast.error(getApiErrorMessage(myDocDetailQuery.error, '文书详情加载失败'))
+    toast.error(getApiErrorMessage(myDocDetailQuery.error, t('documentGeneratorPage.detailLoadFailed')))
   }, [myDocDetailQuery.error, toast])
 
   const myDocsData: MyDocListResponse = myDocsQuery.data ?? ({ items: [], total: 0 } satisfies MyDocListResponse)
@@ -189,7 +237,7 @@ export default function DocumentGeneratorPage() {
       })
       return res.data as { title: string; content: string; template_key?: string | null; template_version?: number | null }
     },
-    errorMessageFallback: '生成失败，请稍后重试',
+    errorMessageFallback: t('documentGeneratorPage.generateFailedRetry'),
     onSuccess: (response) => {
       setGeneratedDocument({
         title: response.title,
@@ -238,15 +286,15 @@ export default function DocumentGeneratorPage() {
       })
       return res.data as { id: number; message?: string }
     },
-    errorMessageFallback: '保存失败，请稍后重试',
+    errorMessageFallback: t('documentGeneratorPage.saveFailedRetry'),
     invalidateQueryKeys: [myDocsQueryKey as any],
     onSuccess: (res) => {
-      toast.success(res?.message ?? '已保存到我的文书')
+      toast.success(res?.message ?? t('documentGeneratorPage.savedToMyDocuments'))
     },
     onError: (err) => {
       const msg = String(err instanceof Error ? err.message : '')
       if (msg === 'NO_DOCUMENT') {
-        toast.error('请先生成文书')
+        toast.error(t('documentGeneratorPage.pleaseGenerateFirst'))
       }
     },
   })
@@ -255,7 +303,7 @@ export default function DocumentGeneratorPage() {
     mutationFn: async (id) => {
       await api.delete(`/documents/my/${id}`)
     },
-    errorMessageFallback: '删除失败，请稍后重试',
+    errorMessageFallback: t('documentGeneratorPage.deleteFailedRetry'),
     invalidateQueryKeys: [myDocsQueryKey as any],
     onMutate: async (id) => {
       setActiveDeleteId(id)
@@ -274,7 +322,7 @@ export default function DocumentGeneratorPage() {
       return { previous }
     },
     onSuccess: () => {
-      toast.success('已删除')
+      toast.success(t('documentGeneratorPage.deleted'))
     },
     onError: (err, _id, ctx) => {
       if (ctx && typeof ctx === 'object') {
@@ -296,7 +344,7 @@ export default function DocumentGeneratorPage() {
     if (!selectedType) return
 
     if (isDocQuotaExhausted) {
-      toast.info('今日文书生成次数已用完，可前往个人中心开通 VIP 或购买次数包')
+      toast.info(t('documentGeneratorPage.quotaExhaustedHint'))
       return
     }
 
@@ -309,10 +357,10 @@ export default function DocumentGeneratorPage() {
     try {
       await navigator.clipboard.writeText(generatedDocument.content)
       setCopied(true)
-      toast.success('已复制到剪贴板')
+      toast.success(t('documentGeneratorPage.copiedToClipboard'))
       setTimeout(() => setCopied(false), 2000)
     } catch {
-      toast.error('复制失败')
+      toast.error(t('documentGeneratorPage.copyFailed'))
     }
   }
 
@@ -327,7 +375,7 @@ export default function DocumentGeneratorPage() {
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
-    toast.success('文件已下载')
+    toast.success(t('documentGeneratorPage.fileDownloaded'))
   }
 
   const downloadBlobAsFile = (blob: Blob, filename: string) => {
@@ -367,9 +415,9 @@ export default function DocumentGeneratorPage() {
     try {
       const blob = await fetchPdfBlobByContent(generatedDocument.title, generatedDocument.content)
       downloadBlobAsFile(blob, `${generatedDocument.title}.pdf`)
-      toast.success('PDF 已下载')
+      toast.success(t('documentGeneratorPage.pdfDownloaded'))
     } catch (err) {
-      toast.error(getApiErrorMessage(err, 'PDF 导出失败'))
+      toast.error(getApiErrorMessage(err, t('documentGeneratorPage.pdfExportFailed')))
     }
   }
 
@@ -391,7 +439,7 @@ export default function DocumentGeneratorPage() {
       const blob = await fetchPdfBlobByContent(generatedDocument.title, generatedDocument.content)
       openPdfPreviewWithBlob(blob, generatedDocument.title)
     } catch (err) {
-      toast.error(getApiErrorMessage(err, 'PDF 预览失败'))
+      toast.error(getApiErrorMessage(err, t('documentGeneratorPage.pdfPreviewFailed')))
     } finally {
       setPdfPreviewBusy(false)
     }
@@ -400,13 +448,13 @@ export default function DocumentGeneratorPage() {
   const handleDownloadPdfForMyDoc = async () => {
     const docId = selectedDocId
     if (typeof docId !== 'number' || docId <= 0) return
-    const title = String(myDocDetailQuery.data?.title ?? '法律文书')
+    const title = String(myDocDetailQuery.data?.title ?? t('documentGeneratorPage.documentTitleFallback'))
     try {
       const blob = await fetchPdfBlobByDocId(docId)
       downloadBlobAsFile(blob, `${title}.pdf`)
-      toast.success('PDF 已下载')
+      toast.success(t('documentGeneratorPage.pdfDownloaded'))
     } catch (err) {
-      toast.error(getApiErrorMessage(err, 'PDF 导出失败'))
+      toast.error(getApiErrorMessage(err, t('documentGeneratorPage.pdfExportFailed')))
     }
   }
 
@@ -414,13 +462,13 @@ export default function DocumentGeneratorPage() {
     const docId = selectedDocId
     if (typeof docId !== 'number' || docId <= 0) return
     if (pdfPreviewBusy) return
-    const title = String(myDocDetailQuery.data?.title ?? '法律文书')
+    const title = String(myDocDetailQuery.data?.title ?? t('documentGeneratorPage.documentTitleFallback'))
     try {
       setPdfPreviewBusy(true)
       const blob = await fetchPdfBlobByDocId(docId)
       openPdfPreviewWithBlob(blob, title)
     } catch (err) {
-      toast.error(getApiErrorMessage(err, 'PDF 预览失败'))
+      toast.error(getApiErrorMessage(err, t('documentGeneratorPage.pdfPreviewFailed')))
     } finally {
       setPdfPreviewBusy(false)
     }
@@ -448,11 +496,11 @@ export default function DocumentGeneratorPage() {
   }
 
   return (
-    <div className="w-full space-y-12">
+    <div className="w-full space-y-10">
       <PageHeader
-        eyebrow="智能工具"
-        title="法律文书生成"
-        description="快速生成常用法律文书模板，仅供参考，正式使用前请咨询专业律师。"
+        eyebrow={t('documentGeneratorPage.eyebrow')}
+        title={t('documentGeneratorPage.title')}
+        description={t('documentGeneratorPage.description')}
         layout="mdStart"
         tone={actualTheme}
         right={
@@ -460,28 +508,28 @@ export default function DocumentGeneratorPage() {
             <div className="flex flex-col items-start gap-3">
               <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600 dark:text-white/70">
                 <Badge variant={isVipActive ? 'success' : 'default'} size="sm">
-                  {isVipActive ? 'VIP' : '非VIP'}
+                  {isVipActive ? t('common.vip') : t('common.nonVip')}
                 </Badge>
                 <span>
-                  今日文书剩余{' '}
+                  {t('documentGeneratorPage.todayDocumentsRemainingPrefix')}{' '}
                   <span className="font-semibold text-slate-900 dark:text-white">
                     {formatQuotaNumber(documentRemaining)}
                   </span>{' '}
-                  / {formatQuotaNumber(documentLimit)} 次
+                  / {formatQuotaNumber(documentLimit)} {t('documentGeneratorPage.times')}
                   {typeof documentPackRemaining === 'number' && documentPackRemaining > 0 && (
                     <>
-                      <span className="text-slate-500 dark:text-white/50">（次数包 {documentPackRemaining}）</span>
+                      <span className="text-slate-500 dark:text-white/50">{t('documentGeneratorPage.packPrefix')}{documentPackRemaining}{t('documentGeneratorPage.packSuffix')}</span>
                     </>
                   )}
-                  <span className="text-slate-500 dark:text-white/50">，</span>
-                  AI 咨询剩余{' '}
+                  <span className="text-slate-500 dark:text-white/50"> · </span>
+                  {t('documentGeneratorPage.todayAiRemainingPrefix')}{' '}
                   <span className="font-semibold text-slate-900 dark:text-white">
                     {formatQuotaNumber(aiChatRemaining)}
                   </span>{' '}
-                  / {formatQuotaNumber(aiChatLimit)} 次
+                  / {formatQuotaNumber(aiChatLimit)} {t('documentGeneratorPage.times')}
                   {typeof aiChatPackRemaining === 'number' && aiChatPackRemaining > 0 && (
                     <>
-                      <span className="text-slate-500 dark:text-white/50">（次数包 {aiChatPackRemaining}）</span>
+                      <span className="text-slate-500 dark:text-white/50">{t('documentGeneratorPage.packPrefix')}{aiChatPackRemaining}{t('documentGeneratorPage.packSuffix')}</span>
                     </>
                   )}
                 </span>
@@ -490,7 +538,7 @@ export default function DocumentGeneratorPage() {
                     to="/profile"
                     className="font-medium text-amber-700 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200"
                   >
-                    开通 VIP
+                    {t('documentGeneratorPage.openVip')}
                   </Link>
                 )}
                 {isDocQuotaExhausted && (
@@ -498,7 +546,7 @@ export default function DocumentGeneratorPage() {
                     to="/profile"
                     className="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-200"
                   >
-                    购买次数包
+                    {t('documentGeneratorPage.buyPack')}
                   </Link>
                 )}
               </div>
@@ -508,18 +556,18 @@ export default function DocumentGeneratorPage() {
                   size="sm"
                   icon={RotateCcw}
                   isLoading={quotasQuery.isFetching}
-                  loadingText="刷新中..."
+                  loadingText={t('common.refreshing')}
                   onClick={() => quotasQuery.refetch()}
                 >
-                  刷新配额
+                  {t('documentGeneratorPage.refreshQuota')}
                 </Button>
                 <Link to="/profile">
                   <Button variant="outline" size="sm">
-                    个人中心
+                    {t('documentGeneratorPage.profile')}
                   </Button>
                 </Link>
                 <Button variant="outline" size="sm" onClick={() => setHistoryOpen(true)} icon={History}>
-                  我的文书
+                  {t('documentGeneratorPage.myDocuments')}
                 </Button>
               </div>
             </div>
@@ -528,8 +576,8 @@ export default function DocumentGeneratorPage() {
       />
 
       {/* 步骤指示器 */}
-      <div className="flex items-center justify-center gap-4">
-        {['选择类型', '填写信息', '生成文书'].map((label, idx) => (
+      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-3">
+        {[t('documentGeneratorPage.stepSelectType'), t('documentGeneratorPage.stepFillInfo'), t('documentGeneratorPage.stepGenerate')].map((label, idx) => (
           <div key={idx} className="flex items-center gap-2">
             <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
               step > idx + 1 
@@ -577,24 +625,24 @@ export default function DocumentGeneratorPage() {
       {step === 2 && selectedType && (
         <Card variant="surface" padding="lg" className="max-w-2xl mx-auto">
           <h3 className="text-xl font-semibold text-slate-900 mb-6 dark:text-white">
-            填写{selectedType.name}信息
+            {`${t('documentGeneratorPage.fillInfoTitlePrefix')}${selectedType.name}${t('documentGeneratorPage.fillInfoTitleSuffix')}`}
           </h3>
           
           <div className="space-y-6">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">案件类型</label>
+              <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">{t('documentGeneratorPage.caseType')}</label>
               <div className="flex flex-wrap gap-2">
-                {CASE_TYPES.map((caseType) => (
+                {caseTypeOptions.map((opt) => (
                   <button
-                    key={caseType}
-                    onClick={() => setFormData({ ...formData, case_type: caseType })}
+                    key={opt.value}
+                    onClick={() => setFormData({ ...formData, case_type: opt.value })}
                     className={`px-4 py-2 rounded-full text-sm transition-all ${
-                      formData.case_type === caseType
+                      formData.case_type === opt.value
                         ? 'bg-amber-500 text-white'
                         : 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-white/5 dark:text-white/70 dark:hover:bg-white/10'
                     }`}
                   >
-                    {caseType}
+                    {opt.label}
                   </button>
                 ))}
               </div>
@@ -602,68 +650,80 @@ export default function DocumentGeneratorPage() {
 
             <div className="grid md:grid-cols-2 gap-4">
               <Input
-                label={selectedType.type === 'agreement' ? '甲方姓名' : '原告姓名'}
+                label={
+                  selectedType.type === 'agreement'
+                    ? t('documentGeneratorPage.partyAName')
+                    : t('documentGeneratorPage.plaintiffName')
+                }
                 value={formData.plaintiff_name}
                 onChange={(e) => setFormData({ ...formData, plaintiff_name: e.target.value })}
-                placeholder="请输入姓名"
+                placeholder={t('documentGeneratorPage.namePlaceholder')}
               />
               <Input
-                label={selectedType.type === 'agreement' ? '乙方姓名' : '被告姓名'}
+                label={
+                  selectedType.type === 'agreement'
+                    ? t('documentGeneratorPage.partyBName')
+                    : t('documentGeneratorPage.defendantName')
+                }
                 value={formData.defendant_name}
                 onChange={(e) => setFormData({ ...formData, defendant_name: e.target.value })}
-                placeholder="请输入姓名"
+                placeholder={t('documentGeneratorPage.namePlaceholder')}
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">案件事实</label>
+              <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">{t('documentGeneratorPage.facts')}</label>
               <textarea
                 value={formData.facts}
                 onChange={(e) => setFormData({ ...formData, facts: e.target.value })}
                 rows={4}
                 className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 text-slate-900 placeholder:text-slate-400 outline-none resize-none focus:border-amber-500/50 focus:ring-2 focus:ring-amber-500/10 dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white dark:placeholder:text-white/40"
-                placeholder="请详细描述案件事实经过..."
+                placeholder={t('documentGeneratorPage.factsPlaceholder')}
               />
             </div>
 
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">
-                {selectedType.type === 'complaint' ? '诉讼请求' : 
-                 selectedType.type === 'defense' ? '答辩意见' :
-                 selectedType.type === 'agreement' ? '协议内容' : '法律要求'}
+                {selectedType.type === 'complaint'
+                  ? t('documentGeneratorPage.claimsComplaint')
+                  : selectedType.type === 'defense'
+                  ? t('documentGeneratorPage.claimsDefense')
+                  : selectedType.type === 'agreement'
+                  ? t('documentGeneratorPage.claimsAgreement')
+                  : t('documentGeneratorPage.claimsLegalDemand')}
               </label>
               <textarea
                 value={formData.claims}
                 onChange={(e) => setFormData({ ...formData, claims: e.target.value })}
                 rows={3}
                 className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 text-slate-900 placeholder:text-slate-400 outline-none resize-none focus:border-amber-500/50 focus:ring-2 focus:ring-amber-500/10 dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white dark:placeholder:text-white/40"
-                placeholder="请输入具体请求或要求..."
+                placeholder={t('documentGeneratorPage.claimsPlaceholder')}
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">证据说明（选填）</label>
+              <label className="block text-sm font-medium text-slate-700 mb-2 dark:text-white/70">{t('documentGeneratorPage.evidenceOptional')}</label>
               <textarea
                 value={formData.evidence}
                 onChange={(e) => setFormData({ ...formData, evidence: e.target.value })}
                 rows={2}
                 className="w-full px-4 py-3 rounded-xl border border-slate-200 bg-slate-50 text-slate-900 placeholder:text-slate-400 outline-none resize-none focus:border-amber-500/50 focus:ring-2 focus:ring-amber-500/10 dark:border-white/10 dark:bg-[#0f0a1e]/60 dark:text-white dark:placeholder:text-white/40"
-                placeholder="列举相关证据材料..."
+                placeholder={t('documentGeneratorPage.evidencePlaceholder')}
               />
             </div>
 
             <div className="flex gap-4 pt-4">
               <Button variant="outline" onClick={() => setStep(1)}>
-                返回
+                {t('common.back')}
               </Button>
               <Button 
                 onClick={handleGenerate} 
                 disabled={!formData.case_type || !formData.plaintiff_name || !formData.defendant_name || !formData.facts || !formData.claims || generateMutation.isPending || isDocQuotaExhausted}
                 isLoading={generateMutation.isPending}
-                loadingText="生成中..."
+                loadingText={t('documentGeneratorPage.generating')}
                 className="flex-1"
               >
-                生成文书
+                {t('documentGeneratorPage.generateDocument')}
               </Button>
             </div>
           </div>
@@ -673,24 +733,32 @@ export default function DocumentGeneratorPage() {
       {/* 步骤3: 显示生成的文书 */}
       {step === 3 && generatedDocument && (
         <Card variant="surface" padding="lg" className="max-w-3xl mx-auto">
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-6">
             <h3 className="text-xl font-semibold text-slate-900 dark:text-white">{generatedDocument.title}</h3>
-            <div className="flex gap-2">
-              <Button variant="outline" size="sm" onClick={handleCopy}>
-                {copied ? <Check className="h-4 w-4 mr-2" /> : <Copy className="h-4 w-4 mr-2" />}
-                {copied ? '已复制' : '复制'}
+            <div className="flex flex-wrap items-center gap-2">
+              <Button variant="outline" size="sm" onClick={handleCopy} icon={copied ? Check : Copy}>
+                {copied ? t('documentGeneratorPage.copied') : t('documentGeneratorPage.copy')}
               </Button>
-              <Button variant="outline" size="sm" onClick={handleDownload}>
-                <Download className="h-4 w-4 mr-2" />
-                下载TXT
+              <Button variant="outline" size="sm" onClick={handleDownload} icon={Download}>
+                {t('documentGeneratorPage.downloadTxt')}
               </Button>
-              <Button variant="outline" size="sm" onClick={handlePreviewPdfForGenerated} disabled={pdfPreviewBusy}>
-                <Eye className="h-4 w-4 mr-2" />
-                预览PDF
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handlePreviewPdfForGenerated}
+                disabled={pdfPreviewBusy}
+                icon={Eye}
+              >
+                {t('documentGeneratorPage.previewPdf')}
               </Button>
-              <Button variant="outline" size="sm" onClick={handleDownloadPdfForGenerated} disabled={pdfPreviewBusy}>
-                <Download className="h-4 w-4 mr-2" />
-                下载PDF
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleDownloadPdfForGenerated}
+                disabled={pdfPreviewBusy}
+                icon={Download}
+              >
+                {t('documentGeneratorPage.downloadPdf')}
               </Button>
               {isAuthenticated ? (
                 <Button
@@ -702,9 +770,9 @@ export default function DocumentGeneratorPage() {
                   }}
                   disabled={saveMutation.isPending}
                   isLoading={saveMutation.isPending}
-                  loadingText="保存中..."
+                  loadingText={t('documentGeneratorPage.saving')}
                 >
-                  保存
+                  {t('common.save')}
                 </Button>
               ) : null}
             </div>
@@ -718,13 +786,13 @@ export default function DocumentGeneratorPage() {
 
           <div className="mt-6 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20">
             <p className="text-amber-700 text-sm dark:text-amber-400">
-              ⚠️ 免责声明：本文书由AI自动生成，仅供参考。正式使用前，请务必咨询专业律师进行审核和修改。
+              {t('documentGeneratorPage.disclaimer')}
             </p>
           </div>
 
           <div className="flex gap-4 mt-6">
             <Button variant="outline" onClick={handleReset}>
-              重新生成
+              {t('documentGeneratorPage.regenerate')}
             </Button>
           </div>
         </Card>
@@ -737,7 +805,7 @@ export default function DocumentGeneratorPage() {
           setHistoryOpen(false)
           setSelectedDocId(null)
         }}
-        title="我的文书"
+        title={t('documentGeneratorPage.myDocuments')}
         size="lg"
       >
         <div className="flex items-center justify-end mb-3">
@@ -746,11 +814,11 @@ export default function DocumentGeneratorPage() {
             size="sm"
             icon={RotateCcw}
             isLoading={myDocsQuery.isFetching}
-            loadingText="刷新中..."
+            loadingText={t('common.refreshing')}
             disabled={myDocsQuery.isFetching || historyBusy}
             onClick={() => myDocsQuery.refetch()}
           >
-            刷新
+            {t('common.refresh')}
           </Button>
         </div>
 
@@ -759,8 +827,8 @@ export default function DocumentGeneratorPage() {
         ) : myDocsItems.length === 0 ? (
           <EmptyState
             icon={FileText}
-            title="暂无保存的文书"
-            description="在生成文书后点击“保存”，即可在这里查看"
+            title={t('documentGeneratorPage.noSavedTitle')}
+            description={t('documentGeneratorPage.noSavedDescription')}
             tone={actualTheme}
           />
         ) : (
@@ -776,7 +844,7 @@ export default function DocumentGeneratorPage() {
                         {item.title}
                       </div>
                       <div className="text-xs text-slate-500 dark:text-white/45 mt-1">
-                        {new Date(item.created_at).toLocaleString()}
+                        {new Date(item.created_at).toLocaleString(locale)}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
@@ -790,7 +858,7 @@ export default function DocumentGeneratorPage() {
                         }}
                         disabled={disableOther}
                       >
-                        查看
+                        {t('common.view')}
                       </Button>
                       <Button
                         variant="ghost"
@@ -799,14 +867,14 @@ export default function DocumentGeneratorPage() {
                         className="text-red-600"
                         onClick={() => {
                           if (historyBusy) return
-                          if (!confirm('确定删除该文书？')) return
+                          if (!confirm(t('documentGeneratorPage.deleteConfirm'))) return
                           deleteMutation.mutate(item.id)
                         }}
                         isLoading={deleteLoading}
-                        loadingText="删除中..."
+                        loadingText={t('documentGeneratorPage.deleting')}
                         disabled={disableOther || deleteLoading}
                       >
-                        删除
+                        {t('common.delete')}
                       </Button>
                     </div>
                   </div>
@@ -841,40 +909,43 @@ export default function DocumentGeneratorPage() {
                       <div className="text-sm font-semibold text-slate-900 dark:text-white truncate">
                         {myDocDetailQuery.data.title}
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <Button
                           variant="outline"
                           size="sm"
+                          icon={Download}
                           onClick={() => {
                             const blob = new Blob([myDocDetailQuery.data?.content ?? ''], { type: 'text/plain;charset=utf-8' })
                             downloadBlobAsFile(blob, `${myDocDetailQuery.data.title}.txt`)
-                            toast.success('文件已下载')
+                            toast.success(t('documentGeneratorPage.fileDownloaded'))
                           }}
                         >
-                          下载TXT
+                          {t('documentGeneratorPage.downloadTxt')}
                         </Button>
                         <Button
                           variant="outline"
                           size="sm"
+                          icon={Eye}
                           onClick={handlePreviewPdfForMyDoc}
                           disabled={pdfPreviewBusy}
                         >
-                          预览PDF
+                          {t('documentGeneratorPage.previewPdf')}
                         </Button>
                         <Button
                           variant="outline"
                           size="sm"
+                          icon={Download}
                           onClick={handleDownloadPdfForMyDoc}
                           disabled={pdfPreviewBusy}
                         >
-                          下载PDF
+                          {t('documentGeneratorPage.downloadPdf')}
                         </Button>
                       </div>
                     </div>
                     <pre className="whitespace-pre-wrap text-sm text-slate-800 dark:text-white/90">{myDocDetailQuery.data.content}</pre>
                   </div>
                 ) : (
-                  <div className="text-sm text-slate-500 dark:text-white/50">未找到文书详情</div>
+                  <div className="text-sm text-slate-500 dark:text-white/50">{t('documentGeneratorPage.detailNotFound')}</div>
                 )}
               </Card>
             ) : null}
@@ -888,7 +959,7 @@ export default function DocumentGeneratorPage() {
           if (pdfPreviewBusy) return
           setPdfPreviewOpen(false)
         }}
-        title={pdfPreviewTitle ? `PDF 预览：${pdfPreviewTitle}` : 'PDF 预览'}
+        title={pdfPreviewTitle ? `${t('documentGeneratorPage.pdfPreviewTitlePrefix')}${pdfPreviewTitle}` : t('documentGeneratorPage.pdfPreviewTitle')}
         size="xl"
       >
         {pdfPreviewUrl ? (
@@ -900,7 +971,7 @@ export default function DocumentGeneratorPage() {
             />
           </div>
         ) : (
-          <div className="text-sm text-slate-500 dark:text-white/50">PDF 加载中...</div>
+          <div className="text-sm text-slate-500 dark:text-white/50">{t('documentGeneratorPage.pdfLoading')}</div>
         )}
       </Modal>
     </div>

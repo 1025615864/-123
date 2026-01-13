@@ -7,6 +7,7 @@ import PageHeader from "../components/PageHeader";
 import api from "../api/client";
 import { queryKeys } from "../queryKeys";
 import { useTheme } from "../contexts/ThemeContext";
+import { useLanguage } from "../contexts/LanguageContext";
 import { getApiErrorMessage } from "../utils";
 
 interface SharedMessage {
@@ -25,6 +26,7 @@ interface SharedConsultationResponse {
 
 export default function SharePage() {
   const { actualTheme } = useTheme();
+  const { t, language } = useLanguage();
   const params = useParams();
   const token = String(params.token || "").trim();
 
@@ -47,25 +49,26 @@ export default function SharePage() {
   const data = sharedQuery.data ?? null;
 
   const pageTitle = useMemo(() => {
-    const t = String(data?.title || "").trim();
-    return t || "分享的对话";
-  }, [data?.title]);
+    const rawTitle = String(data?.title || "").trim();
+    return rawTitle || t("sharePage.defaultTitle");
+  }, [data?.title, t]);
 
   const createdAtText = useMemo(() => {
     const raw = String(data?.created_at || "").trim();
     if (!raw) return "";
     const ts = new Date(raw).getTime();
     if (Number.isNaN(ts)) return raw;
-    return new Date(ts).toLocaleString("zh-CN");
-  }, [data?.created_at]);
+    const locale = language === "en" ? "en-US" : "zh-CN";
+    return new Date(ts).toLocaleString(locale);
+  }, [data?.created_at, language]);
 
   const handleCopyLink = async () => {
     const url = `${window.location.origin}/share/${token}`;
     try {
       await navigator.clipboard.writeText(url);
-      window.alert("已复制分享链接");
+      window.alert(t("sharePage.copyLinkSuccess"));
     } catch {
-      window.prompt("复制分享链接", url);
+      window.prompt(t("sharePage.copyLinkPromptTitle"), url);
     }
   };
 
@@ -73,12 +76,12 @@ export default function SharePage() {
     return (
       <EmptyState
         icon={Share2}
-        title="分享链接无效"
-        description="缺少分享 token"
+        title={t("sharePage.invalidLinkTitle")}
+        description={t("sharePage.missingTokenDescription")}
         tone={actualTheme}
         action={
           <Link to="/">
-            <Button icon={ArrowRight}>返回首页</Button>
+            <Button icon={ArrowRight}>{t("sharePage.backHome")}</Button>
           </Link>
         }
       />
@@ -89,18 +92,18 @@ export default function SharePage() {
     return (
       <div className="space-y-10">
         <PageHeader
-          eyebrow="分享"
-          title="分享的对话"
+          eyebrow={t("sharePage.eyebrow")}
+          title={t("sharePage.defaultTitle")}
           tone={actualTheme}
           right={
             <Button
               variant="outline"
               icon={RotateCcw}
               isLoading
-              loadingText="刷新中..."
+              loadingText={t("sharePage.refreshing")}
               disabled
             >
-              刷新
+              {t("sharePage.refresh")}
             </Button>
           }
         />
@@ -128,19 +131,19 @@ export default function SharePage() {
   }
 
   const errText = sharedQuery.isError
-    ? getApiErrorMessage(sharedQuery.error, "加载分享内容失败")
+    ? getApiErrorMessage(sharedQuery.error, t("sharePage.loadFailedFallback"))
     : null;
 
   if (errText) {
     return (
       <EmptyState
         icon={Share2}
-        title="无法打开分享内容"
+        title={t("sharePage.openFailedTitle")}
         description={errText}
         tone={actualTheme}
         action={
           <Button variant="outline" onClick={() => sharedQuery.refetch()}>
-            重试
+            {t("sharePage.retry")}
           </Button>
         }
       />
@@ -151,8 +154,8 @@ export default function SharePage() {
     return (
       <EmptyState
         icon={Share2}
-        title="暂无数据"
-        description="分享内容为空"
+        title={t("sharePage.noDataTitle")}
+        description={t("sharePage.emptyDataDescription")}
         tone={actualTheme}
       />
     );
@@ -163,10 +166,12 @@ export default function SharePage() {
   return (
     <div className="space-y-10">
       <PageHeader
-        eyebrow="分享"
+        eyebrow={t("sharePage.eyebrow")}
         title={pageTitle}
         description={
-          createdAtText ? `创建时间：${createdAtText}` : "只读分享内容"
+          createdAtText
+            ? `${t("sharePage.createdAtPrefix")}${createdAtText}`
+            : t("sharePage.readOnlyHint")
         }
         tone={actualTheme}
         right={
@@ -176,20 +181,20 @@ export default function SharePage() {
               onClick={() => sharedQuery.refetch()}
               icon={RotateCcw}
               isLoading={sharedQuery.isFetching}
-              loadingText="刷新中..."
+              loadingText={t("sharePage.refreshing")}
               disabled={sharedQuery.isFetching}
             >
-              刷新
+              {t("sharePage.refresh")}
             </Button>
             <Button variant="outline" onClick={handleCopyLink} icon={Share2}>
-              复制链接
+              {t("sharePage.copyLink")}
             </Button>
             <Link to="/chat">
               <Button
                 icon={ArrowRight}
                 className="bg-emerald-600 hover:bg-emerald-700 text-white focus-visible:ring-emerald-500/25"
               >
-                去咨询
+                {t("sharePage.goConsult")}
               </Button>
             </Link>
           </div>
@@ -199,8 +204,8 @@ export default function SharePage() {
       {messages.length === 0 ? (
         <EmptyState
           icon={Share2}
-          title="暂无消息"
-          description="该会话没有可展示的消息"
+          title={t("sharePage.noMessagesTitle")}
+          description={t("sharePage.noMessagesDescription")}
           tone={actualTheme}
         />
       ) : (
@@ -209,9 +214,10 @@ export default function SharePage() {
             const role = String(m.role || "").trim();
             const isUser = role === "user";
             const Icon = isUser ? User : Bot;
-            const label = isUser ? "用户" : "AI";
+            const label = isUser ? t("sharePage.userLabel") : t("sharePage.aiLabel");
             const atRaw = String(m.created_at || "").trim();
-            const atText = atRaw ? new Date(atRaw).toLocaleString("zh-CN") : "";
+            const locale = language === "en" ? "en-US" : "zh-CN";
+            const atText = atRaw ? new Date(atRaw).toLocaleString(locale) : "";
 
             return (
               <Card

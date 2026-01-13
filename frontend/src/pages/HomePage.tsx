@@ -17,6 +17,7 @@ import { Badge, Button, Card, Input, LinkButton, Skeleton } from "../components/
 import api from "../api/client";
 import { queryKeys } from "../queryKeys";
 import { toolNavItems } from "../navigation";
+import { useLanguage } from "../contexts/LanguageContext";
 
 interface HomeNewsListItem {
   id: number;
@@ -30,47 +31,58 @@ interface HomeNewsListItem {
 
 export default function HomePage() {
   const navigate = useNavigate();
+  const { t, language } = useLanguage();
   const [searchKeyword, setSearchKeyword] = useState("");
 
-  const quickQuestions = [
-    "试用期被辞退，公司不给补偿怎么办？",
-    "离婚时房子和孩子抚养权怎么判？",
-    "被网购商家拒绝退款，我该怎么维权？",
-    "借钱不还，只有转账记录能起诉吗？",
-    "劳动合同没签满一年，能要求双倍工资吗？",
-    "交通事故对方全责，赔偿项目和标准有哪些？",
-  ];
+  const quickQuestions =
+    language === "en"
+      ? [
+          "I was fired during probation. What can I do?",
+          "How are child custody and property divided in divorce?",
+          "An online seller refused my refund. How to protect my rights?",
+          "Someone owes me money. Can I sue with only bank transfer records?",
+          "No contract for a year — can I claim double salary?",
+          "Traffic accident (other party fully liable): what can I claim?",
+        ]
+      : [
+          "试用期被辞退，公司不给补偿怎么办？",
+          "离婚时房子和孩子抚养权怎么判？",
+          "被网购商家拒绝退款，我该怎么维权？",
+          "借钱不还，只有转账记录能起诉吗？",
+          "劳动合同没签满一年，能要求双倍工资吗？",
+          "交通事故对方全责，赔偿项目和标准有哪些？",
+        ];
 
-  const toolDescriptions: Record<string, string> = {
-    "/calculator": "快速估算费用区间，避免踩坑",
-    "/limitations": "一键计算诉讼时效，防止过期",
-    "/documents": "模板化生成文书，提升效率",
-    "/calendar": "重要节点提醒，不错过关键时间",
+  const toolDescriptionKeys: Record<string, string> = {
+    "/calculator": "home.toolDescriptions.calculator",
+    "/limitations": "home.toolDescriptions.limitations",
+    "/documents": "home.toolDescriptions.documents",
+    "/calendar": "home.toolDescriptions.calendar",
   };
 
   const services = [
     {
       icon: MessageCircle,
-      title: "AI法律咨询",
-      description: "智能AI助手，24小时在线解答您的法律问题",
+      titleKey: "nav.consultation",
+      descriptionKey: "home.services.consultationDescription",
       link: "/chat",
     },
     {
       icon: Users,
-      title: "法律论坛",
-      description: "与专业人士交流，分享法律经验与见解",
+      titleKey: "nav.forum",
+      descriptionKey: "home.services.forumDescription",
       link: "/forum",
     },
     {
       icon: Newspaper,
-      title: "法律资讯",
-      description: "最新法律政策解读与案例分析",
+      titleKey: "nav.news",
+      descriptionKey: "home.services.newsDescription",
       link: "/news",
     },
     {
       icon: Building2,
-      title: "律所查询",
-      description: "查找您身边的专业律师事务所",
+      titleKey: "nav.lawfirm",
+      descriptionKey: "home.services.lawfirmDescription",
       link: "/lawfirm",
     },
   ];
@@ -78,18 +90,18 @@ export default function HomePage() {
   const features = [
     {
       icon: Shield,
-      title: "专业可靠",
-      description: "基于权威法律法规，提供准确专业的法律建议",
+      titleKey: "home.features.professionalTitle",
+      descriptionKey: "home.features.professionalDescription",
     },
     {
       icon: Clock,
-      title: "全天候服务",
-      description: "7×24小时在线，随时为您解答法律疑问",
+      titleKey: "home.features.alwaysOnTitle",
+      descriptionKey: "home.features.alwaysOnDescription",
     },
     {
       icon: Award,
-      title: "值得信赖",
-      description: "已服务超过10万用户，获得广泛好评",
+      titleKey: "home.features.trustedTitle",
+      descriptionKey: "home.features.trustedDescription",
     },
   ];
 
@@ -99,14 +111,14 @@ export default function HomePage() {
       <section className="relative min-h-[90vh] flex items-center justify-center overflow-hidden">
         <div className="max-w-4xl mx-auto text-center px-4 animate-fade-in">
           <h1 className="text-5xl md:text-6xl lg:text-7xl font-bold text-slate-900 dark:text-white leading-[1.1] tracking-tight">
-            专业法律服务
+            {t("home.heroTitle")}
             <span className="block mt-6 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-600 bg-clip-text text-transparent animate-gradient">
-              触手可及
+              {t("home.heroTitleAccent")}
             </span>
           </h1>
 
           <p className="mt-10 text-xl md:text-2xl text-slate-600 dark:text-white/50 leading-relaxed max-w-2xl mx-auto font-light">
-            AI智能与专业律师团队，为您提供全方位法律咨询
+            {t("home.heroSubtitle")}
           </p>
 
           <form
@@ -122,10 +134,10 @@ export default function HomePage() {
                 icon={Search}
                 value={searchKeyword}
                 onChange={(e) => setSearchKeyword(e.target.value)}
-                placeholder="搜索新闻、帖子、律所、律师与知识库..."
+                placeholder={t("home.searchPlaceholder")}
               />
               <Button type="submit" className="sm:w-28">
-                搜索
+                {t("common.search")}
               </Button>
             </div>
           </form>
@@ -135,7 +147,7 @@ export default function HomePage() {
               to="/chat"
               className="group rounded-full px-10 py-4 text-base font-medium hover:shadow-xl hover:shadow-amber-500/20 hover:scale-105 transition-all duration-300"
             >
-              开始咨询
+              {t("layout.startConsultation")}
               <ArrowRight className="h-5 w-5 group-hover:translate-x-1 transition-transform" />
             </LinkButton>
             <LinkButton
@@ -143,7 +155,7 @@ export default function HomePage() {
               variant="outline"
               className="rounded-full px-10 py-4 text-base font-medium hover:bg-slate-50 dark:hover:bg-white/5 transition-all duration-300"
             >
-              查找律师
+              {t("home.findLawyer")}
             </LinkButton>
             <Button
               type="button"
@@ -153,14 +165,14 @@ export default function HomePage() {
                 document.getElementById("home-tools")?.scrollIntoView({ behavior: "smooth" });
               }}
             >
-              法律工具
+              {t("layout.tools")}
               <ArrowRight className="h-5 w-5" />
             </Button>
           </div>
 
           <div className="mt-10 max-w-3xl mx-auto">
             <div className="text-xs text-slate-500 dark:text-white/40 text-center">
-              试试这样问（点击一键带入 AI 咨询）
+              {t("home.quickQuestionsHint")}
             </div>
             <div className="mt-4 flex flex-wrap justify-center gap-2">
               {quickQuestions.map((q) => (
@@ -185,13 +197,13 @@ export default function HomePage() {
       <section id="home-tools" className="pt-12 md:pt-16">
         <div className="text-center mb-16">
           <p className="text-amber-700 text-xs font-medium tracking-widest uppercase mb-5 dark:text-amber-400/80">
-            常用法律工具
+            {t("home.toolsEyebrow")}
           </p>
           <h2 className="text-2xl md:text-3xl font-medium text-slate-900 dark:text-white">
-            一站式解决高频问题
+            {t("home.toolsTitle")}
           </h2>
           <p className="mt-4 text-slate-600 dark:text-white/50 text-sm max-w-2xl mx-auto">
-            先用工具快速自查，再进入 AI 咨询获得更完整的建议
+            {t("home.toolsDescription")}
           </p>
         </div>
 
@@ -208,17 +220,17 @@ export default function HomePage() {
                     <Icon className="h-6 w-6 text-blue-600/90 dark:text-blue-400" />
                   </div>
                   <Badge className="bg-blue-50 text-blue-700 border border-blue-100 dark:bg-blue-900/20 dark:text-blue-300 dark:border-blue-500/20">
-                    工具
+                    {t("home.toolBadge")}
                   </Badge>
                 </div>
                 <h3 className="mt-6 text-base font-medium text-slate-900 group-hover:text-blue-600 transition-colors dark:text-white dark:group-hover:text-blue-400">
-                  {label}
+                  {t(label)}
                 </h3>
                 <p className="mt-3 text-slate-600 leading-relaxed text-sm dark:text-white/45">
-                  {toolDescriptions[path] ?? "打开工具，快速完成计算与生成"}
+                  {t(toolDescriptionKeys[path] ?? "home.toolDescriptions.default")}
                 </p>
                 <div className="mt-6 inline-flex items-center gap-1 text-sm font-medium text-blue-600 dark:text-blue-400">
-                  立即使用
+                  {t("home.toolAction")}
                   <ArrowRight className="h-4 w-4 group-hover:translate-x-0.5 transition-transform" />
                 </div>
               </Card>
@@ -233,17 +245,17 @@ export default function HomePage() {
       <section>
         <div className="text-center mb-20">
           <p className="text-amber-700 text-xs font-medium tracking-widest uppercase mb-5 dark:text-amber-400/80">
-            我们的服务
+            {t("home.services.eyebrow")}
           </p>
           <h2 className="text-2xl md:text-3xl font-medium text-slate-900 dark:text-white">
-            全方位法律服务平台
+            {t("home.services.title")}
           </h2>
         </div>
 
         <div className="grid md:grid-cols-2 gap-10 lg:gap-12">
-          {services.map(({ icon: Icon, title, description, link }) => (
+          {services.map(({ icon: Icon, titleKey, descriptionKey, link }) => (
             <Link
-              key={title}
+              key={link}
               to={link}
               className="group block rounded-3xl outline-none focus-visible:ring-2 focus-visible:ring-amber-500/20 focus-visible:ring-offset-2 focus-visible:ring-offset-white dark:focus-visible:ring-offset-slate-900"
             >
@@ -257,10 +269,10 @@ export default function HomePage() {
                   <Icon className="h-6 w-6 text-amber-400/90" />
                 </div>
                 <h3 className="text-lg font-medium text-slate-900 mb-4 group-hover:text-amber-600 transition-colors dark:text-white dark:group-hover:text-amber-400">
-                  {title}
+                  {t(titleKey)}
                 </h3>
                 <p className="text-slate-600 leading-relaxed text-sm dark:text-white/40">
-                  {description}
+                  {t(descriptionKey)}
                 </p>
               </Card>
             </Link>
@@ -280,24 +292,24 @@ export default function HomePage() {
       <section className="border-t border-slate-200/70 pt-20 md:pt-28 dark:border-white/5">
         <div className="text-center mb-20">
           <p className="text-amber-700 text-xs font-medium tracking-widest uppercase mb-5 dark:text-amber-400/80">
-            为什么选择我们
+            {t("home.features.eyebrow")}
           </p>
           <h2 className="text-2xl md:text-3xl font-medium text-slate-900 dark:text-white">
-            值得信赖的法律服务伙伴
+            {t("home.features.title")}
           </h2>
         </div>
 
         <div className="grid md:grid-cols-3 gap-14 lg:gap-20">
-          {features.map(({ icon: Icon, title, description }) => (
-            <div key={title} className="text-center">
+          {features.map(({ icon: Icon, titleKey, descriptionKey }) => (
+            <div key={titleKey} className="text-center">
               <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-amber-500/10 to-orange-500/5 flex items-center justify-center mx-auto mb-8">
                 <Icon className="h-7 w-7 text-amber-400/80" />
               </div>
               <h3 className="text-base font-medium text-slate-900 mb-4 dark:text-white">
-                {title}
+                {t(titleKey)}
               </h3>
               <p className="text-slate-600 leading-relaxed text-sm dark:text-white/40">
-                {description}
+                {t(descriptionKey)}
               </p>
             </div>
           ))}
@@ -312,17 +324,17 @@ export default function HomePage() {
         <div className="relative overflow-hidden rounded-3xl bg-white border border-slate-200/70 p-16 md:p-24 dark:bg-gradient-to-br dark:from-white/[0.02] dark:to-transparent dark:border-white/[0.04]">
           <div className="relative z-10 max-w-xl mx-auto text-center">
             <h2 className="text-2xl md:text-3xl font-medium text-slate-900 mb-6 dark:text-white">
-              准备好开始了吗？
+              {t("home.cta.title")}
             </h2>
             <p className="text-slate-600 text-base mb-10 leading-relaxed dark:text-white/40">
-              无论您面临何种法律问题，我们都随时准备为您提供帮助
+              {t("home.cta.description")}
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
               <LinkButton
                 to="/chat"
                 className="rounded-full px-10 py-4 text-base hover:shadow-lg hover:shadow-amber-500/15 transition-all"
               >
-                立即咨询
+                {t("home.cta.consultNow")}
                 <ArrowRight className="h-4 w-4" />
               </LinkButton>
               <LinkButton
@@ -330,14 +342,14 @@ export default function HomePage() {
                 variant="outline"
                 className="rounded-full px-10 py-4 text-base"
               >
-                去搜索
+                {t("home.cta.search")}
               </LinkButton>
               <LinkButton
                 to="/lawfirm"
                 variant="outline"
                 className="rounded-full px-10 py-4 text-base"
               >
-                找律师
+                {t("home.cta.findLawyer")}
               </LinkButton>
             </div>
           </div>
