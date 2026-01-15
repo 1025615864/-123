@@ -1,262 +1,190 @@
 # 百姓法律助手
 
-一站式法律服务平台（前后端全栈），面向 **法律咨询 + 内容资讯 + 社区互动 + 律所服务** 场景，内置 **AI 法律咨询（RAG）** 与 **News AI 内容加工** 能力，支持 Docker/Helm 快速部署。
+百姓法律助手是一个**前后端一体**的法律服务产品仓库（`backend/` + `frontend/`），目标是把“AI 法律咨询 + 内容资讯 + 社区互动 + 律师服务 + 支付结算 + 通知实时触达”串成一套可落地、可运维、可持续迭代的系统。
 
-## 核心亮点
+如果你是：
 
-- **AI 法律咨询（可流式）**
+- 想快速理解项目全貌并开始贡献的开发者
+- 想部署并运营一套具备支付/结算/风控能力的法律类应用的团队
 
-  - 支持对话咨询、流式输出（SSE）、会话历史、导出与评价。
-  - 可结合知识库向量化（ChromaDB）实现检索增强（RAG）。
-
-- **新闻模块 + News AI 自动加工**
-
-  - 新闻列表/详情/订阅/收藏/评论。
-  - News AI 支持摘要/要点/关键词/风险等级等标注，并提供运维状态与错误追踪。
-  - 管理端支持版本历史与回滚、AI 工作台生成、链接检查等能力。
-
-- **论坛与内容治理**
-
-  - 发帖/评论/点赞/收藏/表情反应。
-  - 管理端支持敏感词、内容过滤规则、帖子/评论审核与批量审核。
-
-- **支付与订单**
-
-  - 下单/支付/退款/订单管理。
-  - Webhook 回调验签（生产建议通过 Secret 注入）。
-
-- **通知系统 + WebSocket 在线能力**
-
-  - 通知列表、未读计数、批量已读/删除。
-  - WebSocket 在线状态与实时推送基础能力。
-
-- **可运维、可交付**
-  - 生产部署与一键冒烟 SOP。
-  - Helm Chart（K8s + Ingress，默认 `/api` -> backend）。
-  - CI 校验（backend test / frontend build / helm validate 等）。
-
-## 适用场景
-
-- **法律服务平台原型**：法律咨询 + 律所/律师查询 + 预约咨询 + 支付闭环。
-- **内容平台**：新闻采集/运营/审核 + AI 摘要加工 + 专题聚合。
-- **社区/论坛**：内容过滤 + 审核工作流 + 通知深链。
-
-## 项目截图 / Demo（占位）
-
-你可以在此处补充：
-
-- 前台：AI 咨询、新闻列表/详情、论坛、律所/律师列表。
-- 管理后台：News AI 运维状态、新闻编辑/版本回滚、审核工作台。
-
-## 一分钟体验（本地）
-
-如果你只想快速跑起来看看效果，推荐直接用 Docker：
-
-```bash
-docker compose up -d --build
-```
-
-启动后访问：
-
-- 前端（Docker）：`http://localhost:3000`
-- 后端 API：`http://localhost:8000`
-- Swagger：`http://localhost:8000/docs`
+你应该从本 README 开始。
 
 ---
 
-## Release
+## Quick Links（先看这几个就够）
 
-- Tag：`news-module-20251229`
-- GitHub Release：https://github.com/1025615864/-123/releases/tag/news-module-20251229
+- 架构总览：`docs/ARCHITECTURE.md`
+- 模块索引（开发者视角）：`docs/modules/INDEX.md`
+- 数据模型：`docs/DATA_MODEL.md`
+- 端到端数据流（请求 → DB → 通知/WS → 前端刷新）：`docs/modules/DATA_FLOWS.md`
+- API 速查：`docs/guides/API_QUICK_REFERENCE.md`
+- 开发指南：`docs/guides/DEV_GUIDE.md`
+- 配置参考（env + SystemConfig）：`docs/guides/CONFIG_REFERENCE.md`
+- 排障手册：`docs/guides/TROUBLESHOOTING.md`
 
-## 文档入口（建议先看）
+---
 
-- `docs/PRD.md`：产品需求文档（本项目口径版）
-- `docs/ROLES.md`：项目角色划分（RACI/职责/交付物/质量门禁/Workflows 入口）
-- `docs/PLAN_FRONTEND_2026-01-13.md`：前端问题发现与布局优化计划（含修复清单与门禁）
-- `docs/TECH_SPEC.md`：技术规范（本项目技术栈/结构/环境变量）
-- `docs/API_DESIGN.md`：API 设计（模块划分 + 关键接口汇总）
-- `docs/DATABASE.md`：数据库设计（以 SQLAlchemy models 为准）
-- `docs/CHANGELOG.md`：变更记录（对外可感知的交付节点）
-- `CLAUDE.md`：AI 编程助手规则（本仓库约束）
-- `TASKS.md`：任务追踪入口（当前迭代见 `TASKS_NEXT.md`）
-- `.windsurf/workflows/*.md`：Windsurf Cascade 工作流（在对话框输入 `/project-roles`、`/feature-delivery`、`/hotfix-incident`、`/role-backend` 等调用）
-- `docs/_archive/PROJECT_REPORT.md`：项目报告（历史交付材料归档）
-- `docs/_archive/TECHNICAL_INTEGRATION_REPORT.md`：技术对接报告（历史交付材料归档）
-- `docs/_archive/`：历史文档归档（仅供追溯）
-- `helm/baixing-assistant/README.md`：Helm Chart 部署说明（K8s + Ingress）
+## 核心能力（你会在系统里看到什么）
 
-## 本地/CI 回归命令（建议）
+- AI 法律咨询与会话管理（含导出/分享等工具链）
+- 新闻资讯（RSS 采集、热点缓存、News AI 标注/风控/去重）
+- 社区论坛（帖子/评论、敏感词与审核、批量审核）
+- 律所/律师信息、预约咨询、咨询消息
+- 支付与结算（回调审计、对账诊断、提现审批与分摊）
+- 通知中心 + WebSocket 实时消息
+- 管理后台（统计、系统配置、导出与运维接口）
 
-后端：
+---
 
-```bash
-cd backend
-py -m pip install -r requirements-dev.txt
-py -m pytest -q
-```
+## 技术栈与边界
 
-前端：
+- 后端：FastAPI + async SQLAlchemy（见 `backend/`）
+- 前端：Vite + React + React Query（见 `frontend/`）
+- 部署：Helm Chart（`helm/baixing-assistant/`）+ Docker Compose 示例（根目录）
 
-```bash
-cd frontend
-npm ci
-npm run build
-```
+关键约定：
 
-E2E（Playwright，最小文书闭环）：
+- REST API 前缀：`/api`
+- WebSocket 入口：`/ws`（**不在** `/api` 下）
 
-```bash
-# 安装浏览器（首次/Playwright 更新后）
-npm --prefix frontend run test:e2e:install
+---
 
-# 仅跑 documents 用例
-npm --prefix frontend run test:e2e -- --grep "documents:"
-```
+## 2 分钟 Quick Start（本地开发：推荐）
 
-## 快速启动
+### 1) 前置要求
 
-### 本地开发
+- Python 3.11（建议与 CI 对齐）
+- Node.js 20（建议与 CI 对齐）
+- Windows PowerShell（仓库自带 `start-dev.ps1`，推荐 Windows 开发直接用）
 
-后端：
+### 2) 一键启动（Windows / 推荐）
 
-```bash
-cd backend
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-# 推荐先复制一份本地配置（默认 SQLite，可直接跑）：
-# cp env.example .env
-# 如需查看 SQL（排障用）：设置 SQL_ECHO=1
-# Windows 上如果 `pip`/`python` 指向 WindowsApps 的 stub，可改用：
-# py -m pip install -r requirements.txt
-# Windows 上如果 `python` 指向 WindowsApps 的 stub，可改用：
-# py -m uvicorn app.main:app --reload --port 8000
-python -m uvicorn app.main:app --reload --port 8000
-```
+在仓库根目录执行：
 
-前端（新终端）：
+- `./start-dev.ps1`
 
-```bash
-cd frontend
-npm install
-npm run dev
-```
+脚本会自动完成：
 
-### Docker（可选）
-
-```bash
-docker compose up -d --build
-```
-
-生产（可选，使用独立 compose 文件）：
-
-> `docker-compose.prod.yml` 依赖仓库根目录的 `.env` 环境变量；建议从 `env.example.txt` 复制一份到 `.env` 再执行。
-
-```bash
-docker compose -f docker-compose.prod.yml up -d --build
-```
-
-## 环境要求
-
-- **Python**: 3.10+
-- **Node.js**: 18+
-- **npm**: 9+
-
-## 项目结构
-
-```
-百姓助手/
-├── backend/              # 后端 (FastAPI)
-│   ├── app/
-│   │   ├── models/       # 数据模型
-│   │   ├── routers/      # API路由
-│   │   ├── services/     # 业务逻辑
-│   │   ├── schemas/      # Pydantic模型
-│   │   ├── utils/        # 工具函数
-│   │   └── main.py       # 应用入口
-│   └── requirements.txt  # Python依赖
-├── frontend/             # 前端 (React + TypeScript)
-│   ├── src/
-│   │   ├── components/   # 组件
-│   │   ├── contexts/     # 上下文
-│   │   ├── hooks/        # 自定义Hook
-│   │   ├── i18n/         # 国际化
-│   │   ├── pages/        # 页面
-│   │   └── services/     # API服务
-│   └── package.json      # Node依赖
-└── README.md             # 本文件
-```
-
-## 服务地址
+- 在 `backend/.venv` 创建虚拟环境并安装 `backend/requirements.txt`
+- 在 `frontend/` 安装 npm 依赖（若 `node_modules` 不存在）
+- 启动后端：`uvicorn app.main:app --reload --host 127.0.0.1 --port 8000`
+- 启动前端：`vite dev --host 127.0.0.1 --port 5173`
 
 启动后访问：
 
-| 服务             | 地址                        |
-| ---------------- | --------------------------- |
-| 前端（本地开发） | http://localhost:5173       |
-| 前端（Docker）   | http://localhost:3000       |
-| 后端 API         | http://localhost:8000       |
-| API 文档         | http://localhost:8000/docs  |
-| ReDoc            | http://localhost:8000/redoc |
+- 前端：`http://127.0.0.1:5173`
+- 后端：`http://127.0.0.1:8000`
+- OpenAPI：`http://127.0.0.1:8000/docs`
+- WebSocket：`ws://127.0.0.1:8000/ws`
 
-## 功能模块
+### 3) 环境变量（本地）
 
-### 核心功能
+后端会自动尝试加载：
 
-- **AI 法律咨询** - 智能问答，快速获取法律建议
-- **法律论坛** - 发帖讨论，互动交流
-- **法律资讯** - 最新法律新闻动态
-- **律所查询** - 律师、律所信息检索
-- **知识库** - 法律知识百科
+- `backend/.env`
+- 或仓库根 `.env`
 
-### 管理功能
+也可以用 `ENV_FILE` 指定 env 文件路径。
 
-- **数据统计大屏** - 可视化数据统计仪表板
-- **用户行为分析** - 页面访问、功能使用统计
-- **评论审核** - 敏感词过滤、人工审核
-- **支付管理** - 订单管理、退款处理
+示例文件：
 
-### 系统特性
+- `env.example.txt`（仓库根）
+- `backend/env.example`（后端更完整）
 
-- **多语言支持** - 中文/英文切换
-- **暗黑模式** - 亮色/暗黑/跟随系统
-- **移动端适配** - 响应式设计
-- **API 限流** - 精细化限流保护
+本地开发一般只需要：
 
-## 配置与部署
+- `DEBUG=true`（默认测试/开发模式）
 
-### 本地开发配置
+可选但推荐：
 
-- 后端：在 `backend/` 下复制 `env.example` 为 `.env` 并按需修改。
-- 前端：在 `frontend/` 下创建 `.env`，最小配置通常为 `VITE_API_BASE_URL=/api`。
+- `JWT_SECRET_KEY=<任意字符串>`
 
-### 生产配置与运维
+如需启用 AI / 语音转写：
 
-- 生产配置要点 + 冒烟流程（News AI）：见 `docs/_archive/PROJECT_REPORT.md`
-- Helm（Kubernetes）部署：`helm/baixing-assistant/README.md`
-- Docker Compose 生产示例：`docker-compose.prod.yml` + 仓库根目录 `env.example.txt`
+- `OPENAI_API_KEY=...`
 
-**重要**：Secrets（例如 `OPENAI_API_KEY`、`JWT_SECRET_KEY/SECRET_KEY`、`PAYMENT_WEBHOOK_SECRET` 等）必须通过环境变量/Secret Manager 注入，禁止写入管理后台 SystemConfig（后端会返回 400）。
+---
 
-## 技术栈
+## API / WebSocket 关键约定
 
-### 后端
+### Envelope 响应包装（前端默认开启）
 
-- **FastAPI** - 高性能 Web 框架
-- **SQLAlchemy** - ORM 数据库操作
-- **Pydantic** - 数据验证
-- **JWT** - 身份认证
-- **SQLite/PostgreSQL** - 数据库
+前端请求默认携带：
 
-### 前端
+- `X-Api-Envelope: 1`
 
-- **React 19** - UI 框架
-- **TypeScript** - 类型安全
-- **Vite** - 构建工具
-- **TailwindCSS** - 样式框架
-- **Lucide** - 图标库
+后端会将 **2xx JSON** 响应包装为：
 
-## License
+- `{"ok": true, "data": <原始响应>, "ts": <unix_ts>}`
 
-MIT License
+浏览器端 axios 拦截器会自动把 `response.data` 解包为 `data`。
+
+---
+
+## 数据库与迁移
+
+- 默认数据库：SQLite（`sqlite+aiosqlite:///./data/app.db`）
+- 生产建议：PostgreSQL（见 `docker-compose.prod.yml` / Helm values）
+
+迁移策略：
+
+- 当 `DEBUG=false` 时，后端启动会要求数据库处于 Alembic head（否则启动失败）
+- 可用 `python backend/scripts/alembic_cmd.py upgrade head` 执行迁移
+  - 若 Windows 环境 `python` 不可用，可尝试用 `py` 执行
+- 本地想临时跳过 Alembic 校验可设置 `DB_ALLOW_RUNTIME_DDL=1`（不建议在生产使用）
+
+---
+
+## Docker Compose
+
+- 本地 compose：`docker-compose.yml`（含 Postgres、backend、frontend）
+- 生产示例：`docker-compose.prod.yml`（含 Postgres、Redis、backend、frontend）
+
+注意：生产模式（`DEBUG=false`）必须提供：
+
+- `JWT_SECRET_KEY`（长度 >= 32，且不能使用默认值）
+- `PAYMENT_WEBHOOK_SECRET`（长度 >= 16）
+- `REDIS_URL`（且 Redis 可连通）
+
+---
+
+## 测试与质量门禁
+
+- 后端：`pytest backend/tests/ -v`
+- 前端：`npm --prefix frontend run build`
+- E2E：`npm --prefix frontend run test:e2e`
+- 预提交：`pre-commit install`（见 `.pre-commit-config.yaml`）
+
+---
+
+## 仓库结构（你应该从哪里开始读）
+
+- `backend/`：FastAPI 应用与业务服务
+- `frontend/`：React 应用
+- `docs/`：文档中心（架构、数据模型、模块、运维、排障）
+- `helm/baixing-assistant/`：Kubernetes Helm Chart（backend + frontend + ingress）
+- `start-dev.ps1` / `start-dev.cmd`：本地开发启动脚本
+
+---
+
+## 文档入口（面向新开发者）
+
+- 架构：`docs/ARCHITECTURE.md`
+- 数据库：`docs/DATABASE.md`
+- 数据模型：`docs/DATA_MODEL.md`
+- 模块文档（开发者视角）：`docs/modules/INDEX.md`
+- 开发指南：`docs/guides/DEV_GUIDE.md`
+- API 速查：`docs/guides/API_QUICK_REFERENCE.md`
+- 运维与发布：`docs/guides/OPERATIONS.md`
+- 配置参考（env + SystemConfig）：`docs/guides/CONFIG_REFERENCE.md`
+- 排障手册：`docs/guides/TROUBLESHOOTING.md`
+- 贡献指南：`docs/CONTRIBUTING.md`
+- 变更记录：`docs/CHANGELOG.md`
+
+---
+
+## 任务与迭代记录
+
+- 入口索引：`TASKS.md`
+- 当前迭代：`TASKS_NEXT.md`
+- 历史快照：`docs/_archive/`
