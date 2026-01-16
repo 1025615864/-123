@@ -19,6 +19,7 @@ description: 后端实现与测试门禁
    - 生产门禁：`DEBUG=false` 下 Redis/迁移检查不被破坏
 4. 补齐测试：
    - `backend/tests/*`：至少覆盖 1 条失败路径
+   - 门禁命令：`py -m pytest -q`
 5. 自检清单：
    - 返回结构稳定；错误信息可理解
    - 若改动 API/DB：同步提示前端与 QA 更新用例

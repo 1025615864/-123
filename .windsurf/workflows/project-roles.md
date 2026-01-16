@@ -13,11 +13,15 @@ description: 项目角色总览与分派
    - 技术：`docs/TECH_SPEC.md`
    - 接口：`docs/API_DESIGN.md`
    - 数据：`docs/DATABASE.md`
-   - 任务：`TASKS_NEXT.md`
+   - 任务：`TASKS.md`（入口）/ `TASKS_NEXT.md`（当前迭代）
 3. 根据事项自动分派“主责角色 + 协作角色”，并输出：
    - 本次目标（可验收的）
    - 需要修改的目录/文件（预估）
-   - 必过门禁（pytest/frontend build/E2E/smoke 等）
+   - 必过门禁：
+     - 后端：`py -m pytest -q`
+     - 前端：`npm --prefix frontend run build`
+     - E2E：`npm --prefix frontend run test:e2e`
+     - 运维：smoke/health
 4. 执行过程中遵守：
    - 修改核心接口/数据结构必须同步更新前端与测试
    - secrets 永不入库
