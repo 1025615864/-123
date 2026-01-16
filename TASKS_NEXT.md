@@ -36,6 +36,7 @@
 - [x] `186b820` feat(ai): add voice transcribe providers and sherpa support
 - [x] `1514fd7` docs(config): document voice transcribe and sherpa env/systemconfig keys
 - [x] `90796b0` test(e2e): add chat history sidebar draft retention spec
+- [x] PR：https://github.com/1025615864/-123/pull/37
 
 暂不回收：
 
