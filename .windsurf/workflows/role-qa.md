@@ -14,6 +14,10 @@ description: 验收用例与回归策略
 3. 优先选择落点：
    - 前端关键路径：Playwright（`frontend/tests/e2e/*`）
    - 后端关键接口：pytest（`backend/tests/*`）
+   - 门禁命令：
+     - 后端：`py -m pytest -q`
+     - 前端：`npm --prefix frontend run build`
+     - E2E：`npm --prefix frontend run test:e2e`
 4. 回归建议输出：
    - 本次覆盖了什么
    - 仍然缺什么（风险）

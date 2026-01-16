@@ -15,5 +15,6 @@ description: 前端交付与 E2E 门禁
 4. 回归与门禁：
    - `npm --prefix frontend run build`
    - 关键路径补 1 条 Playwright 用例：`frontend/tests/e2e/*`
+   - E2E 命令：`npm --prefix frontend run test:e2e`（首次可先跑：`npm --prefix frontend run test:e2e:install`）
 5. 若后端接口有不稳定/不清晰点：
    - 先停在“契约对齐”，不要硬写兼容逻辑
