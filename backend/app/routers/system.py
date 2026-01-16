@@ -5,7 +5,7 @@ import json
 import os
 import re
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc, and_, or_
@@ -56,7 +56,9 @@ def _mask_config_value(key_name: str, value: str | None) -> str | None:
     if value is None:
         return None
     k = key_name.lower()
-    if any(token in k for token in ("secret", "password", "token", "api_key", "apikey", "providers", "private_key", "secret_key")):
+    if any(token in k for token in ("secret", "password", "api_key", "apikey", "providers", "private_key", "secret_key")):
+        return "***"
+    if re.search(r"(^|_)token($|_)", k):
         return "***"
     if re.search(r"(^|_)key($|_)", k):
         return "***"
@@ -612,10 +614,26 @@ class PublicAiStatusResponse(BaseModel):
 
 
 @router.get("/public/ai/status", response_model=PublicAiStatusResponse)
-async def get_public_ai_status():
+async def get_public_ai_status(
+    response: Response,
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
     from ..config import get_settings
 
     settings = get_settings()
+
+    effective_settings = settings
+    voice_forced = False
+    try:
+        from ..services.voice_config_service import get_effective_voice_settings
+
+        effective_settings, _, voice_forced = await get_effective_voice_settings(db, settings)
+    except Exception:
+        effective_settings = settings
+        voice_forced = False
+
+    if voice_forced:
+        response.headers.setdefault("X-Voice-Config-Forced", "1")
 
     ai_router_enabled = False
     try:
@@ -626,9 +644,31 @@ async def get_public_ai_status():
     except Exception:
         ai_router_enabled = False
 
-    openai_api_key_configured = bool(str(settings.openai_api_key or "").strip())
+    provider_raw = str(getattr(effective_settings, "voice_transcribe_provider", "auto") or "").strip().lower()
+    provider = provider_raw if provider_raw in {"auto", "openai", "sherpa"} else "auto"
 
-    enabled = bool(ai_router_enabled and openai_api_key_configured)
+    openai_ready = bool(
+        str(getattr(settings, "openai_transcribe_api_key", "") or "").strip()
+        or str(settings.openai_api_key or "").strip()
+    )
+
+    sherpa_ready = False
+    try:
+        from ..services.sherpa_asr_service import sherpa_is_ready
+
+        sherpa_ready = bool(sherpa_is_ready(effective_settings))
+    except Exception:
+        sherpa_ready = False
+
+    voice_ready = False
+    if provider == "openai":
+        voice_ready = openai_ready
+    elif provider == "sherpa":
+        voice_ready = sherpa_ready
+    else:
+        voice_ready = openai_ready or sherpa_ready
+
+    enabled = bool(ai_router_enabled and voice_ready)
     reason: str | None = None
     if not enabled:
         reason = "AI_NOT_CONFIGURED"

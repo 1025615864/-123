@@ -139,6 +139,8 @@ class QuickRepliesResponse(BaseModel):
 
 class TranscribeResponse(BaseModel):
     text: str = Field(..., description="语音转写文本")
+    segment_index: int | None = Field(None, ge=0, description="分段索引（从 0 开始）")
+    is_final: bool | None = Field(None, description="是否为最后一段")
 
 
 class FileAnalyzeResponse(BaseModel):

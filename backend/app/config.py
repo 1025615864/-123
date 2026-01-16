@@ -25,7 +25,8 @@ def _resolve_env_files() -> list[str] | None:
     repo_root = here.parents[2]
 
     candidates = [backend_dir / ".env", repo_root / ".env"]
-    return [str(p) for p in candidates]
+    existing = [str(p) for p in candidates if p.exists()]
+    return existing or None
 
 
 class Settings(BaseSettings):
@@ -134,6 +135,82 @@ class Settings(BaseSettings):
     # AI配置
     openai_api_key: str = ""
     openai_base_url: str = "https://api.openai.com/v1"
+    openai_transcribe_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("OPENAI_TRANSCRIBE_API_KEY"),
+    )
+    openai_transcribe_base_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("OPENAI_TRANSCRIBE_BASE_URL"),
+    )
+    voice_transcribe_force_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("VOICE_TRANSCRIBE_FORCE_ENABLED"),
+    )
+    voice_transcribe_provider: str = Field(
+        default="auto",
+        validation_alias=AliasChoices("VOICE_TRANSCRIBE_PROVIDER", "TRANSCRIBE_PROVIDER"),
+    )
+    sherpa_asr_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("SHERPA_ASR_ENABLED"),
+    )
+    sherpa_asr_mode: str = Field(
+        default="off",
+        validation_alias=AliasChoices("SHERPA_ASR_MODE"),
+    )
+    sherpa_asr_remote_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("SHERPA_ASR_REMOTE_URL"),
+    )
+    sherpa_onnx_tokens: str = Field(
+        default="",
+        validation_alias=AliasChoices("SHERPA_ONNX_TOKENS"),
+    )
+    sherpa_onnx_wenet_ctc_model: str = Field(
+        default="",
+        validation_alias=AliasChoices("SHERPA_ONNX_WENET_CTC_MODEL"),
+    )
+    sherpa_onnx_whisper_encoder: str = Field(
+        default="",
+        validation_alias=AliasChoices("SHERPA_ONNX_WHISPER_ENCODER"),
+    )
+    sherpa_onnx_whisper_decoder: str = Field(
+        default="",
+        validation_alias=AliasChoices("SHERPA_ONNX_WHISPER_DECODER"),
+    )
+    sherpa_onnx_whisper_language: str = Field(
+        default="",
+        validation_alias=AliasChoices("SHERPA_ONNX_WHISPER_LANGUAGE"),
+    )
+    sherpa_onnx_whisper_task: str = Field(
+        default="transcribe",
+        validation_alias=AliasChoices("SHERPA_ONNX_WHISPER_TASK"),
+    )
+    sherpa_onnx_whisper_tail_paddings: int = Field(
+        default=-1,
+        validation_alias=AliasChoices("SHERPA_ONNX_WHISPER_TAIL_PADDINGS"),
+    )
+    sherpa_onnx_num_threads: int = Field(
+        default=2,
+        validation_alias=AliasChoices("SHERPA_ONNX_NUM_THREADS"),
+    )
+    sherpa_onnx_decoding_method: str = Field(
+        default="greedy_search",
+        validation_alias=AliasChoices("SHERPA_ONNX_DECODING_METHOD"),
+    )
+    sherpa_onnx_debug: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("SHERPA_ONNX_DEBUG"),
+    )
+    sherpa_onnx_sample_rate: int = Field(
+        default=16000,
+        validation_alias=AliasChoices("SHERPA_ONNX_SAMPLE_RATE"),
+    )
+    sherpa_onnx_feature_dim: int = Field(
+        default=80,
+        validation_alias=AliasChoices("SHERPA_ONNX_FEATURE_DIM"),
+    )
     ai_model: str = "deepseek-chat"
     ai_fallback_models: list[str] = Field(
         default_factory=list,
