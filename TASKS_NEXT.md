@@ -28,6 +28,19 @@
 - [x] 补齐补充模块文档（documents/document-templates/contracts/knowledge/calendar/feedback/admin-console）并接入导航
 - [x] 补齐 API 速查（通知/结算提现关键接口）并对齐后端路由
 
+## 2026-01-16 WIP（stash）拆分与回收进度
+
+说明：在 `main` 已合并 docs 后，从本地 stash 中拆分出可合并的最小变更并单独提交，便于 review / 回滚。
+
+- [x] `544f928` chore(dev): add start-dev scripts and ignore test-results
+- [x] `186b820` feat(ai): add voice transcribe providers and sherpa support
+- [x] `1514fd7` docs(config): document voice transcribe and sherpa env/systemconfig keys
+- [x] `90796b0` test(e2e): add chat history sidebar draft retention spec
+
+暂不回收：
+
+- `stash@{2}`：前端大规模重写（包含 i18n/WS 行为变更与 E2E helpers 默认凭据硬编码），暂不合并，后续需要单独评审与拆分。
+
 ## 自动执行计划（后续按顺序依次执行，不再逐步询问确认）
 
 说明：以下为“可交付的文档增强”计划，每一项都包含：
