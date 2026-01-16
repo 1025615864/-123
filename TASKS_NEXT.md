@@ -41,6 +41,11 @@
 
 - `stash@{2}`：前端大规模重写（包含 i18n/WS 行为变更与 E2E helpers 默认凭据硬编码），暂不合并，后续需要单独评审与拆分。
 
+门禁结果：
+
+- [x] backend：`py -m pytest -q`
+- [x] frontend：`npm --prefix frontend run build`
+
 ## 自动执行计划（后续按顺序依次执行，不再逐步询问确认）
 
 说明：以下为“可交付的文档增强”计划，每一项都包含：
