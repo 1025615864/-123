@@ -739,6 +739,82 @@ class TestForumAPI:
         assert "total" in data
 
     @pytest.mark.asyncio
+    async def test_get_posts_list_cache_guest(
+        self,
+        client: AsyncClient,
+        test_session: AsyncSession,
+        monkeypatch: MonkeyPatch,
+    ):
+        from app.models.user import User
+        from app.models.forum import Post
+        from app.utils.security import hash_password
+        from app.services.cache_service import cache_service
+        from app.services.forum_service import forum_service
+
+        _ = await cache_service.clear_pattern("forum:posts:list:v1*")
+        _ = await cache_service.clear_pattern("forum:posts:fav_counts:v1*")
+        _ = await cache_service.clear_pattern("forum:posts:reactions:v1*")
+
+        user = User(
+            username="u_forum_cache",
+            email="u_forum_cache@example.com",
+            nickname="u_forum_cache",
+            hashed_password=hash_password("Test123456"),
+            role="user",
+            is_active=True,
+        )
+        test_session.add(user)
+        await test_session.commit()
+        await test_session.refresh(user)
+
+        post = Post(
+            title="t_cache",
+            content="c_cache",
+            category="general",
+            user_id=int(user.id),
+            is_deleted=False,
+        )
+        test_session.add(post)
+        await test_session.commit()
+        await test_session.refresh(post)
+
+        monkeypatch.setenv("FORUM_POSTS_CACHE_ENABLED", "1")
+        monkeypatch.setenv("FORUM_POSTS_LIST_CACHE_TTL_SECONDS", "300")
+        monkeypatch.setenv("FORUM_POSTS_FAVORITE_COUNT_CACHE_TTL_SECONDS", "300")
+        monkeypatch.setenv("FORUM_POSTS_REACTIONS_CACHE_TTL_SECONDS", "300")
+
+        calls: dict[str, int] = {"get_posts": 0, "fav_counts": 0, "reactions": 0}
+
+        orig_get_posts = forum_service.get_posts
+        orig_fav_counts = forum_service.get_posts_favorite_counts
+        orig_reactions = forum_service.get_posts_reactions
+
+        async def wrapped_get_posts(*args, **kwargs):
+            calls["get_posts"] += 1
+            return await orig_get_posts(*args, **kwargs)
+
+        async def wrapped_fav_counts(*args, **kwargs):
+            calls["fav_counts"] += 1
+            return await orig_fav_counts(*args, **kwargs)
+
+        async def wrapped_reactions(*args, **kwargs):
+            calls["reactions"] += 1
+            return await orig_reactions(*args, **kwargs)
+
+        monkeypatch.setattr(forum_service, "get_posts", wrapped_get_posts, raising=True)
+        monkeypatch.setattr(forum_service, "get_posts_favorite_counts", wrapped_fav_counts, raising=True)
+        monkeypatch.setattr(forum_service, "get_posts_reactions", wrapped_reactions, raising=True)
+
+        res1 = await client.get("/api/forum/posts?page=1&page_size=20")
+        assert res1.status_code == 200
+        res2 = await client.get("/api/forum/posts?page=1&page_size=20")
+        assert res2.status_code == 200
+
+        assert calls["get_posts"] == 1
+        assert calls["fav_counts"] == 1
+        assert calls["reactions"] == 1
+
+    @pytest.mark.asyncio
     async def test_comment_moderation_flow(self, client: AsyncClient, test_session: AsyncSession):
         from app.models.user import User
         from app.utils.security import hash_password, create_access_token

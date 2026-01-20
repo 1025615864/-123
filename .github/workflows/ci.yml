@@ -120,7 +120,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          python -m pip install -r requirements-dev.txt
+          python -m pip install --upgrade pytest pytest-asyncio pytest-cov
+          python -m pip show pytest pytest-cov pytest-asyncio
 
       - name: Run migrations (upgrade head)
         env:
@@ -137,7 +139,7 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           JWT_SECRET_KEY: test-secret-key
           PAYMENT_WEBHOOK_SECRET: test-payment-webhook-secret
-        run: pytest tests/ -v --tb=short
+        run: python -m pytest tests/ -v --tb=short --cov=app --cov-report=xml:coverage.xml --cov-report=term:skip-covered --cov-fail-under=60
 
   # 前端构建
   frontend-build:

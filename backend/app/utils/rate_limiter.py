@@ -6,6 +6,7 @@
 - 按用户限流
 - 按端点限流
 - 滑动窗口算法
+- Prometheus metrics 记录
 """
 import time
 from collections import defaultdict
@@ -15,6 +16,7 @@ from functools import wraps
 
 from ..config import get_settings
 from ..services.cache_service import cache_service
+from ..services.prometheus_metrics import prometheus_metrics
 
 settings = get_settings()
 
@@ -219,7 +221,13 @@ def rate_limit(
                 
                 key = ":".join(parts)
             
+            # 提取端点路径用于 metrics（不包含 IP/用户信息）
+            endpoint = str(request.url.path or "unknown").strip() or "unknown"
+            
             allowed, remaining, wait_time = await rate_limiter.check(key, max_requests, window_seconds)
+
+            # 记录限流 metrics
+            prometheus_metrics.record_rate_limit(endpoint=endpoint, allowed=allowed)
 
             if not allowed:
                 raise HTTPException(

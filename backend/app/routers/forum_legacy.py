@@ -1,5 +1,6 @@
 """论坛API路由"""
 import json
+import os
 import logging
 from datetime import datetime, timezone
 from typing import Annotated, cast
@@ -36,6 +37,7 @@ from ..utils.content_filter import (
     check_post_content,
     check_comment_content,
 )
+from ..services.cache_service import cache_service
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -323,12 +325,62 @@ async def get_posts(
     is_essence: Annotated[bool | None, Query(description="是否仅精华帖")] = None,
 ):
     """获取帖子列表，支持分类筛选和关键词搜索"""
-    posts, total = await forum_service.get_posts(db, page, page_size, category, keyword, is_essence=is_essence)
-    
     user_id = current_user.id if current_user else None
-    items = [await _build_post_response(db, post, user_id) for post in posts]
-    
-    return PostListResponse(items=items, total=total, page=page, page_size=page_size)
+
+    cache_enabled = os.getenv("FORUM_POSTS_CACHE_ENABLED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "on",
+    }
+
+    cache_key = None
+    if cache_enabled and user_id is None:
+        essence_key = "1" if is_essence is True else "0" if is_essence is False else "-"
+        cache_key = (
+            f"forum:posts:list:v1:{page}:{page_size}:{category or '-'}:{keyword or '-'}:{essence_key}"
+        )
+        cached = await cache_service.get_json(cache_key)
+        if isinstance(cached, dict) and "items" in cached and "total" in cached:
+            try:
+                return PostListResponse.model_validate(cached)
+            except Exception:
+                pass
+
+    posts, total = await forum_service.get_posts(db, page, page_size, category, keyword, is_essence=is_essence)
+
+    post_ids = [int(post.id) for post in posts]
+    favorite_counts = await forum_service.get_posts_favorite_counts(db, post_ids)
+    reactions_map = await forum_service.get_posts_reactions(db, post_ids)
+
+    items = [
+        await _build_post_response(
+            db,
+            post,
+            user_id,
+            favorite_count=favorite_counts.get(int(post.id), 0),
+            reactions_data=reactions_map.get(int(post.id), []),
+        )
+        for post in posts
+    ]
+
+    response = PostListResponse(items=items, total=total, page=page, page_size=page_size)
+
+    if cache_enabled and user_id is None and cache_key:
+        ttl_value = os.getenv("FORUM_POSTS_LIST_CACHE_TTL_SECONDS", "60").strip()
+        try:
+            ttl_seconds = int(ttl_value)
+        except (TypeError, ValueError):
+            ttl_seconds = 60
+        if ttl_seconds > 0:
+            await cache_service.set_json(
+                cache_key,
+                response.model_dump(mode="json"),
+                expire=ttl_seconds,
+            )
+
+    return response
 
 
 @router.get("/hot", response_model=PostListResponse, summary="获取热门帖子")
@@ -889,7 +941,14 @@ async def toggle_comment_like(
 
 # ============ 辅助函数 ============
 
-async def _build_post_response(db: AsyncSession, post: Post, user_id: int | None) -> PostResponse:
+async def _build_post_response(
+    db: AsyncSession,
+    post: Post,
+    user_id: int | None,
+    *,
+    favorite_count: int | None = None,
+    reactions_data: list[dict[str, int | str]] | None = None,
+) -> PostResponse:
     """构建帖子响应"""
     is_liked = False
     if user_id:
@@ -899,7 +958,8 @@ async def _build_post_response(db: AsyncSession, post: Post, user_id: int | None
     if user_id:
         is_favorited = await forum_service.is_post_favorited(db, post.id, user_id)
 
-    favorite_count = await forum_service.get_post_favorite_count(db, post.id)
+    if favorite_count is None:
+        favorite_count = await forum_service.get_post_favorite_count(db, post.id)
     
     author_info = None
     if post.author:
@@ -952,7 +1012,8 @@ async def _build_post_response(db: AsyncSession, post: Post, user_id: int | None
             attachments = []
     
     # 获取表情反应统计
-    reactions_data = await forum_service.get_post_reactions(db, post.id)
+    if reactions_data is None:
+        reactions_data = await forum_service.get_post_reactions(db, post.id)
     reactions = [ReactionCount(emoji=str(r["emoji"]), count=int(r["count"])) for r in reactions_data]
     
     return PostResponse(

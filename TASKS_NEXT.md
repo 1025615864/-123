@@ -1,137 +1,159 @@
-# TASKS_NEXT（当前迭代）
+﻿# TASKS_NEXT（下一阶段计划）
 
-## 本迭代目标：文档体系补齐（基于现有代码与配置）
+> 本文件：当前迭代任务主计划与验收口径。
+> 历史归档：docs/_archive/TASKS_YYYY-MM-DD.md
 
-- [x] 建立根 `README.md`（项目简介、启动方式、关键约定、文档入口）
-- [x] 建立 `docs/` 文档体系（架构 / 数据库 / 开发指南 / API 速查 / 运维）
-- [x] 修正 Helm README 中的文档/脚本引用，确保互链不悬空
-- [x] 补齐 `backend/README.md`、`frontend/README.md`
-- [x] 补齐发布需要的 `docs/CHANGELOG.md`（用于 GitHub Release workflow）
+## 0. 当前基线（已达成）
 
-## 建议后续迭代（待评估）
+- 覆盖率：总覆盖率 **60.81%**（本地 `--cov-fail-under=60` 通过；CI 门禁已抬升到 `--cov-fail-under=60`）
+- 关键模块：
+  - app/services/review_task_sla_service.py：100%
+  - app/middleware/envelope_middleware.py：100%
+  - app/middleware/sentry_context_middleware.py：100%
+  - app/middleware/metrics_middleware.py：100%
+  - app/services/disclaimer.py：100%
+  - app/services/content_safety.py：100%
+  - app/services/ai_response_strategy.py：100%
+  - app/schemas/document.py：100%
+  - app/services/email_service.py：100%
+  - app/services/voice_config_service.py：100%
+  - app/services/ai_intent.py：92%
+  - app/services/cache_service.py：95%
+  - app/utils/rate_limiter.py：100%
+  - app/utils/periodic_task_runner.py：99%
+  - app/services/websocket_service.py：95%
+  - app/routers/websocket.py：67%
+  - app/services/user_service.py：95%
+  - app/services/search_service.py：91%
+  - app/routers/search.py：82%
+  - app/routers/calendar.py：100%
+  - app/services/quota_service.py：92%
+  - app/services/sherpa_asr_service.py：48%
 
-- [x] 生产反向代理补齐 WebSocket `/ws` 路径（Nginx / Ingress）并补运维说明
-- [x] 补齐 post-deploy smoke 脚本与 Runbook（对齐 `.github/workflows/post-deploy-smoke.yml`）
+## 1. 下一阶段目标（建议 1-2 天内完成）
 
-## 当前工作：开发者视角文档深度化（进行中）
+- 目标 1：总覆盖率稳定到 **>=60.8%**（建议留 **0.3%~0.8%** 安全余量）
+- 目标 2：CI 覆盖率门禁抬升到 **60%**（先本地验证 `--cov-fail-under=60` 通过，再改 CI）
+- 目标 3：触发 CI 跑一轮（含迁移+单测），确认 gate=60 在 CI 环境稳定通过
+- 目标 4：持续推进到 **>=61%~62%**（按模块可测性分批推进，不引入 flaky）
 
-- [x] 补齐模块级文档（`docs/modules/*`）并在主文档互链（ARCHITECTURE/README）
-- [x] 修正文档一致性（章节编号/模块顺序/互链）并做一次全局校验
-- [x] 逐模块补齐数据流与关键表（forum/news/payment/settlement/notifications/reviews/consultation）
-- [x] 补齐前端开发者文档（路由、React Query、WebSocket、鉴权与错误处理约定）
-- [x] 补齐“开发者排障手册”与“配置参考”（env + SystemConfig + 生产约束）
-- [x] 文档互链与目录检查（避免悬空链接）
-- [x] 为核心链路补齐“端到端数据流”说明（请求->DB->通知/WS->前端缓存刷新）与关键表映射
-- [x] 端到端数据流补强：补齐支付 pay_order 与复核提交->结算入账的耦合链路（DATA_FLOWS）
-- [x] 继续扩写各业务模块的“关键表字段/状态机”与“边界条件”（尤其是 payment/settlement/reviews）
-- [x] 深挖支付/结算/复核文档：补齐 pay_order 边界条件、余额扣款原子性、回调审计策略、对账诊断与提现分摊规则
-- [x] 补齐补充模块文档（documents/document-templates/contracts/knowledge/calendar/feedback/admin-console）并接入导航
-- [x] 补齐 API 速查（通知/结算提现关键接口）并对齐后端路由
+## 2. 交付原则（强约束）
 
-## 自动执行计划（后续按顺序依次执行，不再逐步询问确认）
+- 单测优先覆盖：纯逻辑函数 / 小型 middleware / 小型 service / utils
+- 避免：依赖外部网络、真实第三方服务、随机时间/随机数导致的 flaky
+- 每完成一个模块：
+  - 先跑该模块测试 + ruff
+  - 再跑全量 `pytest --cov` 确认门禁
+  - 再更新本文件进展与验证命令
+ - 覆盖率门禁抬升节奏（建议）：48 -> 50 -> 52 -> 55 -> 60（每次抬升前确保有安全余量且 CI 连续绿）
 
-说明：以下为“可交付的文档增强”计划，每一项都包含：
+## 3. 工作项（按优先级）
 
-- 交付物（会改哪些文档）
-- 验收标准（完成到什么程度算过）
-- 校验方式（互链校验/一致性检查）
+### A. 快速涨覆盖（已完成：抬升到 48%）
 
-### A. 数据模型补齐（以 `backend/app/models/*` 为准）
+- [x] A1：app/services/disclaimer.py（已补齐单测，覆盖率 100%）
+- [x] A2：app/services/content_safety.py（已补齐单测，覆盖率 100%；修复 sanitize_output 在中文上下文无法匹配手机号/身份证的问题）
+- [x] A3：app/services/ai_response_strategy.py（已补齐单测，覆盖率 100%）
+- [x] A4：app/schemas/document.py（已补齐单测，覆盖率 100%）
+- [x] A5：app/services/voice_config_service.py（已补齐单测，覆盖率 100%）
+- [x] A6：app/services/ai_intent.py（已补齐主要分支单测，覆盖率 92%）
+- [x] A7：app/services/sherpa_asr_service.py（新增 mock 单测，覆盖率提升到 48%，用于快速抬升总覆盖率到 >=48%）
 
-- [x] A1 扩写 `docs/DATA_MODEL.md`：支付域（Payment）
+### B. 冲刺到 50%（建议优先做 1-2 个中等体量模块）
 
-  - 交付物：补齐 `payment_orders/user_balances/balance_transactions/payment_callback_events` 的关键字段、唯一约束、金额正负语义、与订单/回调/余额的关系
-  - 验收：开发者能仅凭 DATA_MODEL + PAYMENT 模块文档定位“订单/回调/余额流水”三者的落库点与主键/唯一键
+- B1：app/services/report_generator.py
+  - 关注点：`build_consultation_report_from_export_data` 的输入清洗、时间解析、消息过滤、引用法条去重；`generate_consultation_report_pdf` 的依赖缺失异常分支；`_escape_paragraph`
+  - 测试策略：纯逻辑分支直接断言；PDF 生成依赖缺失用 import monkeypatch/隔离环境触发 `RuntimeError("PDF_DEPENDENCY_MISSING")`
+- B2：app/services/contract_review_service.py
+  - 关注点：`_extract_json`（json fenced block / 原始 JSON / 垃圾输入 / 代码块剥离 / 截取 `{...}`）；`apply_contract_review_rules`（required_clauses 与 risk_keywords 增补逻辑、风险等级聚合）
+  - 测试策略：完全纯逻辑，不依赖外部服务；构造 extracted_text 命中/不命中 patterns 与 keyword
+- B3：app/services/email_service.py
+  - 关注点：token 生成/校验/失效，cache 正常分支与异常 fallback 分支，过期清理分支
+  - 测试策略：monkeypatch `cache_service.get_json/set_json` 成功/抛异常两套路径；冻结时间或直接构造 expires_at
 
-- [x] A2 扩写 `docs/DATA_MODEL.md`：结算域（Settlement）
+### C. 维稳与门禁抬升
 
-  - 交付物：补齐 `lawyer_wallets/lawyer_income_records/lawyer_bank_accounts/withdrawal_requests` 的关键字段、状态机、与 service 的一致性约束
-  - 验收：开发者能从表字段推导出“pending/settled/withdrawn”与“pending/approved/rejected/completed/failed”的业务含义
+- [x] B1：覆盖率稳定 >=48% 后，门禁抬升到 `--cov-fail-under=48`
+- [x] C2：本地覆盖率 >=50% 且留余量后，将 CI 门禁抬升到 `--cov-fail-under=50`
+- C3：补 1-2 个小模块“安全余量”，保证 CI 不因环境差异回落
 
-- [x] A3 扩写 `docs/DATA_MODEL.md`：复核域（Reviews）
+### D. 工具链与脚本稳定性（不影响门禁前提下进行）
 
-  - 交付物：补齐 `consultation_review_tasks/consultation_review_versions` 的关键字段、唯一约束、与 payment order 的绑定关系
-  - 验收：开发者能定位“谁创建 task、谁提交 version、如何去重、如何和结算入账联动”
+- D1：持续对话脚本 `xinghuo_continue_http.ps1` 稳定性回归
+  - 核心：优先使用 `curl.exe --noproxy "*" --data-binary @jsonfile` 调用 JSON-RPC（规避系统代理/编码问题）
+  - 验收：连续多次调用 tools/list + tools/call 成功，无 503/timeout
 
-- [x] A4 扩写 `docs/DATA_MODEL.md`：通知域（Notifications）
-  - 交付物：补齐 `notifications` 的字段语义、dedupe_key 语义、WebSocket 推送触发点
-  - 验收：开发者能定位“为什么通知没插入/为什么重复/为什么 WS 没推送”
+### C. 技术债（不影响门禁的前提下逐步清）
 
-### B. 端到端数据流补齐（请求 →DB→ 通知/WS→ 前端刷新）
+- C1：扫描并移除过期 TODO/FIXME（优先 backend/app）
+- C2：移除注释掉的代码块
+- C3：统一格式化（black/isort/ruff format）
 
-- [x] B1 扩写 `docs/modules/DATA_FLOWS.md`：论坛审核/通知链路（forum -> notifications）
+## 4. 验证命令（标准）
 
-  - 交付物：补齐“发帖/评论->审核->通知->WS->前端刷新”的关键表与状态
-  - 验收：能明确指出哪些 API 写哪些表，哪些动作会触发通知/WS
+- 单文件：`backend/.venv/Scripts/python.exe -m pytest -q tests/<file>.py`
+- 备注：如本机 `python` 命令不可用，优先使用 venv 的 `backend/.venv/Scripts/python.exe` 或 `py -m pytest ...`
+- 新增模块：
+  - `backend/.venv/Scripts/python.exe -m pytest -q tests/test_disclaimer.py`
+  - `backend/.venv/Scripts/python.exe -m pytest -q tests/test_content_safety.py`
+  - `backend/.venv/Scripts/python.exe -m pytest -q tests/test_ai_response_strategy.py`
+  - `backend/.venv/Scripts/python.exe -m pytest -q tests/test_document_schemas.py`
+  - `backend/.venv/Scripts/python.exe -m pytest -q tests/test_voice_config_service.py`
+  - `backend/.venv/Scripts/python.exe -m pytest -q tests/test_ai_intent.py`
+  - `backend/.venv/Scripts/python.exe -m pytest -q tests/test_sherpa_asr_service.py`
+- 冲刺模块：
+  - `backend/.venv/Scripts/python.exe -m pytest -q tests/test_report_generator.py`
+  - `backend/.venv/Scripts/python.exe -m pytest -q tests/test_contract_review_service.py`
+  - `backend/.venv/Scripts/python.exe -m pytest -q tests/test_email_service.py`
+- 全量覆盖率：
+  - `backend/.venv/Scripts/python.exe -m pytest tests/ -q --tb=short --cov=app --cov-report=xml:coverage.xml --cov-report=json:coverage.json --cov-report=term:skip-covered --cov-fail-under=60`
+  - （历史/回滚排查用）`backend/.venv/Scripts/python.exe -m pytest tests/ -q --tb=short --cov=app --cov-report=xml:coverage.xml --cov-report=json:coverage.json --cov-report=term:skip-covered --cov-fail-under=52`
+  - （历史/回滚排查用）`backend/.venv/Scripts/python.exe -m pytest tests/ -q --tb=short --cov=app --cov-report=xml:coverage.xml --cov-report=json:coverage.json --cov-report=term:skip-covered --cov-fail-under=50`
+  - （历史/回滚排查用）`backend/.venv/Scripts/python.exe -m pytest tests/ -q --tb=short --cov=app --cov-report=xml:coverage.xml --cov-report=json:coverage.json --cov-report=term:skip-covered --cov-fail-under=48`
 
-- [x] B2 扩写 `docs/modules/DATA_FLOWS.md`：News / News AI 链路
+## 5. 本轮执行记录（实时更新）
 
-  - 交付物：补齐“采集/发布/下架/News AI pipeline”主要任务与关键表落点（以代码为准）
-  - 验收：能定位 pipeline 的 job、锁 key、写库点、常见失败点
+- 已完成 A1-A4：新增 4 个单测文件（disclaimer/content_safety/ai_response_strategy/document schemas），并修复 `ContentSafetyFilter.sanitize_output` 的手机号/身份证脱敏规则；总覆盖率提升到 **46.81%**。
+- 已完成 A5-A7：新增 voice_config/ai_intent/sherpa_asr 的单测；总覆盖率提升到 **48.06%**，并将 CI 覆盖率门禁抬升到 `--cov-fail-under=48`。
+- 已新增 report_generator 单测：`tests/test_report_generator.py`（含 PDF 依赖缺失分支与可选 smoke），模块覆盖率提升到 **91%**；全量回归通过，总覆盖率提升到 **48.33%**。
+- 已新增 contract_review_service 单测：`tests/test_contract_review_service.py`（覆盖 `_extract_json`/rules 应用/Markdown 渲染/OpenAI 调用 mock）；模块覆盖率提升到 **94%**；全量回归通过，总覆盖率提升到 **49.20%**。
+- 已新增 email_service 单测：`tests/test_email_service.py`（覆盖 token 生成/校验/失效、cache 正常/异常 fallback、邮件发送分支 mock）；模块覆盖率提升到 **87%**；全量回归通过，总覆盖率提升到 **49.70%**。
+- 已补齐 cache_service/email_service 单测并达标 50%：`tests/test_cache_service.py` 补齐 redis 异常回落/锁异常/clear_pattern 异常等分支；`tests/test_email_service.py` 补齐 cache exception fallback + 邮箱验证 token invalidate + 邮件发送异常分支；本地全量 `--cov-fail-under=50` 通过（总覆盖率 **50.05%**），并将 CI 覆盖率门禁抬升到 `--cov-fail-under=50`。
+- 已补安全余量模块：新增 `tests/test_rate_limiter.py` 并增强 `tests/test_periodic_task_runner.py`；本地全量 `--cov-fail-under=50` 通过（总覆盖率 **50.31%**），其中 `app/utils/rate_limiter.py` 覆盖率 **100%**、`app/utils/periodic_task_runner.py` 覆盖率 **99%**。
+- 已补 WebSocket/UserService 模块单测：新增 `tests/test_websocket_service.py` / `tests/test_websocket_router.py` / `tests/test_user_service.py`；本地全量 `--cov-fail-under=50` 通过（总覆盖率 **50.82%**），其中 `app/services/websocket_service.py` 覆盖率 **95%**、`app/routers/websocket.py` 覆盖率 **67%**、`app/services/user_service.py` 覆盖率 **95%**。
+- 已补 Search 模块单测：新增 `tests/test_search_service.py` / `tests/test_search_router.py`；本地全量 `--cov-fail-under=50` 通过（总覆盖率 **51.36%**），其中 `app/services/search_service.py` 覆盖率 **91%**、`app/routers/search.py` 覆盖率 **82%**。
+- 已补 Calendar 路由单测：新增 `tests/test_calendar_router.py`；本地全量 `--cov-fail-under=50` 通过（总覆盖率 **51.36%**），其中 `app/routers/calendar.py` 覆盖率 **48%**。
+- 已补 QuotaService 单测：新增 `tests/test_quota_service.py`；本地全量 `--cov-fail-under=50` 通过（总覆盖率 **51.94%**），其中 `app/services/quota_service.py` 覆盖率 **92%**。
+- 已补支付后台与对账/反馈等路由单测：新增 `tests/test_payment_admin_reconcile.py` / `tests/test_feedback_router.py` / `tests/test_payment_admin_orders.py` / `tests/test_payment_admin_callback_events.py` / `tests/test_payment_admin_config_and_stats.py` / `tests/test_payment_admin_wechat_certs.py`；本地全量回归通过。
+- 已补存储与微信支付工具单测：新增 `tests/test_storage_service.py` 并增强 `tests/test_wechatpay_v3.py`；`app/services/storage_service.py` 与 `app/utils/wechatpay_v3.py` 覆盖率均提升到 **100%**。
+- 覆盖率冲刺与门禁抬升：新增 `backend/.coveragerc`（`concurrency=greenlet,thread` + `relative_files=true`）以修复 async/greenlet 场景的行覆盖率采集；补齐 `admin_orders` 回滚分支后，本地全量 `--cov-fail-under=55` 通过（总覆盖率 **60.06%**），并将 CI 覆盖率门禁抬升到 `--cov-fail-under=55`。
+- 覆盖率安全余量继续提升：新增 `tests/test_payment_orders_create.py` 覆盖 `orders_create` 的 `ai_pack`/`light_consult_review` 参数解析与异常分支（含直调函数触发 Pydantic 难以触达的类型分支），`orders_create.py` 覆盖率提升到 **100%**；新增 `tests/test_news_topics_and_comments.py` 覆盖 `news/topics` 与 `news/comments` 的关键分支（含评论创建失败 500 分支），`news/comments.py` 覆盖率提升到 **100%**；新增 `tests/test_forum_favorites_reactions.py` 覆盖 `forum` 的收藏/表情路由的 404/成功分支；新增 `tests/test_auth_context_middleware.py` 覆盖 `AuthContextMiddleware` 的异常解析分支；补齐 `tests/test_search_router.py` 登录态搜索历史分支。最终本地全量 `--cov-fail-under=55` 通过，总覆盖率提升到 **60.51%**。
+- 覆盖率再冲刺：新增 `tests/test_forum_comments_router.py` 覆盖论坛评论创建/列表权限/删除/恢复/点赞分支；增强 `tests/test_rate_limit_middleware.py`（LRU 淘汰、redis 回退、APIKeyRateLimiter 分支）、增强 `tests/test_pii.py`（空字符串与银行卡回调分支）、增强 `tests/test_report_generator.py`（PDF 生成包含引用法条分支）。本地全量 `--cov-fail-under=60` 通过，总覆盖率提升到 **60.81%**；并将 CI 覆盖率门禁抬升到 `--cov-fail-under=60`。
+- 已补支付用户端路由单测：新增 `tests/test_payment_user_routes.py`（/payment/orders 列表与筛选、/orders/{order_no}/cancel 分支、/pricing 读取 SystemConfig、/balance 与交易记录分页）；本地全量 `--cov-fail-under=52` 通过（总覆盖率 **52.56%**）。
 
-- [x] B3 扩写 `docs/modules/DATA_FLOWS.md`：通知模块链路（broadcast/system/WS）
-  - 交付物：补齐“插入通知->去重->WS 推送->前端 invalidate”的全链路
-  - 验收：能明确 dedupe_key 设计与前端缓存刷新点
+- 修复 CI/backend-test 导入失败：补齐 `app/routers/forum/`、`app/routers/news/`、`app/routers/payment/` 子包的 `__init__.py` 并导出 `router`（统一指向 `*_legacy.py`）；同时新增兼容 shim（`forum/comments.py`、`forum/favorites.py`、`forum/reactions.py`、`news/topics.py`、`news/comments.py`、`payment/orders_create.py`、`payment/orders_pay.py`、`payment/admin_stats.py`）以对齐现有单测的 import 路径，确保 pytest 进入执行阶段（本机依赖环境缺失时用 `compileall` 先做语法冒烟）。
 
-### C. 排障手册补齐（面向线上/联调常见故障）
+- backend-test 用例对齐：将 `payment/orders_pay.py` 调整为调用 `payment_legacy.pay_order` 的轻量 wrapper，并按异常 `detail`/返回值映射 `prometheus_metrics.record_payment_pay(method, result)`，以满足 `tests/test_orders_pay.py` 对 metrics 语义的断言，同时尽量减少新增逻辑行数。
 
-- [x] C1 扩写 `docs/guides/TROUBLESHOOTING.md`：支付常见问题
+- backend-test 继续修复并全量回归：
+  - Forum：补齐 `ForumService.get_posts_favorite_counts/get_posts_reactions` 批量接口；`/forum/posts` 增加访客列表缓存（`FORUM_POSTS_CACHE_ENABLED`）并使用批量接口避免重复查询，修复 `tests/test_api.py::TestForumAPI::test_get_posts_list_cache_guest`。
+  - Upload：补齐 `_moderate_image_via_webhook/_scan_bytes_with_clamd` 并在 `/upload/image` 按环境变量启用（含 fail-open/fail-closed、require object storage），修复 `tests/test_upload.py`。
+  - Payment：`app.routers.payment` 子包增加向后兼容导出（`settings/_alipay_sign_rsa2/_ikunpay_sign_md5/fetch_platform_certificates` 等）；微信平台证书 refresh 调用支持测试侧 monkeypatch（避免真实私钥解析）。
+  - Metrics：`/metrics` 输出追加 AI metrics lines（从 `app.services.ai_metrics.ai_metrics.snapshot()` 生成并注入 `prometheus_metrics.render_prometheus(extra_lines=...)`），修复 `tests/test_main.py`/`tests/test_prometheus_metrics.py`。
+  - 验证：本地全量 `backend/.venv/Scripts/python.exe -m pytest -q tests/ --tb=short` 通过（**509 passed**）。
 
-  - 交付物：补齐“回调验签失败/回调重复/订单已 paid 但无成功回调/余额扣款失败/对账诊断”等
-  - 验收：按文档步骤可复现定位到 `payment_callback_events` 或 reconcile diagnosis
+- CI 复跑失败对齐与修复（PR#39）：
+  - Pyright：修复动态属性注入与 awaitable 类型收敛等类型报错，本地 `pyright -p pyrightconfig.json` **0 errors**。
+  - Pyright（CI 环境）：`type-check.yml` 增加 `apt-get install -y libatomic1`，修复 CI 上可能出现的 `libatomic.so.1` 缺失导致 pyright/内置 node 无法启动。
+  - Pyright（CI 注解定位）：
+    - `backend/tests/test_wechatpay_v3.py`：`x509.oid.NameOID` 在类型层不可见；改为 `from cryptography.x509.oid import NameOID` 并使用 `NameOID.COMMON_NAME`。
+    - `backend/tests/test_envelope_middleware.py`：测试内对 `Response.body/body_iterator` 直接赋值触发类型报错；改为 `setattr(resp, "body", ...)` / `setattr(resp, "body_iterator", ...)`（语义不变，仅消除 pyright 报错）。
+    - 冒烟：本地 `.venv` 下 `pyright -p pyrightconfig.json` **0 errors**，且相关用例通过。
+  - Backend-test：CI workflow 会预置 `PAYMENT_WEBHOOK_SECRET`，导致 `tests/test_config.py::test_validate_security_raises_when_debug_false_webhook_missing` 断言不稳定；用例内显式 `monkeypatch.delenv("PAYMENT_WEBHOOK_SECRET")` 固定环境。
+  - CI 命令复现：Docker Postgres + `python scripts/alembic_cmd.py upgrade head` + `pytest --cov-fail-under=60` 全量通过（**509 passed**，coverage>=60）。
 
-- [x] C2 扩写 `docs/guides/TROUBLESHOOTING.md`：结算/提现常见问题
-  - 交付物：补齐“结算 job 未跑/冻结期不结算/提现金额与 wallet 对不上/提现完成但 income_records 未分摊”等
-  - 验收：按文档步骤可定位到 `withdrawal_requests`/`lawyer_wallets`/`lawyer_income_records`
+## 6. 验收口径（覆盖率提升相关）
 
-### D. 文档一致性与自动校验
-
-- [x] D1 对齐模块文档一致性（索引/章节/路由前缀/命名）
-
-  - 交付物：确保 `ARCHITECTURE.md`、`modules/INDEX.md`、`API_QUICK_REFERENCE.md`、各模块文档互相一致
-  - 验收：不存在“同一概念多种命名/同一接口多处不一致”
-
-- [x] D2 全库互链校验（自动脚本）
-  - 校验方式：执行仓库内的 Markdown link target 校验（py 脚本）
-
-### E. 任务归档
-
-- [x] E1 归档快照
-  - 交付物：将当前迭代 `TASKS_NEXT.md` 快照归档到 `docs/_archive/TASKS_YYYY-MM-DD.md`
-  - 验收：`TASKS.md` 仍为入口索引，历史可追溯
-
-## 2026-01-16 收尾计划（一次性全部完成）
-
-说明：本段为本轮继续推进的“收尾闭环”计划（以代码为准），完成后本迭代可视为文档深度化交付完毕。
-
-### F. 模块文档再对齐（补齐关键不变量/边界条件清单）
-
-- [x] F1 对齐 `docs/modules/PAYMENT.md`
-
-  - 交付物：补齐“幂等/锁/回调审计唯一约束/运维入口”清单
-  - 验收：开发者能回答“为何失败回调不写 trade_no”“为何 webhook 不加锁也可幂等”“env 热更新受哪些白名单约束”
-
-- [x] F2 对齐 `docs/modules/SETTLEMENT.md`
-
-  - 交付物：补齐“钱包字段不变量/分摊 best-effort/任务锁与开关”清单
-  - 验收：开发者能回答“为何提现完成但分摊可能失败仍算完成”“钱包字段为何以重算为准”
-
-- [x] F3 对齐 `docs/modules/REVIEWS_SLA.md`
-
-  - 交付物：补齐“扫描范围边界/去重键与配置变更的影响/SQLite 推送语义差异”清单
-  - 验收：开发者能回答“为何未领取任务不提醒”“为何 SLA 配置变更后可能产生新的提醒”
-
-- [x] F4 对齐 `docs/modules/NOTIFICATIONS.md` + `docs/guides/API_QUICK_REFERENCE.md`
-  - 交付物：补齐“WS message type 与前端刷新点”的注意事项
-  - 验收：开发者能回答“为何 admin broadcast WS 发了但 bell 不刷新”
-
-### G. 自动校验与归档
-
-- [x] G1 全库互链校验（自动脚本）
-
-  - 校验方式：执行仓库内的 Markdown link target 校验（py 脚本）
-  - 验收：输出 `OK`
-
-- [x] G2 归档快照（2026-01-16）
-  - 交付物：`docs/_archive/TASKS_2026-01-16.md`
-  - 验收：快照内容与当前 `TASKS_NEXT.md` 一致，可用于回溯
+- 覆盖率：本地全量执行 `--cov-fail-under=60` 通过，且建议留 0.3%~0.8% 余量
+- 稳定性：新增用例不依赖外网/真实第三方；无随机/时间抖动导致的 flaky
+- 回归：关键模块测试与全量覆盖率均绿；CI workflow 同步门禁阈值

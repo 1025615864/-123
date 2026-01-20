@@ -84,6 +84,6 @@ class ContentSafetyFilter:
 
     def sanitize_output(self, text: str) -> str:
         s = str(text or "")
-        s = re.sub(r"\b\d{11}\b", "[电话号码已隐藏]", s)
-        s = re.sub(r"\b\d{18}\b", "[身份证号已隐藏]", s)
+        s = re.sub(r"(?<!\d)\d{11}(?!\d)", "[电话号码已隐藏]", s)
+        s = re.sub(r"(?<!\d)\d{18}(?!\d)", "[身份证号已隐藏]", s)
         return s

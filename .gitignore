@@ -28,8 +28,23 @@ Thumbs.db
 
 frontend/playwright-report/
 frontend/test-results/
+test-results/
 
 helm/baixing-assistant/charts/
 helm/baixing-assistant/Chart.lock
 
 *.dump
+
+.coverage
+.coverage.*
+coverage.xml
+coverage.json
+backend/.coverage
+backend/coverage.xml
+backend/coverage.json
+backend/tmp_cov.json
+
+.windsurf_chat_port
+.windsurfrules
+.xinghuo_continue_port
+c98c09bcd75c9923/

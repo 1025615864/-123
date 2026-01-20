@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 import re
 from typing import Annotated, cast
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 import uuid
 from decimal import Decimal, ROUND_HALF_UP
@@ -3455,7 +3456,14 @@ async def admin_refresh_wechat_platform_certs(
     if not settings.wechatpay_api_v3_key:
         raise HTTPException(status_code=400, detail="WECHATPAY_API_V3_KEY 未设置")
 
-    certs = await fetch_platform_certificates(
+    payment_mod = sys.modules.get("app.routers.payment")
+    fetch_fn: Callable[..., Awaitable[list[WeChatPayPlatformCert]]] = fetch_platform_certificates
+    if payment_mod is not None:
+        candidate = getattr(payment_mod, "fetch_platform_certificates", None)
+        if callable(candidate):
+            fetch_fn = cast(Callable[..., Awaitable[list[WeChatPayPlatformCert]]], candidate)
+
+    certs = await fetch_fn(
         certificates_url=settings.wechatpay_certificates_url,
         mch_id=settings.wechatpay_mch_id,
         mch_serial_no=settings.wechatpay_mch_serial_no,
