@@ -54,7 +54,7 @@ async def test_envelope_middleware_dispatch_raw_bytes_wraps() -> None:
     request = _make_request(envelope="true")
 
     resp = Response(content=b"", media_type="application/json")
-    resp.body = b'{"x":1}'
+    setattr(resp, "body", b'{"x":1}')
 
     async def call_next(_req: Request):
         return resp
@@ -71,7 +71,7 @@ async def test_envelope_middleware_dispatch_raw_bytearray_wraps() -> None:
     request = _make_request(envelope="yes")
 
     resp = Response(content=b"", media_type="application/json")
-    resp.body = bytearray(b'{"x":1}')
+    setattr(resp, "body", bytearray(b'{"x":1}'))
 
     async def call_next(_req: Request):
         return resp
@@ -87,7 +87,7 @@ async def test_envelope_middleware_dispatch_raw_memoryview_wraps() -> None:
     request = _make_request(envelope="on")
 
     resp = Response(content=b"", media_type="application/json")
-    resp.body = memoryview(b'{"m":2}')
+    setattr(resp, "body", memoryview(b'{"m":2}'))
 
     async def call_next(_req: Request):
         return resp
@@ -103,7 +103,7 @@ async def test_envelope_middleware_dispatch_body_none_no_iterator_returns_same_o
     request = _make_request(envelope="1")
 
     resp = Response(content=b"", media_type="application/json")
-    resp.body = None
+    setattr(resp, "body", None)
 
     async def call_next(_req: Request):
         return resp
@@ -147,8 +147,8 @@ async def test_envelope_middleware_dispatch_iterator_none_and_bytes_conversion_p
         yield _Bad()
 
     resp = Response(content=b"", media_type="application/json")
-    resp.body = None
-    resp.body_iterator = gen()
+    setattr(resp, "body", None)
+    setattr(resp, "body_iterator", gen())
 
     async def call_next(_req: Request):
         return resp
@@ -285,7 +285,7 @@ async def test_envelope_middleware_memoryview_body_is_wrapped() -> None:
     @app.get("/mv")
     async def mv():
         resp = Response(content=b"", media_type="application/json")
-        resp.body = memoryview(b'{"m":2}')
+        setattr(resp, "body", memoryview(b'{"m":2}'))
         return resp
 
     transport = _make_transport(app)
@@ -309,8 +309,8 @@ async def test_envelope_middleware_reconstructed_empty_body_returns_unmodified()
                 yield b""
 
         resp = Response(content=b"", media_type="application/json")
-        resp.body = None
-        resp.body_iterator = gen()
+        setattr(resp, "body", None)
+        setattr(resp, "body_iterator", gen())
         return resp
 
     transport = _make_transport(app)
@@ -350,8 +350,8 @@ async def test_envelope_middleware_reconstructed_unbytesable_chunk_is_ignored() 
             yield "x"
 
         resp = Response(content=b"", media_type="application/json")
-        resp.body = None
-        resp.body_iterator = gen()
+        setattr(resp, "body", None)
+        setattr(resp, "body_iterator", gen())
         return resp
 
     transport = _make_transport(app)

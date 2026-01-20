@@ -145,6 +145,10 @@
 - CI 复跑失败对齐与修复（PR#39）：
   - Pyright：修复动态属性注入与 awaitable 类型收敛等类型报错，本地 `pyright -p pyrightconfig.json` **0 errors**。
   - Pyright（CI 环境）：`type-check.yml` 增加 `apt-get install -y libatomic1`，修复 CI 上可能出现的 `libatomic.so.1` 缺失导致 pyright/内置 node 无法启动。
+  - Pyright（CI 注解定位）：
+    - `backend/tests/test_wechatpay_v3.py`：`x509.oid.NameOID` 在类型层不可见；改为 `from cryptography.x509.oid import NameOID` 并使用 `NameOID.COMMON_NAME`。
+    - `backend/tests/test_envelope_middleware.py`：测试内对 `Response.body/body_iterator` 直接赋值触发类型报错；改为 `setattr(resp, "body", ...)` / `setattr(resp, "body_iterator", ...)`（语义不变，仅消除 pyright 报错）。
+    - 冒烟：本地 `.venv` 下 `pyright -p pyrightconfig.json` **0 errors**，且相关用例通过。
   - Backend-test：CI workflow 会预置 `PAYMENT_WEBHOOK_SECRET`，导致 `tests/test_config.py::test_validate_security_raises_when_debug_false_webhook_missing` 断言不稳定；用例内显式 `monkeypatch.delenv("PAYMENT_WEBHOOK_SECRET")` 固定环境。
   - CI 命令复现：Docker Postgres + `python scripts/alembic_cmd.py upgrade head` + `pytest --cov-fail-under=60` 全量通过（**509 passed**，coverage>=60）。
 

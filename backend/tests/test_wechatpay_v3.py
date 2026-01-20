@@ -5,6 +5,7 @@ import re
 
 import pytest
 from cryptography import x509
+from cryptography.x509.oid import NameOID
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -29,7 +30,7 @@ def _gen_private_key_pem() -> tuple[rsa.RSAPrivateKey, str]:
 
 
 def _gen_self_signed_cert_pem(key: rsa.RSAPrivateKey) -> str:
-    subject = issuer = x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, "test")])
+    subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "test")])
     now = datetime.datetime.now(datetime.timezone.utc)
     cert = (
         x509.CertificateBuilder()
