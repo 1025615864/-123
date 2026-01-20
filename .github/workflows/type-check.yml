@@ -31,4 +31,40 @@ jobs:
           pip install -r backend/requirements.txt
 
       - name: Run Pyright
-        run: pyright -p pyrightconfig.json
+        run: |
+          pyright -p pyrightconfig.json --outputjson > pyright.json || true
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          path = "pyright.json"
+          if not os.path.exists(path):
+              print("::error::pyright.json not generated (pyright may have crashed)")
+              sys.exit(1)
+
+          with open(path, "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          diags = data.get("generalDiagnostics") or []
+          has_error = False
+
+          # Limit annotations to avoid spamming.
+          for d in diags[:200]:
+              severity = (d.get("severity") or "error").lower()
+              level = "error" if severity == "error" else "warning"
+              if level == "error":
+                  has_error = True
+
+              file = d.get("file") or "pyright"
+              rng = d.get("range") or {}
+              start = rng.get("start") or {}
+              line = (start.get("line") or 0) + 1
+              col = (start.get("character") or 0) + 1
+              msg = (d.get("message") or "").replace("\n", " ")
+
+              print(f"::{level} file={file},line={line},col={col}::{msg}")
+
+          print(f"Total diagnostics: {len(diags)}")
+          sys.exit(1 if has_error else 0)
+          PY
