@@ -48,6 +48,7 @@ def test_validate_security_raises_when_debug_false_webhook_missing(monkeypatch) 
     monkeypatch.setattr(config, "_running_tests", lambda: False, raising=True)
     monkeypatch.setenv("SECRET_KEY", "x" * 32)
     monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    monkeypatch.delenv("PAYMENT_WEBHOOK_SECRET", raising=False)
     try:
         config.Settings(debug=False)
         assert False, "expected ValueError"

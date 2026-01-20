@@ -71,7 +71,7 @@ async def test_require_permission_decorator() -> None:
     assert e1.value.status_code == 403
 
     with pytest.raises(HTTPException) as e2:
-        await delete_post()
+        await delete_post(current_user=None)
     assert e2.value.status_code == 401
 
 
@@ -101,11 +101,11 @@ async def test_require_role_and_any_role_decorators() -> None:
     assert e2.value.status_code == 403
 
     with pytest.raises(HTTPException) as e3:
-        await admin_only()
+        await admin_only(current_user=None)
     assert e3.value.status_code == 401
 
     with pytest.raises(HTTPException) as e4:
-        await mod_or_admin()
+        await mod_or_admin(current_user=None)
     assert e4.value.status_code == 401
 
 
@@ -132,5 +132,5 @@ async def test_require_owner_or_admin_decorator() -> None:
     assert e2.value.status_code == 500
 
     with pytest.raises(HTTPException) as e3:
-        await update_post(post=post)
+        await update_post(post=post, current_user=None)
     assert e3.value.status_code == 401

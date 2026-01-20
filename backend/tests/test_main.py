@@ -90,7 +90,7 @@ async def test_metrics_authorized_renders_ai_metrics_lines(client, monkeypatch) 
                 "endpoint_error_counts": {"/api/a": 1, " ": 2, "/api/b": "4", "/api/bad": "x"},
             }
 
-    mod.ai_metrics = DummyAiMetrics()
+    setattr(mod, "ai_metrics", DummyAiMetrics())
     monkeypatch.setitem(sys.modules, "app.services.ai_metrics", mod)
 
     def fake_render_prometheus(*, extra_lines=None):
@@ -138,7 +138,7 @@ async def test_health_detailed_database_ok_and_memory_ok(client, monkeypatch) ->
         def memory_info(self):
             return _Mem()
 
-    psutil_mod.Process = lambda: _Proc()
+    setattr(psutil_mod, "Process", lambda: _Proc())
     monkeypatch.setitem(sys.modules, "psutil", psutil_mod)
 
     res = await client.get("/health/detailed")

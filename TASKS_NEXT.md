@@ -142,6 +142,11 @@
   - Metrics：`/metrics` 输出追加 AI metrics lines（从 `app.services.ai_metrics.ai_metrics.snapshot()` 生成并注入 `prometheus_metrics.render_prometheus(extra_lines=...)`），修复 `tests/test_main.py`/`tests/test_prometheus_metrics.py`。
   - 验证：本地全量 `backend/.venv/Scripts/python.exe -m pytest -q tests/ --tb=short` 通过（**509 passed**）。
 
+- CI 复跑失败对齐与修复（PR#39）：
+  - Pyright：修复动态属性注入与 awaitable 类型收敛等类型报错，本地 `pyright -p pyrightconfig.json` **0 errors**。
+  - Backend-test：CI workflow 会预置 `PAYMENT_WEBHOOK_SECRET`，导致 `tests/test_config.py::test_validate_security_raises_when_debug_false_webhook_missing` 断言不稳定；用例内显式 `monkeypatch.delenv("PAYMENT_WEBHOOK_SECRET")` 固定环境。
+  - CI 命令复现：Docker Postgres + `python scripts/alembic_cmd.py upgrade head` + `pytest --cov-fail-under=60` 全量通过（**509 passed**，coverage>=60）。
+
 ## 6. 验收口径（覆盖率提升相关）
 
 - 覆盖率：本地全量执行 `--cov-fail-under=60` 通过，且建议留 0.3%~0.8% 余量
