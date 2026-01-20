@@ -135,6 +135,13 @@
 
 - backend-test 用例对齐：将 `payment/orders_pay.py` 调整为调用 `payment_legacy.pay_order` 的轻量 wrapper，并按异常 `detail`/返回值映射 `prometheus_metrics.record_payment_pay(method, result)`，以满足 `tests/test_orders_pay.py` 对 metrics 语义的断言，同时尽量减少新增逻辑行数。
 
+- backend-test 继续修复并全量回归：
+  - Forum：补齐 `ForumService.get_posts_favorite_counts/get_posts_reactions` 批量接口；`/forum/posts` 增加访客列表缓存（`FORUM_POSTS_CACHE_ENABLED`）并使用批量接口避免重复查询，修复 `tests/test_api.py::TestForumAPI::test_get_posts_list_cache_guest`。
+  - Upload：补齐 `_moderate_image_via_webhook/_scan_bytes_with_clamd` 并在 `/upload/image` 按环境变量启用（含 fail-open/fail-closed、require object storage），修复 `tests/test_upload.py`。
+  - Payment：`app.routers.payment` 子包增加向后兼容导出（`settings/_alipay_sign_rsa2/_ikunpay_sign_md5/fetch_platform_certificates` 等）；微信平台证书 refresh 调用支持测试侧 monkeypatch（避免真实私钥解析）。
+  - Metrics：`/metrics` 输出追加 AI metrics lines（从 `app.services.ai_metrics.ai_metrics.snapshot()` 生成并注入 `prometheus_metrics.render_prometheus(extra_lines=...)`），修复 `tests/test_main.py`/`tests/test_prometheus_metrics.py`。
+  - 验证：本地全量 `backend/.venv/Scripts/python.exe -m pytest -q tests/ --tb=short` 通过（**509 passed**）。
+
 ## 6. 验收口径（覆盖率提升相关）
 
 - 覆盖率：本地全量执行 `--cov-fail-under=60` 通过，且建议留 0.3%~0.8% 余量

@@ -1061,6 +1061,23 @@ class ForumService:
             select(func.count(PostFavorite.id)).where(PostFavorite.post_id == post_id)
         )
         return int(result.scalar() or 0)
+
+    @staticmethod
+    async def get_posts_favorite_counts(db: AsyncSession, post_ids: list[int]) -> dict[int, int]:
+        """批量获取帖子收藏数"""
+        if not post_ids:
+            return {}
+
+        unique_ids = list(dict.fromkeys(int(pid) for pid in post_ids))
+
+        result = await db.execute(
+            select(PostFavorite.post_id, func.count(PostFavorite.id).label("count"))
+            .where(PostFavorite.post_id.in_(unique_ids))
+            .group_by(PostFavorite.post_id)
+        )
+
+        counts = {int(row[0]): int(row[1]) for row in result.all()}
+        return {int(pid): int(counts.get(int(pid), 0)) for pid in unique_ids}
     
     @staticmethod
     async def get_user_favorites(
@@ -1324,6 +1341,36 @@ class ForumService:
             .group_by(PostReaction.emoji)
         )
         return [{"emoji": row[0], "count": row[1]} for row in result.all()]
+
+    @staticmethod
+    async def get_posts_reactions(
+        db: AsyncSession,
+        post_ids: list[int],
+    ) -> dict[int, list[dict[str, int | str]]]:
+        """批量获取帖子表情反应统计"""
+        if not post_ids:
+            return {}
+
+        unique_ids = list(dict.fromkeys(int(pid) for pid in post_ids))
+        out: dict[int, list[dict[str, int | str]]] = {int(pid): [] for pid in unique_ids}
+
+        result = await db.execute(
+            select(
+                PostReaction.post_id,
+                PostReaction.emoji,
+                func.count(PostReaction.id).label("count"),
+            )
+            .where(PostReaction.post_id.in_(unique_ids))
+            .group_by(PostReaction.post_id, PostReaction.emoji)
+        )
+
+        for row in result.all():
+            post_id = int(row[0])
+            if post_id not in out:
+                continue
+            out[post_id].append({"emoji": row[1], "count": row[2]})
+
+        return out
     
     # ============ 统计相关 ============
     

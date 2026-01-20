@@ -3455,7 +3455,16 @@ async def admin_refresh_wechat_platform_certs(
     if not settings.wechatpay_api_v3_key:
         raise HTTPException(status_code=400, detail="WECHATPAY_API_V3_KEY 未设置")
 
-    certs = await fetch_platform_certificates(
+    payment_mod = sys.modules.get("app.routers.payment")
+    fetch_fn = (
+        getattr(payment_mod, "fetch_platform_certificates", fetch_platform_certificates)
+        if payment_mod is not None
+        else fetch_platform_certificates
+    )
+    if not callable(fetch_fn):
+        fetch_fn = fetch_platform_certificates
+
+    certs = await fetch_fn(
         certificates_url=settings.wechatpay_certificates_url,
         mch_id=settings.wechatpay_mch_id,
         mch_serial_no=settings.wechatpay_mch_serial_no,

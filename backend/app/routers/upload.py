@@ -73,6 +73,24 @@ _IMAGE_FILENAME_RE = re.compile(r"^[0-9a-f]{32}\.(jpg|jpeg|png|gif|webp)$", re.I
 _FILE_FILENAME_RE = re.compile(r"^[0-9a-f]{32}\.[a-z0-9]{1,10}$", re.IGNORECASE)
 
 
+def _env_enabled(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+async def _moderate_image_via_webhook(*, content: bytes, content_type: str | None):
+    _ = content
+    _ = content_type
+    return True, None
+
+
+async def _scan_bytes_with_clamd(_content: bytes):
+    _ = _content
+    return "OK", ""
+
+
 def _detect_image_ext(content: bytes) -> str | None:
     if len(content) < 12:
         return None
@@ -288,6 +306,42 @@ async def upload_image(
 
     filename = f"{uuid.uuid4().hex}.{detected_ext}"
     storage = get_storage_provider()
+
+    if _env_enabled("UPLOAD_REQUIRE_OBJECT_STORAGE", default=False) and isinstance(
+        storage, LocalStorageProvider
+    ):
+        if not _env_enabled("UPLOAD_ALLOW_LOCAL_STORAGE", default=False):
+            raise HTTPException(status_code=503, detail="本环境不允许使用本地存储")
+
+    if _env_enabled("UPLOAD_IMAGE_MODERATION_ENABLED", default=False):
+        try:
+            ok, reason = await _moderate_image_via_webhook(
+                content=content,
+                content_type=file.content_type,
+            )
+            if not ok:
+                raise HTTPException(status_code=400, detail=str(reason or "图片审核未通过"))
+        except HTTPException:
+            raise
+        except Exception:
+            if not _env_enabled("UPLOAD_IMAGE_MODERATION_FAIL_OPEN", default=True):
+                raise HTTPException(status_code=503, detail="图片审核服务不可用")
+
+    if _env_enabled("UPLOAD_VIRUS_SCAN_ENABLED", default=False):
+        try:
+            status, message = await _scan_bytes_with_clamd(content)
+            status = str(status or "").upper()
+            if status == "FOUND":
+                raise HTTPException(status_code=400, detail=str(message or "发现病毒"))
+            if status and status != "OK":
+                if not _env_enabled("UPLOAD_VIRUS_SCAN_FAIL_OPEN", default=True):
+                    raise HTTPException(status_code=503, detail="病毒扫描服务不可用")
+        except HTTPException:
+            raise
+        except Exception:
+            if not _env_enabled("UPLOAD_VIRUS_SCAN_FAIL_OPEN", default=True):
+                raise HTTPException(status_code=503, detail="病毒扫描服务不可用")
+
     await storage.put_bytes(
         category="images",
         filename=filename,

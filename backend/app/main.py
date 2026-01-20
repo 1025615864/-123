@@ -1,5 +1,6 @@
 """百姓法律助手 - FastAPI主应用"""
 from contextlib import asynccontextmanager
+import importlib
 import logging
 import asyncio
 import os
@@ -56,6 +57,124 @@ try:
 except Exception:
     ai = None
     logger.exception("AI路由加载失败")
+
+
+def _prom_escape_label_value(value: str) -> str:
+    s = str(value)
+    s = s.replace("\\", "\\\\")
+    s = s.replace('"', "\\\"")
+    s = s.replace("\n", "\\n")
+    return s
+
+
+def _ai_metrics_extra_lines() -> list[str]:
+    snap: dict[str, object] = {}
+    try:
+        mod = importlib.import_module("app.services.ai_metrics")
+        ai_metrics_obj = getattr(mod, "ai_metrics", None)
+        if ai_metrics_obj is not None:
+            snapshot = getattr(ai_metrics_obj, "snapshot", None)
+            if callable(snapshot):
+                raw = snapshot()
+                if isinstance(raw, dict):
+                    snap = {str(k): v for k, v in raw.items()}
+    except Exception:
+        snap = {}
+
+    started_at_obj = snap.get("started_at")
+    started_at = (
+        float(started_at_obj)
+        if isinstance(started_at_obj, (int, float)) and not isinstance(started_at_obj, bool)
+        else 0.0
+    )
+
+    chat_total_obj = snap.get("chat_requests_total")
+    chat_total = (
+        int(chat_total_obj)
+        if isinstance(chat_total_obj, (int, float)) and not isinstance(chat_total_obj, bool)
+        else 0
+    )
+
+    chat_stream_total_obj = snap.get("chat_stream_requests_total")
+    chat_stream_total = (
+        int(chat_stream_total_obj)
+        if isinstance(chat_stream_total_obj, (int, float)) and not isinstance(chat_stream_total_obj, bool)
+        else 0
+    )
+
+    errors_total_obj = snap.get("errors_total")
+    errors_total = (
+        int(errors_total_obj)
+        if isinstance(errors_total_obj, (int, float)) and not isinstance(errors_total_obj, bool)
+        else 0
+    )
+
+    error_code_counts_obj = snap.get("error_code_counts")
+    endpoint_error_counts_obj = snap.get("endpoint_error_counts")
+
+    error_code_counts: dict[str, int] = {}
+    if isinstance(error_code_counts_obj, dict):
+        for k_obj, v_obj in error_code_counts_obj.items():
+            k = str(k_obj or "").strip()
+            if not k:
+                continue
+            try:
+                if isinstance(v_obj, (int, float)) and not isinstance(v_obj, bool):
+                    error_code_counts[k] = int(v_obj)
+                elif isinstance(v_obj, str):
+                    error_code_counts[k] = int(float(v_obj.strip() or "0"))
+            except Exception:
+                continue
+
+    endpoint_error_counts: dict[str, int] = {}
+    if isinstance(endpoint_error_counts_obj, dict):
+        for k_obj, v_obj in endpoint_error_counts_obj.items():
+            k = str(k_obj or "").strip()
+            if not k:
+                continue
+            try:
+                if isinstance(v_obj, (int, float)) and not isinstance(v_obj, bool):
+                    endpoint_error_counts[k] = int(v_obj)
+                elif isinstance(v_obj, str):
+                    endpoint_error_counts[k] = int(float(v_obj.strip() or "0"))
+            except Exception:
+                continue
+
+    lines: list[str] = []
+    lines.append("# HELP baixing_ai_started_at_seconds Unix timestamp when AiMetrics started")
+    lines.append("# TYPE baixing_ai_started_at_seconds gauge")
+    lines.append(f"baixing_ai_started_at_seconds {started_at}")
+    lines.append("# HELP baixing_ai_chat_requests_total Total /ai/chat requests")
+    lines.append("# TYPE baixing_ai_chat_requests_total counter")
+    lines.append(f"baixing_ai_chat_requests_total {chat_total}")
+    lines.append("# HELP baixing_ai_chat_stream_requests_total Total /ai/chat_stream requests")
+    lines.append("# TYPE baixing_ai_chat_stream_requests_total counter")
+    lines.append(f"baixing_ai_chat_stream_requests_total {chat_stream_total}")
+    lines.append("# HELP baixing_ai_errors_total Total AI errors")
+    lines.append("# TYPE baixing_ai_errors_total counter")
+    lines.append(f"baixing_ai_errors_total {errors_total}")
+
+    lines.append("# HELP baixing_ai_error_code_total Total errors grouped by error_code")
+    lines.append("# TYPE baixing_ai_error_code_total counter")
+    for code in sorted(error_code_counts.keys()):
+        v = int(error_code_counts.get(code) or 0)
+        if v <= 0:
+            continue
+        lines.append(
+            f"baixing_ai_error_code_total{{error_code=\"{_prom_escape_label_value(code)}\"}} {v}"
+        )
+
+    lines.append("# HELP baixing_ai_endpoint_error_total Total errors grouped by endpoint")
+    lines.append("# TYPE baixing_ai_endpoint_error_total counter")
+    for ep in sorted(endpoint_error_counts.keys()):
+        v = int(endpoint_error_counts.get(ep) or 0)
+        if v <= 0:
+            continue
+        lines.append(
+            f"baixing_ai_endpoint_error_total{{endpoint=\"{_prom_escape_label_value(ep)}\"}} {v}"
+        )
+
+    return lines
 
 
 @asynccontextmanager
@@ -600,7 +719,8 @@ async def prometheus_metrics_endpoint(request: Request):
         if auth != f"Bearer {token}":
             return PlainTextResponse(content="unauthorized\n", status_code=401)
 
-    body = prometheus_metrics.render_prometheus()
+    extra_lines = _ai_metrics_extra_lines()
+    body = prometheus_metrics.render_prometheus(extra_lines=extra_lines)
     return PlainTextResponse(content=body, media_type="text/plain; version=0.0.4")
 
 
