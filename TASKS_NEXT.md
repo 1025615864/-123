@@ -131,6 +131,8 @@
 - 覆盖率再冲刺：新增 `tests/test_forum_comments_router.py` 覆盖论坛评论创建/列表权限/删除/恢复/点赞分支；增强 `tests/test_rate_limit_middleware.py`（LRU 淘汰、redis 回退、APIKeyRateLimiter 分支）、增强 `tests/test_pii.py`（空字符串与银行卡回调分支）、增强 `tests/test_report_generator.py`（PDF 生成包含引用法条分支）。本地全量 `--cov-fail-under=60` 通过，总覆盖率提升到 **60.81%**；并将 CI 覆盖率门禁抬升到 `--cov-fail-under=60`。
 - 已补支付用户端路由单测：新增 `tests/test_payment_user_routes.py`（/payment/orders 列表与筛选、/orders/{order_no}/cancel 分支、/pricing 读取 SystemConfig、/balance 与交易记录分页）；本地全量 `--cov-fail-under=52` 通过（总覆盖率 **52.56%**）。
 
+- 修复 CI/backend-test 导入失败：补齐 `app/routers/forum/`、`app/routers/news/`、`app/routers/payment/` 子包的 `__init__.py` 并导出 `router`（统一指向 `*_legacy.py`）；同时新增兼容 shim（`forum/comments.py`、`forum/favorites.py`、`forum/reactions.py`、`news/topics.py`、`news/comments.py`、`payment/orders_create.py`、`payment/orders_pay.py`、`payment/admin_stats.py`）以对齐现有单测的 import 路径，确保 pytest 进入执行阶段（本机依赖环境缺失时用 `compileall` 先做语法冒烟）。
+
 ## 6. 验收口径（覆盖率提升相关）
 
 - 覆盖率：本地全量执行 `--cov-fail-under=60` 通过，且建议留 0.3%~0.8% 余量
