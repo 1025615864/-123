@@ -133,6 +133,8 @@
 
 - 修复 CI/backend-test 导入失败：补齐 `app/routers/forum/`、`app/routers/news/`、`app/routers/payment/` 子包的 `__init__.py` 并导出 `router`（统一指向 `*_legacy.py`）；同时新增兼容 shim（`forum/comments.py`、`forum/favorites.py`、`forum/reactions.py`、`news/topics.py`、`news/comments.py`、`payment/orders_create.py`、`payment/orders_pay.py`、`payment/admin_stats.py`）以对齐现有单测的 import 路径，确保 pytest 进入执行阶段（本机依赖环境缺失时用 `compileall` 先做语法冒烟）。
 
+- backend-test 用例对齐：将 `payment/orders_pay.py` 调整为调用 `payment_legacy.pay_order` 的轻量 wrapper，并按异常 `detail`/返回值映射 `prometheus_metrics.record_payment_pay(method, result)`，以满足 `tests/test_orders_pay.py` 对 metrics 语义的断言，同时尽量减少新增逻辑行数。
+
 ## 6. 验收口径（覆盖率提升相关）
 
 - 覆盖率：本地全量执行 `--cov-fail-under=60` 通过，且建议留 0.3%~0.8% 余量
