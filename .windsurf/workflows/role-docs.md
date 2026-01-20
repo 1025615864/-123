@@ -9,7 +9,7 @@ description: 文档互链与归档维护
 1. 确认本次变更涉及哪些权威文档：
    - `docs/PRD.md` / `docs/TECH_SPEC.md` / `docs/API_DESIGN.md` / `docs/DATABASE.md` / `docs/CHANGELOG.md`
 2. 更新入口互链：
-   - `README.md` 与 `docs/README.md` 必须能找到新增/变更文档
+   - `README.md`、`docs/README.md`、`TASKS.md` 必须能找到新增/变更文档与任务入口
 3. 阶段性材料归档：
    - 一次性报告/演练记录进 `docs/_archive/`
 4. 收尾输出：

@@ -12,7 +12,7 @@ description: 新功能全链路交付（需求->方案->实现->回归->文档�
    - 将拆解任务写入 `TASKS_NEXT.md`
 3. 调用 `/role-tech-lead`：
    - 输出方案草图（模块边界/API/数据/迁移/回滚/风险）
-   - 明确质量门禁（pytest/frontend build/E2E/smoke）
+   - 明确质量门禁（`py -m pytest -q` / `npm --prefix frontend run build` / `npm --prefix frontend run test:e2e` / smoke/health）
 4. 调用 `/role-backend`：
    - 实现 API/服务/模型/测试
    - 若涉及 DB 变更，补迁移或说明生产门禁策略
