@@ -1,0 +1,3 @@
+[run]
+concurrency = greenlet,thread
+relative_files = true

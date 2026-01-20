@@ -137,7 +137,7 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
           JWT_SECRET_KEY: test-secret-key
           PAYMENT_WEBHOOK_SECRET: test-payment-webhook-secret
-        run: pytest tests/ -v --tb=short
+        run: pytest tests/ -v --tb=short --cov=app --cov-report=xml:coverage.xml --cov-report=term:skip-covered --cov-fail-under=60
 
   # 前端构建
   frontend-build:

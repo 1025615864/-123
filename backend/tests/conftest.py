@@ -25,6 +25,7 @@ async def test_engine():
     """创建测试数据库引擎"""
     for module_name in (
         "app.models.user",
+        "app.models.user_quota",
         "app.models.consultation",
         "app.models.consultation_review",
         "app.models.forum",
@@ -39,6 +40,7 @@ async def test_engine():
         "app.models.payment",
         "app.models.system",
         "app.models.calendar",
+        "app.models.feedback",
     ):
         _ = importlib.import_module(module_name)
 

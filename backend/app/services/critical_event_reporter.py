@@ -28,6 +28,19 @@ def _float_env(name: str, default: float) -> float:
         return float(default)
 
 
+def _sanitize_data(data_obj: object) -> dict[str, object] | None:
+    if not isinstance(data_obj, dict):
+        return None
+
+    safe_data: dict[str, object] = {}
+    for k_obj, v_obj in cast(dict[object, object], data_obj).items():
+        k = str(k_obj or "").strip()
+        if not k:
+            continue
+        safe_data[k] = v_obj
+    return safe_data
+
+
 class CriticalEventReporter:
     def __init__(self) -> None:
         self._lock: asyncio.Lock = asyncio.Lock()
@@ -61,16 +74,7 @@ class CriticalEventReporter:
             message_obj = kwargs.get("message")
             message = str(message_obj) if message_obj is not None else None
 
-            data_obj = kwargs.get("data")
-            data: dict[str, object] | None = None
-            if isinstance(data_obj, dict):
-                safe_data: dict[str, object] = {}
-                for k_obj, v_obj in cast(dict[object, object], data_obj).items():
-                    k = str(k_obj or "").strip()
-                    if not k:
-                        continue
-                    safe_data[k] = v_obj
-                data = safe_data
+            data = _sanitize_data(kwargs.get("data"))
 
             dedup_key_obj = kwargs.get("dedup_key")
             dedup_key = str(dedup_key_obj).strip() if dedup_key_obj is not None else None
@@ -131,7 +135,7 @@ class CriticalEventReporter:
             "message": (str(message) if message else None),
             "env": str(os.getenv("APP_ENV") or os.getenv("ENV") or os.getenv("ENVIRONMENT") or ""),
             "service": "backend",
-            "data": (data if isinstance(data, dict) else None),
+            "data": _sanitize_data(data),
         }
 
         headers: dict[str, str] = {"Content-Type": "application/json"}
